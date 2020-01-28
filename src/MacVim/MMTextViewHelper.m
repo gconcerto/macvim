@@ -42,7 +42,7 @@ static float MMDragAreaSize = 73.0f;
 - (void)setCursor;
 - (NSRect)trackingRect;
 - (BOOL)inputManagerHandleMouseEvent:(NSEvent *)event;
-- (void)sendMarkedText:(NSString *)text position:(int32_t)pos;
+- (void)sendMarkedText:(NSString *)text position:(int32_t)pos length:(unsigned)len;
 - (void)abandonMarkedText;
 - (void)sendGestureEvent:(int)gesture flags:(int)flags;
 @end
@@ -224,7 +224,7 @@ KeyboardInputSourcesEqual(TISInputSourceRef a, TISInputSourceRef b)
 - (void)insertText:(id)string
 {
     if ([self hasMarkedText]) {
-        [self sendMarkedText:nil position:0];
+        [self sendMarkedText:nil position:0 length:0];
 
         // NOTE: If this call is left out then the marked text isn't properly
         // erased when Return is used to accept the text.
@@ -335,7 +335,7 @@ KeyboardInputSourcesEqual(TISInputSourceRef a, TISInputSourceRef b)
     if ([self hasMarkedText]) {
         // We must clear the marked text since the cursor may move if the
         // marked text moves outside the view as a result of scrolling.
-        [self sendMarkedText:nil position:0];
+        [self sendMarkedText:nil position:0 length:0];
         [self unmarkText];
         [[NSTextInputContext currentInputContext] discardMarkedText];
     }
@@ -659,7 +659,7 @@ KeyboardInputSourcesEqual(TISInputSourceRef a, TISInputSourceRef b)
             imRange = range;
         }
 
-        [self sendMarkedText:text position:range.location];
+        [self sendMarkedText:text position:range.location length:range.length];
         return;
     }
 
@@ -1129,19 +1129,20 @@ KeyboardInputSourcesEqual(TISInputSourceRef a, TISInputSourceRef b)
     return NO;
 }
 
-- (void)sendMarkedText:(NSString *)text position:(int32_t)pos
+- (void)sendMarkedText:(NSString *)text position:(int32_t)pos length:(unsigned)len
 {
     if (![self useInlineIm])
         return;
 
     NSMutableData *data = [NSMutableData data];
-    unsigned len = text == nil ? 0
+    unsigned textlen = text == nil ? 0
                     : [text lengthOfBytesUsingEncoding:NSUTF8StringEncoding];
 
+    [data appendBytes:&textlen length:sizeof(unsigned)];
     [data appendBytes:&pos length:sizeof(int32_t)];
     [data appendBytes:&len length:sizeof(unsigned)];
-    if (len > 0) {
-        [data appendBytes:[text UTF8String] length:len];
+    if (textlen > 0) {
+        [data appendBytes:[text UTF8String] length:textlen];
         [data appendBytes:"\x00" length:1];
     }
 
@@ -1155,7 +1156,7 @@ KeyboardInputSourcesEqual(TISInputSourceRef a, TISInputSourceRef b)
     // Send an empty marked text message with position set to -1 to indicate
     // that the marked text should be abandoned.  (If pos is set to 0 Vim will
     // send backspace sequences to delete the old marked text.)
-    [self sendMarkedText:nil position:-1];
+    [self sendMarkedText:nil position:-1 length:0];
     [[NSTextInputContext currentInputContext] discardMarkedText];
 }
 

@@ -150,6 +150,7 @@
 #define DRAW_STRIKE		0x40	/* strikethrough */
 #define DRAW_WIDE		0x80	/* drawing wide char (MacVim) */
 #define DRAW_COMP		0x100	/* drawing composing char (MacVim) */
+#define DRAW_TUNDERL		0x200	/* drawing thick underline text (MacVim) */
 
 /* For our own tearoff menu item */
 #define TEAR_STRING		"-->Detach"

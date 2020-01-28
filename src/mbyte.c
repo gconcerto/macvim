@@ -1575,6 +1575,19 @@ utf_char2cells(int c)
 	{0x1f6f3, 0x1f6f3}
     };
 
+#ifdef USE_AMBIWIDTH_AUTO
+    if (gui.in_use && *p_ambw == 'a')
+    {
+	int cell;
+
+	/* This is required by screen.c implicitly. */
+	if (c == 0)
+	    return 1;
+	if ((cell = gui_mch_get_charwidth(c)) > 0)
+	    return cell;
+    }
+#endif
+
     if (c >= 0x100)
     {
 #ifdef USE_WCHAR_FUNCTIONS
@@ -4858,6 +4871,7 @@ init_preedit_start_col(void)
 
 static int im_is_active	       = FALSE;	/* IM is enabled for current mode    */
 static int preedit_is_active   = FALSE;
+static int im_preedit_start    = 0;	/* start offset in characters        */
 static int im_preedit_cursor   = 0;	/* cursor offset in characters       */
 static int im_preedit_trailing = 0;	/* number of characters after cursor */
 
@@ -5172,6 +5186,8 @@ static int xim_ignored_char = FALSE;
 im_show_info(void)
 {
     int	    old_vgetc_busy;
+    int	    old_row = gui.row;
+    int	    old_col = gui.col;
 
     old_vgetc_busy = vgetc_busy;
     vgetc_busy = TRUE;
@@ -5180,6 +5196,8 @@ im_show_info(void)
     if ((State & NORMAL) || (State & INSERT))
 	setcursor();
     out_flush();
+    gui.row = old_row;
+    gui.col = old_col;
 }
 
 # ifndef FEAT_GUI_MACVIM
@@ -5387,7 +5405,7 @@ im_preedit_abandon_macvim()
 im_preedit_changed_cb(GtkIMContext *context, gpointer data UNUSED)
 # else
     void
-im_preedit_changed_macvim(char *preedit_string, int cursor_index)
+im_preedit_changed_macvim(char *preedit_string, int start_index, int cursor_index)
 # endif
 {
 # ifndef FEAT_GUI_MACVIM
@@ -5598,7 +5616,10 @@ im_get_feedback_attr(int col)
 
     return char_attr;
 # else
-    return HL_UNDERLINE;
+    if (col >= im_preedit_start && col < im_preedit_cursor)
+	return HL_THICKUNDERLINE;
+    else
+	return HL_UNDERLINE;
 # endif
 }
 

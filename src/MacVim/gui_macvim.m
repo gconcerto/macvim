@@ -70,6 +70,14 @@ macvim_early_init()
             path = [path stringByAppendingPathComponent:@"runtime"];
             vim_setenv((char_u*)"VIMRUNTIME", (char_u*)[path UTF8String]);
         }
+
+        NSString *lang = [[[NSBundle mainBundle]
+            preferredLocalizations] objectAtIndex:0];
+        if ([lang isEqualToString:@"Japanese"])
+            vim_setenv((char_u*)"LANG", (char_u*)"ja_JP.UTF-8");
+
+        if (mch_isdir((char_u*)"/opt/local/share/terminfo") == FALSE)
+            vim_setenv((char_u*)"TERMINFO", (char_u*)"/usr/share/terminfo");
     }
 
 #if 0   // NOTE: setlocale(LC_ALL, "") seems to work after a restart so this is
@@ -1344,6 +1352,10 @@ im_set_active(int active)
         return;
     }
 #endif
+
+    // Don't enable IM if imdisableactivate is true.
+    if (p_imdisableactivate && active)
+        return;
 
     // Tell frontend to enable/disable IM (called e.g. when the mode changes).
     if (!p_imdisable) {

@@ -660,7 +660,12 @@ extern int (*dyn_libintl_wputenv)(const wchar_t *envstring);
 #define HL_STANDOUT		0x20
 #define HL_NOCOMBINE		0x40
 #define HL_STRIKETHROUGH	0x80
-#define HL_ALL			0xff
+#if defined(FEAT_GUI_MACVIM)
+# define HL_THICKUNDERLINE	0x100
+# define HL_ALL			0x1ff
+#else
+# define HL_ALL			0xff
+#endif
 
 // special attribute addition: Put message in history
 #define MSG_HIST		0x1000

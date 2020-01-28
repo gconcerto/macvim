@@ -279,7 +279,8 @@
 #define GO_FOOTER	'F'		// add footer
 #define GO_VERTICAL	'v'		// arrange dialog buttons vertically
 #define GO_KEEPWINSIZE	'k'		// keep GUI window size
-#define GO_ALL		"!aAbcdefFghilmMprtTvk" // all possible flags for 'go'
+#define GO_NOCAPTION	'C'		/* remove caption bar */
+#define GO_ALL		"!aAbcCefFghilmMprtTvk" /* all possible flags for 'go' */
 
 // flags for 'comments' option
 #define COM_NEST	'n'		// comments strings nest
@@ -655,6 +656,7 @@ EXTERN char_u	*p_imsf;	// 'imstatusfunc'
 #endif
 EXTERN int	p_imcmdline;	// 'imcmdline'
 EXTERN int	p_imdisable;	// 'imdisable'
+EXTERN int	p_imdisableactivate;	/* 'imdisableactivate' */
 EXTERN long	p_iminsert;	// 'iminsert'
 EXTERN long	p_imsearch;	// 'imsearch'
 EXTERN int	p_inf;		// 'infercase'

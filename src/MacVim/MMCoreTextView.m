@@ -44,6 +44,7 @@
 #define DRAW_CURSOR               0x20
 #define DRAW_WIDE                 0x80    /* draw wide text */
 #define DRAW_COMP                 0x100   /* drawing composing char */
+#define DRAW_TUNDERL              0x200   /* draw double underline text */
 
 #if MAC_OS_X_VERSION_MIN_REQUIRED < MAC_OS_X_VERSION_10_8
 #define kCTFontOrientationDefault kCTFontDefaultOrientation
@@ -1993,7 +1994,13 @@ recurseDraw(const unichar *chars, CGGlyph *glyphs, CGPoint *positions,
 
     if (flags & DRAW_UNDERL) {
         // Draw underline
-        CGRect rect = { {x, y+0.4*fontDescent}, {cells*cellSize.width, 1} };
+        CGRect rect = { {x, y}, {cells*cellSize.width, 1} };
+        CGContextSetRGBFillColor(context, RED(sp), GREEN(sp), BLUE(sp),
+                                 ALPHA(sp));
+        CGContextFillRect(context, rect);
+    } else if (flags & DRAW_TUNDERL) {
+        // Draw underline
+        CGRect rect = { {x, y}, {cells*cellSize.width, 2} };
         CGContextSetRGBFillColor(context, RED(sp), GREEN(sp), BLUE(sp),
                                  ALPHA(sp));
         CGContextFillRect(context, rect);

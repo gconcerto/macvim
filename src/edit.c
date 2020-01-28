@@ -2036,7 +2036,11 @@ insertchar(
     int		fo_ins_blank;
     int		force_format = flags & INSCHAR_FORMAT;
 
+#if defined(FEAT_GUI_MACVIM)
+    textwidth = im_is_preediting() ? 0 : comp_textwidth(force_format);
+#else
     textwidth = comp_textwidth(force_format);
+#endif
     fo_ins_blank = has_format_option(FO_INS_BLANK);
 
     /*
