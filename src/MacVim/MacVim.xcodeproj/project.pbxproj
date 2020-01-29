@@ -64,8 +64,8 @@
 		1DE9B9500D341AB8008FEDD4 /* MMWindow.m in Sources */ = {isa = PBXBuildFile; fileRef = 1DE9B94E0D341AB8008FEDD4 /* MMWindow.m */; };
 		1DED78600C6DE43D0079945F /* vimrc in Copy Vim Runtime Files */ = {isa = PBXBuildFile; fileRef = 1DED785F0C6DE43D0079945F /* vimrc */; };
 		1DFE25A50C527BC4003000F7 /* PSMTabBarControl.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 1D493DB90C52533B00AB718C /* PSMTabBarControl.framework */; };
-		3D23AE9F23E188E300634FE9 /* switches in Resources */ = {isa = PBXBuildFile; fileRef = 3D23AE9D23E188E300634FE9 /* switches */; };
-		3D23AEA123E188FA00634FE9 /* plugins in Resources */ = {isa = PBXBuildFile; fileRef = 3D23AE9E23E188E300634FE9 /* plugins */; };
+		3D59CC8B23E19730007CB3E0 /* plugins in Copy KaoriYa Runtime Files */ = {isa = PBXBuildFile; fileRef = 3D23AE9E23E188E300634FE9 /* plugins */; };
+		3D59CC8C23E19730007CB3E0 /* switches in Copy KaoriYa Runtime Files */ = {isa = PBXBuildFile; fileRef = 3D23AE9D23E188E300634FE9 /* switches */; };
 		52818B031C1C08CE00F59085 /* QLStephen.qlgenerator in Copy QuickLookPlugin */ = {isa = PBXBuildFile; fileRef = 52818AFF1C1C075300F59085 /* QLStephen.qlgenerator */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 		528DA66A1426D4F9003380F1 /* macvim-askpass in Copy Scripts */ = {isa = PBXBuildFile; fileRef = 528DA6691426D4EB003380F1 /* macvim-askpass */; };
 		52A364731C4A5789005757EC /* Sparkle.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 52A364721C4A5789005757EC /* Sparkle.framework */; settings = {ATTRIBUTES = (Weak, ); }; };
@@ -143,6 +143,18 @@
 				1DE608B40C587FDA0055263D /* runtime in Copy Vim Runtime Files */,
 			);
 			name = "Copy Vim Runtime Files";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		3D59CC8923E19709007CB3E0 /* Copy KaoriYa Runtime Files */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = vim;
+			dstSubfolderSpec = 7;
+			files = (
+				3D59CC8B23E19730007CB3E0 /* plugins in Copy KaoriYa Runtime Files */,
+				3D59CC8C23E19730007CB3E0 /* switches in Copy KaoriYa Runtime Files */,
+			);
+			name = "Copy KaoriYa Runtime Files";
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		52818B021C1C088000F59085 /* Copy QuickLookPlugin */ = {
@@ -777,6 +789,7 @@
 				1D1C31F00EFFBFD6003FE9A5 /* Make Document Icons */,
 				528DA6671426D456003380F1 /* Copy Scripts */,
 				52283AB71EBA200C00A6F6B9 /* Copy mvim scripts */,
+				3D59CC8923E19709007CB3E0 /* Copy KaoriYa Runtime Files */,
 			);
 			buildRules = (
 			);
@@ -877,11 +890,9 @@
 				1DCD00CC0E50B2B700460166 /* Replace.png in Resources */,
 				1DCD00CD0E50B2B700460166 /* RunCtags.png in Resources */,
 				1DCD00CE0E50B2B700460166 /* RunScript.png in Resources */,
-				3D23AEA123E188FA00634FE9 /* plugins in Resources */,
 				1DCD00CF0E50B2B700460166 /* Save.png in Resources */,
 				1DCD00D00E50B2B700460166 /* SaveAll.png in Resources */,
 				1DCD00D10E50B2B700460166 /* SaveSesn.png in Resources */,
-				3D23AE9F23E188E300634FE9 /* switches in Resources */,
 				1DCD00D20E50B2B700460166 /* TagJump.png in Resources */,
 				1DCD00D30E50B2B700460166 /* Undo.png in Resources */,
 				1D8BEA74104992290069B072 /* FindAndReplace.nib in Resources */,
@@ -920,7 +931,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "BINPATH=$BUILT_PRODUCTS_DIR/$CONTENTS_FOLDER_PATH/bin\nmkdir -p $BINPATH\ncp -a $SRCROOT/mvim $BINPATH/mvim\nchmod 755 $BINPATH/mvim\n(cd $BINPATH; for f in vim vimdiff view gvim gvimdiff gview mvimdiff mview; do ln -fs mvim $f; done)";
+			shellScript = "BINPATH=$BUILT_PRODUCTS_DIR/$CONTENTS_FOLDER_PATH/bin\nmkdir -p $BINPATH\ncp -a $SRCROOT/mvim $BINPATH/mvim\nchmod 755 $BINPATH/mvim\n(cd $BINPATH; for f in vim vimdiff view gvim gvimdiff gview mvimdiff mview; do ln -fs mvim $f; done)\n";
 			showEnvVarsInLog = 0;
 		};
 /* End PBXShellScriptBuildPhase section */
