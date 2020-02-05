@@ -697,7 +697,7 @@ do_map(
 #ifdef FEAT_EVAL
 				    mp->m_expr = expr;
 				    mp->m_script_ctx = current_sctx;
-				    mp->m_script_ctx.sc_lnum += sourcing_lnum;
+				    mp->m_script_ctx.sc_lnum += SOURCING_LNUM;
 #endif
 				    did_it = TRUE;
 				}
@@ -796,7 +796,7 @@ do_map(
 #ifdef FEAT_EVAL
 	mp->m_expr = expr;
 	mp->m_script_ctx = current_sctx;
-	mp->m_script_ctx.sc_lnum += sourcing_lnum;
+	mp->m_script_ctx.sc_lnum += SOURCING_LNUM;
 #endif
 
 	// add the new entry in front of the abbrlist or maphash[] list
@@ -1055,6 +1055,81 @@ map_to_exists_mode(char_u *rhs, int mode, int abbr)
 static int	expand_mapmodes = 0;
 static int	expand_isabbrev = 0;
 static int	expand_buffer = FALSE;
+
+/*
+ * Translate an internal mapping/abbreviation representation into the
+ * corresponding external one recognized by :map/:abbrev commands.
+ * Respects the current B/k/< settings of 'cpoption'.
+ *
+ * This function is called when expanding mappings/abbreviations on the
+ * command-line.
+ *
+ * It uses a growarray to build the translation string since the latter can be
+ * wider than the original description. The caller has to free the string
+ * afterwards.
+ *
+ * Returns NULL when there is a problem.
+ */
+    static char_u *
+translate_mapping(char_u *str)
+{
+    garray_T	ga;
+    int		c;
+    int		modifiers;
+    int		cpo_bslash;
+    int		cpo_special;
+
+    ga_init(&ga);
+    ga.ga_itemsize = 1;
+    ga.ga_growsize = 40;
+
+    cpo_bslash = (vim_strchr(p_cpo, CPO_BSLASH) != NULL);
+    cpo_special = (vim_strchr(p_cpo, CPO_SPECI) != NULL);
+
+    for (; *str; ++str)
+    {
+	c = *str;
+	if (c == K_SPECIAL && str[1] != NUL && str[2] != NUL)
+	{
+	    modifiers = 0;
+	    if (str[1] == KS_MODIFIER)
+	    {
+		str++;
+		modifiers = *++str;
+		c = *++str;
+	    }
+	    if (c == K_SPECIAL && str[1] != NUL && str[2] != NUL)
+	    {
+		if (cpo_special)
+		{
+		    ga_clear(&ga);
+		    return NULL;
+		}
+		c = TO_SPECIAL(str[1], str[2]);
+		if (c == K_ZERO)	// display <Nul> as ^@
+		    c = NUL;
+		str += 2;
+	    }
+	    if (IS_SPECIAL(c) || modifiers)	// special key
+	    {
+		if (cpo_special)
+		{
+		    ga_clear(&ga);
+		    return NULL;
+		}
+		ga_concat(&ga, get_special_key_name(c, modifiers));
+		continue; // for (str)
+	    }
+	}
+	if (c == ' ' || c == '\t' || c == Ctrl_J || c == Ctrl_V
+	    || (c == '<' && !cpo_special) || (c == '\\' && !cpo_bslash))
+	    ga_append(&ga, cpo_bslash ? Ctrl_V : '\\');
+	if (c)
+	    ga_append(&ga, c);
+    }
+    ga_append(&ga, NUL);
+    return (char_u *)(ga.ga_data);
+}
 
 /*
  * Work out what to complete when doing command line completion of mapping
@@ -1915,14 +1990,15 @@ check_map_keycodes(void)
     char_u	*p;
     int		i;
     char_u	buf[3];
-    char_u	*save_name;
     int		abbr;
     int		hash;
     buf_T	*bp;
+    ESTACK_CHECK_DECLARATION
 
     validate_maphash();
-    save_name = sourcing_name;
-    sourcing_name = (char_u *)"mappings"; // avoids giving error messages
+    // avoids giving error messages
+    estack_push(ETYPE_INTERNAL, (char_u *)"mappings", 0);
+    ESTACK_CHECK_SETUP
 
     // Do this once for each buffer, and then once for global
     // mappings/abbreviations with bp == NULL
@@ -1979,7 +2055,8 @@ check_map_keycodes(void)
 	if (bp == NULL)
 	    break;
     }
-    sourcing_name = save_name;
+    ESTACK_CHECK_NOW
+    estack_pop();
 }
 
 #if defined(FEAT_EVAL) || defined(PROTO)

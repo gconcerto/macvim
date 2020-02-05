@@ -8,7 +8,7 @@
  */
 
 /*
- * filepath.c: dealing with file names ant paths.
+ * filepath.c: dealing with file names and paths.
  */
 
 #include "vim.h"
@@ -162,7 +162,7 @@ shortpath_for_invalid_fname(
 	 * path with the remaining path at the tail.
 	 */
 
-	/* Compute the length of the new path. */
+	// Compute the length of the new path.
 	sfx_len = (int)(save_endp - endp) + 1;
 	new_len = len + sfx_len;
 
@@ -1658,7 +1658,8 @@ f_resolve(typval_T *argvars, typval_T *rettv)
 	int	limit = 100;
 
 	p = vim_strsave(p);
-
+	if (p == NULL)
+	    goto fail;
 	if (p[0] == '.' && (vim_ispathsep(p[1])
 				   || (p[1] == '.' && (vim_ispathsep(p[2])))))
 	    is_relative_to_current = TRUE;
@@ -1681,7 +1682,10 @@ f_resolve(typval_T *argvars, typval_T *rettv)
 
 	buf = alloc(MAXPATHL + 1);
 	if (buf == NULL)
+	{
+	    vim_free(p);
 	    goto fail;
+	}
 
 	for (;;)
 	{
@@ -1888,6 +1892,7 @@ f_writefile(typval_T *argvars, typval_T *rettv)
 	list = argvars[0].vval.v_list;
 	if (list == NULL)
 	    return;
+	range_list_materialize(list);
 	for (li = list->lv_first; li != NULL; li = li->li_next)
 	    if (tv_get_string_chk(&li->li_tv) == NULL)
 		return;
@@ -2367,7 +2372,7 @@ fullpathcmp(
     r2 = mch_stat((char *)s2, &st2);
     if (r1 != 0 && r2 != 0)
     {
-	/* if mch_stat() doesn't work, may compare the names */
+	// if mch_stat() doesn't work, may compare the names
 	if (checkname)
 	{
 	    if (fnamecmp(exp1, s2) == 0)
@@ -3689,7 +3694,7 @@ gen_expand_wildcards(
     void
 addfile(
     garray_T	*gap,
-    char_u	*f,	/* filename */
+    char_u	*f,	// filename
     int		flags)
 {
     char_u	*p;

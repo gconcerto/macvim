@@ -589,7 +589,7 @@ func Test_edit_CTRL_K()
   call feedkeys("A\<c-x>\<c-k>\<down>\<down>\<down>\<down>\<cr>\<esc>", 'tnix')
   call assert_equal(['AA'], getline(1, '$'))
 
-  " press an unexecpted key after dictionary completion
+  " press an unexpected key after dictionary completion
   %d
   call setline(1, 'A')
   call cursor(1, 1)
@@ -982,6 +982,8 @@ func Test_edit_CTRL_V()
 endfunc
 
 func Test_edit_F1()
+  CheckFeature quickfix
+
   " Pressing <f1>
   new
   call feedkeys(":set im\<cr>\<f1>\<c-l>", 'tnix')

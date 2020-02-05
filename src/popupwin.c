@@ -13,7 +13,7 @@
 
 #include "vim.h"
 
-#if defined(FEAT_TEXT_PROP) || defined(PROTO)
+#if defined(FEAT_PROP_POPUP) || defined(PROTO)
 
 typedef struct {
     char	*pp_name;
@@ -611,7 +611,7 @@ popup_highlight_curline(win_T *wp)
     int	    sign_id = 0;
     char_u  *sign_name = popup_get_sign_name(wp);
 
-    buf_delete_signs(wp->w_buffer, (char_u *)"popupmenu");
+    buf_delete_signs(wp->w_buffer, (char_u *)"PopUpMenu");
 
     if ((wp->w_popup_flags & POPF_CURSORLINE) != 0)
     {
@@ -626,7 +626,7 @@ popup_highlight_curline(win_T *wp)
 	    sign_define_by_name(sign_name, NULL, (char_u *)linehl, NULL, NULL);
 	}
 
-	sign_place(&sign_id, (char_u *)"popupmenu", sign_name,
+	sign_place(&sign_id, (char_u *)"PopUpMenu", sign_name,
 			       wp->w_buffer, wp->w_cursor.lnum, SIGN_DEF_PRIO);
 	redraw_win_later(wp, NOT_VALID);
     }
@@ -937,10 +937,7 @@ apply_options(win_T *wp, dict_T *dict)
 
     nr = dict_get_number(dict, (char_u *)"hidden");
     if (nr > 0)
-    {
 	wp->w_popup_flags |= POPF_HIDDEN;
-	--wp->w_buffer->b_nwindows;
-    }
 
     popup_mask_refresh = TRUE;
     popup_highlight_curline(wp);
@@ -1153,7 +1150,6 @@ popup_adjust_position(win_T *wp)
 	    if ((wp->w_popup_flags & POPF_HIDDEN) == 0)
 	    {
 		wp->w_popup_flags |= POPF_HIDDEN;
-		--wp->w_buffer->b_nwindows;
 		if (win_valid(wp->w_popup_prop_win))
 		    redraw_win_later(wp->w_popup_prop_win, SOME_VALID);
 	    }
@@ -1222,8 +1218,8 @@ popup_adjust_position(win_T *wp)
 		|| wp->w_popup_pos == POPPOS_BOTLEFT))
 	{
 	    wp->w_wincol = wantcol - 1;
-	    if (wp->w_wincol >= Columns - 3)
-		wp->w_wincol = Columns - 3;
+	    if (wp->w_wincol >= Columns - 1)
+		wp->w_wincol = Columns - 1;
 	}
     }
 
@@ -1753,7 +1749,7 @@ popup_create(typval_T *argvars, typval_T *rettv, create_type_T type)
 	// Check that arguments look OK.
 	if (argvars[0].v_type == VAR_NUMBER)
 	{
-	    buf = buflist_findnr( argvars[0].vval.v_number);
+	    buf = buflist_findnr(argvars[0].vval.v_number);
 	    if (buf == NULL)
 	    {
 		semsg(_(e_nobufnr), argvars[0].vval.v_number);
@@ -2097,6 +2093,10 @@ popup_close_and_callback(win_T *wp, typval_T *arg)
 {
     int id = wp->w_id;
 
+    // Just in case a check higher up is missing.
+    if (wp == curwin && ERROR_IF_POPUP_WINDOW)
+	return;
+
     if (wp->w_close_cb.cb_name != NULL)
 	// Careful: This may make "wp" invalid.
 	invoke_popup_callback(wp, arg);
@@ -2331,8 +2331,12 @@ find_popup_win(int id)
 f_popup_close(typval_T *argvars, typval_T *rettv UNUSED)
 {
     int		id = (int)tv_get_number(argvars);
-    win_T	*wp = find_popup_win(id);
+    win_T	*wp;
 
+    if (ERROR_IF_POPUP_WINDOW)
+	return;
+
+    wp = find_popup_win(id);
     if (wp != NULL)
 	popup_close_and_callback(wp, &argvars[1]);
 }
@@ -2343,7 +2347,7 @@ popup_hide(win_T *wp)
     if ((wp->w_popup_flags & POPF_HIDDEN) == 0)
     {
 	wp->w_popup_flags |= POPF_HIDDEN;
-	--wp->w_buffer->b_nwindows;
+	// Do not decrement b_nwindows, we still reference the buffer.
 	redraw_all_later(NOT_VALID);
 	popup_mask_refresh = TRUE;
     }
@@ -2368,7 +2372,6 @@ popup_show(win_T *wp)
     if ((wp->w_popup_flags & POPF_HIDDEN) != 0)
     {
 	wp->w_popup_flags &= ~POPF_HIDDEN;
-	++wp->w_buffer->b_nwindows;
 	redraw_all_later(NOT_VALID);
 	popup_mask_refresh = TRUE;
     }
@@ -2386,8 +2389,10 @@ f_popup_show(typval_T *argvars, typval_T *rettv UNUSED)
     if (wp != NULL)
     {
 	popup_show(wp);
+#ifdef FEAT_QUICKFIX
 	if (wp->w_popup_flags & POPF_INFO)
 	    pum_position_info_popup(wp);
+#endif
     }
 }
 
@@ -2479,6 +2484,8 @@ popup_close_tabpage(tabpage_T *tp, int id)
     void
 close_all_popups(void)
 {
+    if (ERROR_IF_POPUP_WINDOW)
+	return;
     while (first_popupwin != NULL)
 	popup_close(first_popupwin->w_id);
     while (curtab->tp_first_popupwin != NULL)
@@ -2599,7 +2606,7 @@ f_popup_locate(typval_T *argvars, typval_T *rettv)
     win_T	*wp;
 
     wp = mouse_find_win(&row, &col, FIND_POPUP);
-    if (WIN_IS_POPUP(wp))
+    if (wp != NULL && WIN_IS_POPUP(wp))
 	rettv->vval.v_number = wp->w_id;
 }
 
@@ -3144,7 +3151,6 @@ check_popup_unhidden(win_T *wp)
 							   &prop, &lnum) == OK)
 	{
 	    wp->w_popup_flags &= ~POPF_HIDDEN;
-	    ++wp->w_buffer->b_nwindows;
 	    wp->w_popup_prop_topline = 0; // force repositioning
 	    return TRUE;
 	}
@@ -3686,6 +3692,13 @@ set_ref_in_popups(int copyID)
     return abort;
 }
 
+    int
+popup_is_popup(win_T *wp)
+{
+    return wp->w_popup_flags != 0;
+}
+
+#if defined(FEAT_QUICKFIX) || defined(PROTO)
 /*
  * Find an existing popup used as the preview window, in the current tab page.
  * Return NULL if not found.
@@ -3702,13 +3715,6 @@ popup_find_preview_window(void)
     return NULL;
 }
 
-    int
-popup_is_popup(win_T *wp)
-{
-    return wp->w_popup_flags != 0;
-}
-
-#if defined(FEAT_QUICKFIX) || defined(PROTO)
 /*
  * Find an existing popup used as the info window, in the current tab page.
  * Return NULL if not found.
@@ -3729,19 +3735,28 @@ popup_find_info_window(void)
     void
 f_popup_findinfo(typval_T *argvars UNUSED, typval_T *rettv)
 {
+#ifdef FEAT_QUICKFIX
     win_T   *wp = popup_find_info_window();
 
     rettv->vval.v_number = wp == NULL ? 0 : wp->w_id;
+#else
+    rettv->vval.v_number = 0;
+#endif
 }
 
     void
 f_popup_findpreview(typval_T *argvars UNUSED, typval_T *rettv)
 {
+#ifdef FEAT_QUICKFIX
     win_T   *wp = popup_find_preview_window();
 
     rettv->vval.v_number = wp == NULL ? 0 : wp->w_id;
+#else
+    rettv->vval.v_number = 0;
+#endif
 }
 
+#if defined(FEAT_QUICKFIX) || defined(PROTO)
 /*
  * Create a popup to be used as the preview or info window.
  * NOTE: this makes the popup the current window, so that the file can be
@@ -3775,7 +3790,6 @@ popup_create_preview_window(int info)
     return OK;
 }
 
-#if defined(FEAT_QUICKFIX) || defined(PROTO)
 /*
  * Close any preview popup.
  */
@@ -3851,6 +3865,7 @@ popup_set_title(win_T *wp)
     }
 }
 
+# if defined(FEAT_QUICKFIX) || defined(PROTO)
 /*
  * If there is a preview window, update the title.
  * Used after changing directory.
@@ -3863,5 +3878,6 @@ popup_update_preview_title(void)
     if (wp != NULL)
 	popup_set_title(wp);
 }
+# endif
 
-#endif // FEAT_TEXT_PROP
+#endif // FEAT_PROP_POPUP
