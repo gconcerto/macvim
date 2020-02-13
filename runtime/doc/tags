@@ -4725,6 +4725,7 @@ E858	eval.txt	/*E858*
 E859	eval.txt	/*E859*
 E86	windows.txt	/*E86*
 E862	eval.txt	/*E862*
+E863	popup.txt	/*E863*
 E864	pattern.txt	/*E864*
 E865	pattern.txt	/*E865*
 E866	pattern.txt	/*E866*
@@ -8452,6 +8453,7 @@ popup-menu-added	version5.txt	/*popup-menu-added*
 popup-position	popup.txt	/*popup-position*
 popup-props	popup.txt	/*popup-props*
 popup-scrollbar	popup.txt	/*popup-scrollbar*
+popup-terminal	popup.txt	/*popup-terminal*
 popup-textprop-pos	popup.txt	/*popup-textprop-pos*
 popup-usage	popup.txt	/*popup-usage*
 popup-window	popup.txt	/*popup-window*
@@ -9591,6 +9593,7 @@ test-functions	usr_41.txt	/*test-functions*
 test-functions-details	testing.txt	/*test-functions-details*
 test_alloc_fail()	testing.txt	/*test_alloc_fail()*
 test_autochdir()	testing.txt	/*test_autochdir()*
+test_clear_search_pat()	testing.txt	/*test_clear_search_pat()*
 test_feedinput()	testing.txt	/*test_feedinput()*
 test_garbagecollect_now()	testing.txt	/*test_garbagecollect_now()*
 test_garbagecollect_soon()	testing.txt	/*test_garbagecollect_soon()*
