@@ -18,7 +18,7 @@
 #endif
 
 #ifdef MSWIN
-# include "vimio.h"
+# include <io.h>
 #endif
 
 // ============ the header file puzzle: order matters =========
@@ -118,12 +118,6 @@
 # if defined(FEAT_DIRECTX)
 #  define FEAT_RENDER_OPTIONS
 # endif
-#endif
-
-// Visual Studio 2005 has 'deprecated' many of the standard CRT functions
-#if _MSC_VER >= 1400
-# define _CRT_SECURE_NO_DEPRECATE
-# define _CRT_NONSTDC_NO_DEPRECATE
 #endif
 
 /*
@@ -334,16 +328,6 @@
 typedef unsigned char	char_u;
 typedef unsigned short	short_u;
 typedef unsigned int	int_u;
-
-// Older systems do not have support for long long
-// use a typedef instead of hard-coded long long
-#ifdef HAVE_NO_LONG_LONG
- typedef long long_long_T;
- typedef long unsigned long_long_u_T;
-#else
- typedef long long long_long_T;
- typedef long long unsigned long_long_u_T;
-#endif
 
 // Make sure long_u is big enough to hold a pointer.
 // On Win64, longs are 32 bits and pointers are 64 bits.
@@ -1135,20 +1119,6 @@ extern int (*dyn_libintl_wputenv)(const wchar_t *envstring);
 #define VIMINFO_VERSION_WITH_HISTORY 2
 #define VIMINFO_VERSION_WITH_REGISTERS 3
 #define VIMINFO_VERSION_WITH_MARKS 4
-
-typedef enum {
-    BVAL_NR,
-    BVAL_STRING,
-    BVAL_EMPTY
-} btype_T;
-
-typedef struct {
-    btype_T	bv_type;
-    long	bv_nr;
-    char_u	*bv_string;
-    int		bv_len;		// length of bv_string
-    int		bv_allocated;	// bv_string was allocated
-} bval_T;
 
 /*
  * Values for do_tag().
@@ -2003,33 +1973,34 @@ typedef int sock_T;
 #define VV_ERRORS	67
 #define VV_FALSE	68
 #define VV_TRUE		69
-#define VV_NULL		70
-#define VV_NONE		71
-#define VV_VIM_DID_ENTER 72
-#define VV_TESTING	73
-#define VV_TYPE_NUMBER	74
-#define VV_TYPE_STRING	75
-#define VV_TYPE_FUNC	76
-#define VV_TYPE_LIST	77
-#define VV_TYPE_DICT	78
-#define VV_TYPE_FLOAT	79
-#define VV_TYPE_BOOL	80
-#define VV_TYPE_NONE	81
-#define VV_TYPE_JOB	82
-#define VV_TYPE_CHANNEL	83
-#define VV_TYPE_BLOB	84
-#define VV_TERMRFGRESP	85
-#define VV_TERMRBGRESP	86
-#define VV_TERMU7RESP	87
-#define VV_TERMSTYLERESP 88
-#define VV_TERMBLINKRESP 89
-#define VV_EVENT	90
-#define VV_VERSIONLONG	91
-#define VV_ECHOSPACE	92
-#define VV_ARGV		93
+#define VV_NONE		70
+#define VV_NULL		71
+#define VV_NUMBERSIZE	72
+#define VV_VIM_DID_ENTER 73
+#define VV_TESTING	74
+#define VV_TYPE_NUMBER	75
+#define VV_TYPE_STRING	76
+#define VV_TYPE_FUNC	77
+#define VV_TYPE_LIST	78
+#define VV_TYPE_DICT	79
+#define VV_TYPE_FLOAT	80
+#define VV_TYPE_BOOL	81
+#define VV_TYPE_NONE	82
+#define VV_TYPE_JOB	83
+#define VV_TYPE_CHANNEL	84
+#define VV_TYPE_BLOB	85
+#define VV_TERMRFGRESP	86
+#define VV_TERMRBGRESP	87
+#define VV_TERMU7RESP	88
+#define VV_TERMSTYLERESP 89
+#define VV_TERMBLINKRESP 90
+#define VV_EVENT	91
+#define VV_VERSIONLONG	92
+#define VV_ECHOSPACE	93
+#define VV_ARGV		94
 // MacVim-specific values go here
-#define VV_OS_APPEARANCE 94
-#define VV_LEN		95	// number of v: vars
+#define VV_OS_APPEARANCE 95
+#define VV_LEN		96	// number of v: vars
 
 // used for v_number in VAR_BOOL and VAR_SPECIAL
 #define VVAL_FALSE	0L	// VAR_BOOL
@@ -2583,6 +2554,9 @@ typedef enum {
 #define FCERR_OTHER	6
 #define FCERR_DELETED	7
 #define FCERR_NOTMETHOD	8   // function cannot be used as a method
+
+// fixed buffer length for fname_trans_sid()
+#define FLEN_FIXED 40
 
 // flags for find_name_end()
 #define FNE_INCL_BR	1	// include [] in name

@@ -200,6 +200,7 @@ get_function_args(
 	    {
 		typval_T	rettv;
 
+		// find the end of the expression (doesn't evaluate it)
 		any_default = TRUE;
 		p = skipwhite(p) + 1;
 		p = skipwhite(p);
@@ -572,8 +573,6 @@ get_func_tv(
     return ret;
 }
 
-#define FLEN_FIXED 40
-
 /*
  * Return TRUE if "p" starts with "<SID>" or "s:".
  * Only works if eval_fname_script() returned non-zero for "p"!
@@ -590,7 +589,7 @@ eval_fname_sid(char_u *p)
  * Use "fname_buf[FLEN_FIXED + 1]" when it fits, otherwise allocate memory
  * (slow).
  */
-    static char_u *
+    char_u *
 fname_trans_sid(char_u *name, char_u *fname_buf, char_u **tofree, int *error)
 {
     int		llen;
@@ -3054,6 +3053,7 @@ ex_function(exarg_T *eap)
 	flags |= FC_SANDBOX;
     fp->uf_flags = flags;
     fp->uf_calls = 0;
+    fp->uf_cleared = FALSE;
     fp->uf_script_ctx = current_sctx;
     fp->uf_script_ctx.sc_lnum += sourcing_lnum_top;
     if (is_export)
@@ -3555,13 +3555,17 @@ ex_call(exarg_T *eap)
     if (eap->skip)
 	--emsg_skip;
 
-    if (!failed)
+    // When inside :try we need to check for following "| catch".
+    if (!failed || eap->cstack->cs_trylevel > 0)
     {
 	// Check for trailing illegal characters and a following command.
 	if (!ends_excmd(*arg))
 	{
-	    emsg_severe = TRUE;
-	    emsg(_(e_trailing));
+	    if (!failed)
+	    {
+		emsg_severe = TRUE;
+		emsg(_(e_trailing));
+	    }
 	}
 	else
 	    eap->nextcmd = check_nextcmd(arg);

@@ -70,12 +70,41 @@ typedef struct {
 #define STACK_TV_BOT(idx) (((typval_T *)ectx->ec_stack.ga_data) + ectx->ec_stack.ga_len + idx)
 
 /*
- * Return the number of arguments, including any vararg.
+ * Return the number of arguments, including optional arguments and any vararg.
  */
     static int
 ufunc_argcount(ufunc_T *ufunc)
 {
     return ufunc->uf_args.ga_len + (ufunc->uf_va_name != NULL ? 1 : 0);
+}
+
+/*
+ * Set the instruction index, depending on omitted arguments, where the default
+ * values are to be computed.  If all optional arguments are present, start
+ * with the function body.
+ * The expression evaluation is at the start of the instructions:
+ *  0 ->  EVAL default1
+ *	       STORE arg[-2]
+ *  1 ->  EVAL default2
+ *	       STORE arg[-1]
+ *  2 ->  function body
+ */
+    static void
+init_instr_idx(ufunc_T *ufunc, int argcount, ectx_T *ectx)
+{
+    if (ufunc->uf_def_args.ga_len == 0)
+	ectx->ec_iidx = 0;
+    else
+    {
+	int	defcount = ufunc->uf_args.ga_len - argcount;
+
+	// If there is a varargs argument defcount can be negative, no defaults
+	// to evaluate then.
+	if (defcount < 0)
+	    defcount = 0;
+	ectx->ec_iidx = ufunc->uf_def_arg_idx[
+					 ufunc->uf_def_args.ga_len - defcount];
+    }
 }
 
 /*
@@ -107,23 +136,15 @@ call_dfunc(int cdf_idx, int argcount, ectx_T *ectx)
     if (ga_grow(&ectx->ec_stack, optcount + 3 + dfunc->df_varcount) == FAIL)
 	return FAIL;
 
-// TODO: Put omitted argument default values on the stack.
-    if (optcount > 0)
-    {
-	emsg("optional arguments not implemented yet");
-	return FAIL;
-    }
     if (optcount < 0)
     {
 	emsg("argument count wrong?");
 	return FAIL;
     }
-//    for (idx = argcount - dfunc->df_minarg;
-//				     idx < dfunc->df_maxarg; ++idx)
-//    {
-//	copy_tv(&dfunc->df_defarg[idx], STACK_TV_BOT(0));
-//	++ectx->ec_stack.ga_len;
-//    }
+
+    // Reserve space for omitted optional arguments, filled in soon.
+    // Also any empty varargs argument.
+    ectx->ec_stack.ga_len += optcount;
 
     // Store current execution state in stack frame for ISN_RETURN.
     // TODO: If the actual number of arguments doesn't match what the called
@@ -142,7 +163,9 @@ call_dfunc(int cdf_idx, int argcount, ectx_T *ectx)
     ectx->ec_dfunc_idx = cdf_idx;
     ectx->ec_instr = dfunc->df_instr;
     estack_push_ufunc(ETYPE_UFUNC, dfunc->df_ufunc, 1);
-    ectx->ec_iidx = 0;
+
+    // Decide where to start execution, handles optional arguments.
+    init_instr_idx(ufunc, argcount, ectx);
 
     return OK;
 }
@@ -156,9 +179,9 @@ call_dfunc(int cdf_idx, int argcount, ectx_T *ectx)
     static void
 func_return(ectx_T *ectx)
 {
-    int		ret_idx = ectx->ec_stack.ga_len - 1;
     int		idx;
     dfunc_T	*dfunc;
+    int		top;
 
     // execution context goes one level up
     estack_pop();
@@ -166,17 +189,27 @@ func_return(ectx_T *ectx)
     // Clear the local variables and temporary values, but not
     // the return value.
     for (idx = ectx->ec_frame + STACK_FRAME_SIZE;
-					 idx < ectx->ec_stack.ga_len - 1; ++idx)
+					idx < ectx->ec_stack.ga_len - 1; ++idx)
 	clear_tv(STACK_TV(idx));
+
+    // Clear the arguments.
     dfunc = ((dfunc_T *)def_functions.ga_data) + ectx->ec_dfunc_idx;
-    ectx->ec_stack.ga_len = ectx->ec_frame
-					 - ufunc_argcount(dfunc->df_ufunc) + 1;
+    top = ectx->ec_frame - ufunc_argcount(dfunc->df_ufunc);
+    for (idx = top; idx < ectx->ec_frame; ++idx)
+	clear_tv(STACK_TV(idx));
+
+    // Restore the previous frame.
     ectx->ec_dfunc_idx = STACK_TV(ectx->ec_frame)->vval.v_number;
     ectx->ec_iidx = STACK_TV(ectx->ec_frame + 1)->vval.v_number;
     ectx->ec_frame = STACK_TV(ectx->ec_frame + 2)->vval.v_number;
-    *STACK_TV_BOT(-1) = *STACK_TV(ret_idx);
     dfunc = ((dfunc_T *)def_functions.ga_data) + ectx->ec_dfunc_idx;
     ectx->ec_instr = dfunc->df_instr;
+
+    // Reset the stack to the position before the call, move the return value
+    // to the top of the stack.
+    idx = ectx->ec_stack.ga_len - 1;
+    ectx->ec_stack.ga_len = top + 1;
+    *STACK_TV_BOT(-1) = *STACK_TV(idx);
 }
 
 #undef STACK_TV
@@ -323,6 +356,20 @@ call_partial(typval_T *tv, int argcount, ectx_T *ectx)
 }
 
 /*
+ * Store "tv" in variable "name".
+ * This is for s: and g: variables.
+ */
+    static void
+store_var(char_u *name, typval_T *tv)
+{
+    funccal_entry_T entry;
+
+    save_funccal(&entry);
+    set_var_const(name, NULL, tv, FALSE, 0);
+    restore_funccal();
+}
+
+/*
  * Execute a function by "name".
  * This can be a builtin function, user function or a funcref.
  */
@@ -362,7 +409,7 @@ call_def_function(
     int		idx;
     int		ret = FAIL;
     dfunc_T	*dfunc;
-    int		optcount = ufunc_argcount(ufunc) - argc;
+    int		defcount = ufunc->uf_args.ga_len - argc;
 
 // Get pointer to item in the stack.
 #define STACK_TV(idx) (((typval_T *)ectx.ec_stack.ga_data) + idx)
@@ -388,17 +435,18 @@ call_def_function(
 	copy_tv(&argv[idx], STACK_TV_BOT(0));
 	++ectx.ec_stack.ga_len;
     }
+    // Make space for omitted arguments, will store default value below.
+    if (defcount > 0)
+	for (idx = 0; idx < defcount; ++idx)
+	{
+	    STACK_TV_BOT(0)->v_type = VAR_UNKNOWN;
+	    ++ectx.ec_stack.ga_len;
+	}
 
     // Frame pointer points to just after arguments.
     ectx.ec_frame = ectx.ec_stack.ga_len;
     initial_frame_ptr = ectx.ec_frame;
 
-// TODO: Put omitted argument default values on the stack.
-    if (optcount > 0)
-    {
-	emsg("optional arguments not implemented yet");
-	return FAIL;
-    }
     // dummy frame entries
     for (idx = 0; idx < STACK_FRAME_SIZE; ++idx)
     {
@@ -413,7 +461,10 @@ call_def_function(
     ectx.ec_stack.ga_len += dfunc->df_varcount;
 
     ectx.ec_instr = dfunc->df_instr;
-    ectx.ec_iidx = 0;
+
+    // Decide where to start execution, handles optional arguments.
+    init_instr_idx(ufunc, argc, &ectx);
+
     for (;;)
     {
 	isn_T	    *iptr;
@@ -445,6 +496,7 @@ call_def_function(
 		    tv->v_type = VAR_NUMBER;
 		    tv->vval.v_number = 0;
 		    ++ectx.ec_stack.ga_len;
+		    need_rethrow = TRUE;
 		    goto done;
 		}
 
@@ -475,6 +527,8 @@ call_def_function(
 							   &atstart, &needclr);
 			clear_tv(tv);
 		    }
+		    if (needclr)
+			msg_clr_eos();
 		    ectx.ec_stack.ga_len -= count;
 		}
 		break;
@@ -518,6 +572,7 @@ call_def_function(
 					       iptr->isn_arg.loadstore.ls_sid);
 		    char_u	*name = iptr->isn_arg.loadstore.ls_name;
 		    dictitem_T	*di = find_var_in_ht(ht, 0, name, TRUE);
+
 		    if (di == NULL)
 		    {
 			semsg(_(e_undefvar), name);
@@ -536,10 +591,9 @@ call_def_function(
 	    // load g: variable
 	    case ISN_LOADG:
 		{
-		    dictitem_T *di;
-
-		    di = find_var_in_ht(get_globvar_ht(), 0,
+		    dictitem_T *di = find_var_in_ht(get_globvar_ht(), 0,
 						   iptr->isn_arg.string, TRUE);
+
 		    if (di == NULL)
 		    {
 			semsg(_("E121: Undefined variable: g:%s"),
@@ -579,12 +633,8 @@ call_def_function(
 
 		    if (ga_grow(&ectx.ec_stack, 1) == FAIL)
 			goto failed;
-		    if (get_env_tv(&name, &optval, TRUE) == FAIL)
-		    {
-			semsg(_("E1060: Invalid environment variable name: %s"),
-							 iptr->isn_arg.string);
-			goto failed;
-		    }
+		    // name is always valid, checked when compiling
+		    (void)get_env_tv(&name, &optval, TRUE);
 		    *STACK_TV_BOT(0) = optval;
 		    ++ectx.ec_stack.ga_len;
 		}
@@ -615,16 +665,16 @@ call_def_function(
 		    hashtab_T	*ht = &SCRIPT_VARS(
 					       iptr->isn_arg.loadstore.ls_sid);
 		    char_u	*name = iptr->isn_arg.loadstore.ls_name;
-		    dictitem_T	*di = find_var_in_ht(ht, 0, name, TRUE);
+		    dictitem_T	*di = find_var_in_ht(ht, 0, name + 2, TRUE);
 
-		    if (di == NULL)
-		    {
-			semsg(_(e_undefvar), name);
-			goto failed;
-		    }
 		    --ectx.ec_stack.ga_len;
-		    clear_tv(&di->di_tv);
-		    di->di_tv = *STACK_TV_BOT(0);
+		    if (di == NULL)
+			store_var(iptr->isn_arg.string, STACK_TV_BOT(0));
+		    else
+		    {
+			clear_tv(&di->di_tv);
+			di->di_tv = *STACK_TV_BOT(0);
+		    }
 		}
 		break;
 
@@ -688,8 +738,10 @@ call_def_function(
 		    int	reg = iptr->isn_arg.number;
 
 		    --ectx.ec_stack.ga_len;
+		    tv = STACK_TV_BOT(0);
 		    write_reg_contents(reg == '@' ? '"' : reg,
-				    tv_get_string(STACK_TV_BOT(0)), -1, FALSE);
+						 tv_get_string(tv), -1, FALSE);
+		    clear_tv(tv);
 		}
 		break;
 
@@ -708,16 +760,9 @@ call_def_function(
 
 		    --ectx.ec_stack.ga_len;
 		    di = find_var_in_ht(get_globvar_ht(), 0,
-						   iptr->isn_arg.string, TRUE);
+					       iptr->isn_arg.string + 2, TRUE);
 		    if (di == NULL)
-		    {
-			funccal_entry_T entry;
-
-			save_funccal(&entry);
-			set_var_const(iptr->isn_arg.string, NULL,
-						    STACK_TV_BOT(0), FALSE, 0);
-			restore_funccal();
-		    }
+			store_var(iptr->isn_arg.string, STACK_TV_BOT(0));
 		    else
 		    {
 			clear_tv(&di->di_tv);
@@ -964,8 +1009,7 @@ call_def_function(
 			if (when == JUMP_IF_FALSE
 					     || when == JUMP_AND_KEEP_IF_FALSE)
 			    jump = !jump;
-			if (when == JUMP_IF_FALSE || when == JUMP_IF_TRUE
-								      || !jump)
+			if (when == JUMP_IF_FALSE || !jump)
 			{
 			    // drop the value from the stack
 			    clear_tv(tv);
@@ -1023,6 +1067,7 @@ call_def_function(
 		    trycmd->tcd_frame = ectx.ec_frame;
 		    trycmd->tcd_catch_idx = iptr->isn_arg.try.try_catch;
 		    trycmd->tcd_finally_idx = iptr->isn_arg.try.try_finally;
+		    trycmd->tcd_caught = FALSE;
 		}
 		break;
 
@@ -1067,7 +1112,7 @@ call_def_function(
 			--trylevel;
 			trycmd = ((trycmd_T *)trystack->ga_data)
 							    + trystack->ga_len;
-			if (trycmd->tcd_caught)
+			if (trycmd->tcd_caught && current_exception != NULL)
 			{
 			    // discard the exception
 			    if (caught_stack == current_exception)
@@ -1546,15 +1591,15 @@ failed:
     return ret;
 }
 
-#define DISASSEMBLE 1
-
 /*
  * ":dissassemble".
+ * We don't really need this at runtime, but we do have tests that require it,
+ * so always include this.
  */
     void
 ex_disassemble(exarg_T *eap)
 {
-#ifdef DISASSEMBLE
+    char_u	*arg = eap->arg;
     char_u	*fname;
     ufunc_T	*ufunc;
     dfunc_T	*dfunc;
@@ -1563,18 +1608,24 @@ ex_disassemble(exarg_T *eap)
     int		line_idx = 0;
     int		prev_current = 0;
 
-    fname = trans_function_name(&eap->arg, FALSE,
+    fname = trans_function_name(&arg, FALSE,
 	     TFN_INT | TFN_QUIET | TFN_NO_AUTOLOAD | TFN_NO_DEREF, NULL, NULL);
+    if (fname == NULL)
+    {
+	semsg(_(e_invarg2), eap->arg);
+	return;
+    }
+
     ufunc = find_func(fname, NULL);
     vim_free(fname);
     if (ufunc == NULL)
     {
-	semsg("E1061: Cannot find function %s", eap->arg);
+	semsg(_("E1061: Cannot find function %s"), eap->arg);
 	return;
     }
     if (ufunc->uf_dfunc_idx < 0)
     {
-	semsg("E1062: Function %s is not compiled", eap->arg);
+	semsg(_("E1062: Function %s is not compiled"), eap->arg);
 	return;
     }
     if (ufunc->uf_name_exp != NULL)
@@ -1587,6 +1638,7 @@ ex_disassemble(exarg_T *eap)
     for (current = 0; current < dfunc->df_instr_count; ++current)
     {
 	isn_T	    *iptr = &instr[current];
+	char	    *line;
 
 	while (line_idx < iptr->isn_lnum && line_idx < ufunc->uf_lines.ga_len)
 	{
@@ -1595,7 +1647,9 @@ ex_disassemble(exarg_T *eap)
 		msg_puts("\n\n");
 		prev_current = current;
 	    }
-	    msg(((char **)ufunc->uf_lines.ga_data)[line_idx++]);
+	    line = ((char **)ufunc->uf_lines.ga_data)[line_idx++];
+	    if (line != NULL)
+		msg(line);
 	}
 
 	switch (iptr->isn_type)
@@ -1657,7 +1711,11 @@ ex_disassemble(exarg_T *eap)
 		break;
 
 	    case ISN_STORE:
-		smsg("%4d STORE $%lld", current, iptr->isn_arg.number);
+		if (iptr->isn_arg.number < 0)
+		    smsg("%4d STORE arg[%lld]", current,
+				      iptr->isn_arg.number + STACK_FRAME_SIZE);
+		else
+		    smsg("%4d STORE $%lld", current, iptr->isn_arg.number);
 		break;
 	    case ISN_STOREV:
 		smsg("%4d STOREV v:%s", current,
@@ -1671,7 +1729,7 @@ ex_disassemble(exarg_T *eap)
 		    scriptitem_T *si = SCRIPT_ITEM(
 					       iptr->isn_arg.loadstore.ls_sid);
 
-		    smsg("%4d STORES s:%s in %s", current,
+		    smsg("%4d STORES %s in %s", current,
 					    iptr->isn_arg.string, si->sn_name);
 		}
 		break;
@@ -1798,9 +1856,6 @@ ex_disassemble(exarg_T *eap)
 		    {
 			case JUMP_ALWAYS:
 			    when = "JUMP";
-			    break;
-			case JUMP_IF_TRUE:
-			    when = "JUMP_IF_TRUE";
 			    break;
 			case JUMP_AND_KEEP_IF_TRUE:
 			    when = "JUMP_AND_KEEP_IF_TRUE";
@@ -1956,7 +2011,6 @@ ex_disassemble(exarg_T *eap)
 	    case ISN_DROP: smsg("%4d DROP", current); break;
 	}
     }
-#endif
 }
 
 /*

@@ -566,6 +566,8 @@ term_start(
 	    }
 	}
     }
+    vim_free(curbuf->b_sfname);
+    curbuf->b_sfname = vim_strsave(curbuf->b_ffname);
     curbuf->b_fname = curbuf->b_ffname;
 
     if (opt->jo_term_opencmd != NULL)
@@ -4281,6 +4283,8 @@ term_update_colors(void)
 {
     term_T *term = curwin->w_buffer->b_term;
 
+    if (term->tl_vterm == NULL)
+	return;
     init_default_colors(term, curwin);
     vterm_state_set_default_colors(
 	    vterm_obtain_state(term->tl_vterm),

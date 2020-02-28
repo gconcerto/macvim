@@ -2,6 +2,7 @@
 source shared.vim
 source check.vim
 source term_util.vim
+source screendump.vim
 
 " Must be done first, since the alternate buffer must be unset.
 func Test_00_bufexists()
@@ -1140,6 +1141,30 @@ func Test_col()
   bw!
 endfunc
 
+" Test for input()
+func Test_input_func()
+  " Test for prompt with multiple lines
+  redir => v
+  call feedkeys(":let c = input(\"A\\nB\\nC\\n? \")\<CR>B\<CR>", 'xt')
+  redir END
+  call assert_equal("B", c)
+  call assert_equal(['A', 'B', 'C'], split(v, "\n"))
+
+  " Test for default value
+  call feedkeys(":let c = input('color? ', 'red')\<CR>\<CR>", 'xt')
+  call assert_equal('red', c)
+
+  " Test for completion at the input prompt
+  func! Tcomplete(arglead, cmdline, pos)
+    return "item1\nitem2\nitem3"
+  endfunc
+  call feedkeys(":let c = input('Q? ', '' , 'custom,Tcomplete')\<CR>"
+        \ .. "\<C-A>\<CR>", 'xt')
+  delfunc Tcomplete
+  call assert_equal('item1 item2 item3', c)
+endfunc
+
+" Test for inputlist()
 func Test_inputlist()
   call feedkeys(":let c = inputlist(['Select color:', '1. red', '2. green', '3. blue'])\<cr>1\<cr>", 'tx')
   call assert_equal(1, c)
@@ -2017,3 +2042,21 @@ func Test_range()
   " uniq()
   call assert_equal([0, 1, 2, 3, 4], uniq(range(5)))
 endfunc
+
+func Test_echoraw()
+  CheckScreendump
+
+  " Normally used for escape codes, but let's test with a CR.
+  let lines =<< trim END
+    call echoraw("hello\<CR>x")
+  END
+  call writefile(lines, 'XTest_echoraw')
+  let buf = RunVimInTerminal('-S XTest_echoraw', {'rows': 5, 'cols': 40})
+  call VerifyScreenDump(buf, 'Test_functions_echoraw', {})
+
+  " clean up
+  call StopVimInTerminal(buf)
+  call delete('XTest_echoraw')
+endfunc
+
+" vim: shiftwidth=2 sts=2 expandtab

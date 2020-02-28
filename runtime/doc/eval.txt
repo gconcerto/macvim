@@ -1,4 +1,4 @@
-*eval.txt*	For Vim version 8.2.  Last change: 2020 Feb 03
+*eval.txt*	For Vim version 8.2.  Last change: 2020 Feb 22
 
 
 		  VIM REFERENCE MANUAL	  by Bram Moolenaar
@@ -48,8 +48,7 @@ There are ten types of variables:
 
 							*Number* *Integer*
 Number		A 32 or 64 bit signed number.  |expr-number|
-		64-bit Numbers are available only when compiled with the
-		|+num64| feature.
+		The number of bits is available in |v:numbersize|.
 		Examples:  -123  0x10  0177  0b1011
 
 Float		A floating point number. |floating-point-format| *Float*
@@ -1991,6 +1990,10 @@ v:null		An empty String. Used to put "null" in JSON.  See
 		That is so that eval() can parse the string back to the same
 		value.  Read-only.
 
+					*v:numbersize* *numbersize-variable*
+v:numbersize	Number of bits in a Number.  This is normally 64, but on some
+		systems it may be 32.
+
 					*v:oldfiles* *oldfiles-variable*
 v:oldfiles	List of file names that is loaded from the |viminfo| file on
 		startup.  These are the files that Vim remembers marks for.
@@ -2426,6 +2429,7 @@ deletebufline({expr}, {first} [, {last}])
 did_filetype()			Number	|TRUE| if FileType autocmd event used
 diff_filler({lnum})		Number	diff filler lines about {lnum}
 diff_hlID({lnum}, {col})	Number	diff highlighting at {lnum}/{col}
+echoraw({expr})			none	output {expr} as-is
 empty({expr})			Number	|TRUE| if {expr} is empty
 environ()			Dict	return environment variables
 escape({string}, {chars})	String	escape {chars} in {string} with '\'
@@ -2860,7 +2864,6 @@ term_wait({buf} [, {time}])	Number  wait for screen to be updated
 test_alloc_fail({id}, {countdown}, {repeat})
 				none	make memory allocation fail
 test_autochdir()		none	enable 'autochdir' during startup
-test_clear_search_pat()		none	clears the last used search pattern
 test_feedinput({string})	none	add key sequence to input buffer
 test_garbagecollect_now()	none	free memory right now for testing
 test_garbagecollect_soon()	none	free memory soon for testing
@@ -2873,12 +2876,15 @@ test_null_job()			Job	null value for testing
 test_null_list()		List	null value for testing
 test_null_partial()		Funcref	null value for testing
 test_null_string()		String	null value for testing
+test_unknown()			any	unknown value for testing
+test_void()			any	void value for testing
 test_option_not_set({name})	none	reset flag indicating option was set
 test_override({expr}, {val})	none	test with Vim internal overrides
 test_refcount({expr})		Number	get the reference count of {expr}
 test_scrollbar({which}, {value}, {dragging})
 				none	scroll in the GUI for testing
 test_setmouse({row}, {col})	none	set the mouse position for testing
+test_srand_seed([seed])		none	set seed for testing srand()
 test_settime({expr})		none	set current time for testing
 timer_info([{id}])		List	information about timers
 timer_pause({id}, {pause})	none	pause or unpause a timer
@@ -2911,6 +2917,7 @@ win_id2win({expr})		Number	get window nr from window ID
 win_screenpos({nr})		List	get screen position of window {nr}
 win_splitmove({nr}, {target} [, {options}])
 				Number	move window {nr} to split of {target}
+win_type([{nr}])		String	type of window {nr}
 winbufnr({nr})			Number	buffer number of window {nr}
 wincol()			Number	window column of the cursor
 winheight({nr})			Number	height of window {nr}
@@ -3955,6 +3962,17 @@ diff_hlID({lnum}, {col})				*diff_hlID()*
 
 		Can also be used as a |method|: >
 			GetLnum()->diff_hlID(col)
+
+
+echoraw({expr})						*echoraw()*
+		Output {expr} as-is, including unprintable characters.  This
+		can be used to output a terminal code. For example, to disable
+		modifyOtherKeys: >
+			call echoraw(&t_TE)
+<		and to enable it again: >
+			call echoraw(&t_TI)
+<		Use with care, you can mess up the terminal this way.
+
 
 empty({expr})						*empty()*
 		Return the Number 1 if {expr} is empty, zero otherwise.
@@ -6906,6 +6924,10 @@ match({expr}, {pat} [, {start} [, {count}]])			*match()*
 		The 'ignorecase' option is used to set the ignore-caseness of
 		the pattern.  'smartcase' is NOT used.  The matching is always
 		done like 'magic' is set and 'cpoptions' is empty.
+		Note that a match at the start is preferred, thus when the
+		pattern is using "*" (any number of matches) it tends to find
+		zero matches at the start instead of a number of matches
+		further down in the text.
 
 		Can also be used as a |method|: >
 			GetList()->match('word')
@@ -10340,6 +10362,23 @@ win_getid([{win} [, {tab}]])				*win_getid()*
 		Can also be used as a |method|: >
 			GetWinnr()->win_getid()
 
+
+win_gettype([{nr}])					*win_gettype()*
+		Return the type of the window:
+			"popup"		popup window |popup|
+			"command"	command-line window |cmdwin|
+			(empty)		normal window
+			"unknown"	window {nr} not found
+
+		When {nr} is omitted return the type of the current window.
+		When {nr} is given return the type of this window by number or
+		|window-ID|.
+
+		Also see the 'buftype' option.  When running a terminal in a
+		popup window then 'buftype' is "terminal" and win_gettype()
+		returns "popup".
+
+
 win_gotoid({expr})					*win_gotoid()*
 		Go to window with ID {expr}.  This may also change the current
 		tabpage.
@@ -10397,6 +10436,7 @@ win_splitmove({nr}, {target} [, {options}])		*win_splitmove()*
 		Can also be used as a |method|: >
 			GetWinid()->win_splitmove(target)
 <
+
 							*winbufnr()*
 winbufnr({nr})	The result is a Number, which is the number of the buffer
 		associated with window {nr}.  {nr} can be the window number or
@@ -10691,6 +10731,7 @@ browsefilter		Compiled with support for |browsefilter|.
 bsd			Compiled on an OS in the BSD family (excluding macOS).
 builtin_terms		Compiled with some builtin terminals.
 byte_offset		Compiled with support for 'o' in 'statusline'
+channel			Compiled with support for |channel| and |job|
 cindent			Compiled with 'cindent' support.
 clientserver		Compiled with remote invocation support |clientserver|.
 clipboard		Compiled with 'clipboard' support.
@@ -10805,7 +10846,7 @@ python_dynamic		Python 2.x interface is dynamically loaded. |has-python|
 python3			Python 3.x interface available. |has-python|
 python3_compiled	Compiled with Python 3.x interface. |has-python|
 python3_dynamic		Python 3.x interface is dynamically loaded. |has-python|
-pythonx			Compiled with |python_x| interface. |has-pythonx|
+pythonx			Python 2.x and/or 3.x interface available. |python_x|
 qnx			QNX version of Vim.
 quickfix		Compiled with |quickfix| support.
 reltime			Compiled with |reltime()| support.
@@ -11835,11 +11876,11 @@ text...
 			":endtry" is reached thereafter, the next
 			(dynamically) surrounding ":try" is checked for
 			a corresponding ":finally" etc.  Then the script
-			processing is terminated.  (Whether a function
-			definition has an "abort" argument does not matter.)
+			processing is terminated.  Whether a function
+			definition has an "abort" argument does not matter.
 			Example: >
-		:try | edit too much | finally | echo "cleanup" | endtry
-		:echo "impossible"	" not reached, script terminated above
+		try | call Unknown() | finally | echomsg "cleanup" | endtry
+		echomsg "not reached"
 <
 			Moreover, an error or interrupt (dynamically) inside
 			":try" and ":endtry" is converted to an exception.  It
@@ -11856,8 +11897,8 @@ text...
 			error exception is not caught, always beginning with
 			the error number.
 			Examples: >
-		:try | sleep 100 | catch /^Vim:Interrupt$/ | endtry
-		:try | edit | catch /^Vim(edit):E\d\+/ | echo "error" | endtry
+		try | sleep 100 | catch /^Vim:Interrupt$/ | endtry
+		try | edit | catch /^Vim(edit):E\d\+/ | echo "error" | endtry
 <
 					*:cat* *:catch* *E603* *E604* *E605*
 :cat[ch] /{pattern}/	The following commands until the next |:catch|,
@@ -12011,6 +12052,9 @@ text...
 			The command can be shortened to `:ev` or `:eva`, but
 			these are hard to recognize and therefore not to be
 			used.
+
+			The command cannot be followed by "|" and another
+			command, since "|" is seen as part of the expression.
 
 
 							*:exe* *:execute*

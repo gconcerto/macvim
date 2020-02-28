@@ -27,28 +27,51 @@ func Test_def_basic()
   call assert_equal('yes', SomeFunc())
 endfunc
 
+let s:appendToMe = 'xxx'
+let s:addToMe = 111
+let g:existing = 'yes'
+
 def Test_assignment()
   let bool1: bool = true
   assert_equal(v:true, bool1)
   let bool2: bool = false
   assert_equal(v:false, bool2)
 
-  let list1: list<string> = ['sdf', 'asdf']
+  let list1: list<bool> = [false, true, false]
   let list2: list<number> = [1, 2, 3]
+  let list3: list<string> = ['sdf', 'asdf']
+  let list4: list<any> = ['yes', true, 1234]
+  let list5: list<blob> = [0z01, 0z02]
 
-  " TODO: does not work yet
-  " let listS: list<string> = []
-  " let listN: list<number> = []
+  let listS: list<string> = []
+  let listN: list<number> = []
 
-  let dict1: dict<string> = #{key: 'value'}
+  let dict1: dict<bool> = #{one: false, two: true}
   let dict2: dict<number> = #{one: 1, two: 2}
+  let dict3: dict<string> = #{key: 'value'}
+  let dict4: dict<any> = #{one: 1, two: '2'}
+  let dict5: dict<blob> = #{one: 0z01, tw: 0z02}
+
+  g:newvar = 'new'
+  assert_equal('new', g:newvar)
+
+  assert_equal('yes', g:existing)
+  g:existing = 'no'
+  assert_equal('no', g:existing)
 
   v:char = 'abc'
-  call assert_equal('abc', v:char)
+  assert_equal('abc', v:char)
 
   $ENVVAR = 'foobar'
-  call assert_equal('foobar', $ENVVAR)
+  assert_equal('foobar', $ENVVAR)
   $ENVVAR = ''
+
+  s:appendToMe ..= 'yyy'
+  assert_equal('xxxyyy', s:appendToMe)
+  s:addToMe += 222
+  assert_equal(333, s:addToMe)
+  s:newVar = 'new'
+  assert_equal('new', s:newVar)
 enddef
 
 func Test_assignment_failure()
@@ -97,9 +120,16 @@ def ReturnNumber(): number
   return 123
 enddef
 
+let g:notNumber = 'string'
+
+def ReturnGlobal(): number
+  return g:notNumber
+enddef
+
 def Test_return_string()
   assert_equal('string', ReturnString())
   assert_equal(123, ReturnNumber())
+  assert_fails('call ReturnGlobal()', 'E1029: Expected number but got string')
 enddef
 
 func Increment()
@@ -131,6 +161,39 @@ def Test_call_varargs()
   assert_equal('one,two,three', MyVarargs('one', 'two', 'three'))
 enddef
 
+def MyDefaultArgs(name = 'string'): string
+  return name
+enddef
+
+def Test_call_default_args()
+  assert_equal('string', MyDefaultArgs())
+  assert_equal('one', MyDefaultArgs('one'))
+  assert_fails('call MyDefaultArgs("one", "two")', 'E118:')
+enddef
+
+func Test_call_default_args_from_func()
+  call assert_equal('string', MyDefaultArgs())
+  call assert_equal('one', MyDefaultArgs('one'))
+  call assert_fails('call MyDefaultArgs("one", "two")', 'E118:')
+endfunc
+
+" Default arg and varargs
+def MyDefVarargs(one: string, two = 'foo', ...rest: list<string>): string
+  let res = one .. ',' .. two
+  for s in rest
+    res ..= ',' .. s
+  endfor
+  return res
+enddef
+
+def Test_call_def_varargs()
+  call assert_fails('call MyDefVarargs()', 'E119:')
+  assert_equal('one,foo', MyDefVarargs('one'))
+  assert_equal('one,two', MyDefVarargs('one', 'two'))
+  assert_equal('one,two,three', MyDefVarargs('one', 'two', 'three'))
+enddef
+
+
 "def Test_call_func_defined_later()
 "  call assert_equal('one', DefineLater('one'))
 "  call assert_fails('call NotDefined("one")', 'E99:')
@@ -139,25 +202,6 @@ enddef
 func DefineLater(arg)
   return a:arg
 endfunc
-
-def MyDefaultArgs(name = 'string'): string
-  return name
-enddef
-
-func Test_call_default_args_from_func()
-  " TODO: implement using default value for optional argument
-  "call assert_equal('string', MyDefaultArgs())
-  call assert_fails('call MyDefaultArgs()', 'optional arguments not implemented yet')
-  call assert_equal('one', MyDefaultArgs('one'))
-  call assert_fails('call MyDefaultArgs("one", "two")', 'E118:')
-endfunc
-
-def Test_call_default_args()
-  " TODO: implement using default value for optional argument
-  "assert_equal('string', MyDefaultArgs())
-  assert_equal('one', MyDefaultArgs('one'))
-  assert_fails('call MyDefaultArgs("one", "two")', 'E118:')
-enddef
 
 def Test_return_type_wrong()
   CheckScriptFailure(['def Func(): number', 'return "a"', 'enddef'], 'expected number but got string')
@@ -184,6 +228,62 @@ def Test_try_catch()
   assert_equal(['1', 'wrong', '3'], l)
 enddef
 
+def ThrowFromDef()
+  throw 'getout'
+enddef
+
+func CatchInFunc()
+  try
+    call ThrowFromDef()
+  catch
+    let g:thrown_func = v:exception
+  endtry
+endfunc
+
+def CatchInDef()
+  try
+    ThrowFromDef()
+  catch
+    g:thrown_def = v:exception
+  endtry
+enddef
+
+def ReturnFinally(): string
+  try
+    return 'intry'
+  finally
+    g:in_finally = 'finally'
+  endtry
+  return 'end'
+enddef
+
+def Test_try_catch_nested()
+  CatchInFunc()
+  assert_equal('getout', g:thrown_func)
+
+  CatchInDef()
+  assert_equal('getout', g:thrown_def)
+
+  assert_equal('intry', ReturnFinally())
+  assert_equal('finally', g:in_finally)
+enddef
+
+def Test_try_catch_match()
+  let seq = 'a'
+  try
+    throw 'something'
+  catch /nothing/
+    seq ..= 'x'
+  catch /some/
+    seq ..= 'b'
+  catch /asdf/
+    seq ..= 'x'
+  finally
+    seq ..= 'c'
+  endtry
+  assert_equal('abc', seq)
+enddef
+
 let s:export_script_lines =<< trim END
   vim9script
   let name: string = 'bob'
@@ -195,6 +295,7 @@ let s:export_script_lines =<< trim END
 
   export const CONST = 1234
   export let exported = 9876
+  export let exp_name = 'John'
   export def Exported(): string
     return 'Exported'
   enddef
@@ -205,7 +306,14 @@ def Test_vim9script()
     vim9script
     import {exported, Exported} from './Xexport.vim'
     g:imported = exported
+    exported += 3
+    g:imported_added = exported
     g:imported_func = Exported()
+
+    import {exp_name} from './Xexport.vim'
+    g:imported_name = exp_name
+    exp_name ..= ' Doe'
+    g:imported_name_appended = exp_name
   END
 
   writefile(import_script_lines, 'Ximport.vim')
@@ -216,18 +324,112 @@ def Test_vim9script()
   assert_equal('bobbie', g:result)
   assert_equal('bob', g:localname)
   assert_equal(9876, g:imported)
+  assert_equal(9879, g:imported_added)
   assert_equal('Exported', g:imported_func)
+  assert_equal('John', g:imported_name)
+  assert_equal('John Doe', g:imported_name_appended)
   assert_false(exists('g:name'))
 
   unlet g:result
   unlet g:localname
   unlet g:imported
+  unlet g:imported_added
   unlet g:imported_func
+  unlet g:imported_name g:imported_name_appended
+  delete('Ximport.vim')
+
+  let import_star_as_lines =<< trim END
+    vim9script
+    import * as Export from './Xexport.vim'
+    def UseExport()
+      g:imported = Export.exported
+    enddef
+    UseExport()
+  END
+  writefile(import_star_as_lines, 'Ximport.vim')
+  source Ximport.vim
+  assert_equal(9876, g:imported)
+
+  let import_star_lines =<< trim END
+    vim9script
+    import * from './Xexport.vim'
+    g:imported = exported
+  END
+  writefile(import_star_lines, 'Ximport.vim')
+  assert_fails('source Ximport.vim', 'E1045:')
+
+  " try to import something that exists but is not exported
+  let import_not_exported_lines =<< trim END
+    vim9script
+    import name from './Xexport.vim'
+  END
+  writefile(import_not_exported_lines, 'Ximport.vim')
+  assert_fails('source Ximport.vim', 'E1049:')
+
+  " import a very long name, requires making a copy
+  let import_long_name_lines =<< trim END
+    vim9script
+    import name012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789 from './Xexport.vim'
+  END
+  writefile(import_long_name_lines, 'Ximport.vim')
+  assert_fails('source Ximport.vim', 'E1048:')
+
+  let import_no_from_lines =<< trim END
+    vim9script
+    import name './Xexport.vim'
+  END
+  writefile(import_no_from_lines, 'Ximport.vim')
+  assert_fails('source Ximport.vim', 'E1070:')
+
+  let import_invalid_string_lines =<< trim END
+    vim9script
+    import name from Xexport.vim
+  END
+  writefile(import_invalid_string_lines, 'Ximport.vim')
+  assert_fails('source Ximport.vim', 'E1071:')
+
+  let import_wrong_name_lines =<< trim END
+    vim9script
+    import name from './XnoExport.vim'
+  END
+  writefile(import_wrong_name_lines, 'Ximport.vim')
+  assert_fails('source Ximport.vim', 'E1053:')
+
+  let import_missing_comma_lines =<< trim END
+    vim9script
+    import {exported name} from './Xexport.vim'
+  END
+  writefile(import_missing_comma_lines, 'Ximport.vim')
+  assert_fails('source Ximport.vim', 'E1046:')
+
   delete('Ximport.vim')
   delete('Xexport.vim')
 
+  " Check that in a Vim9 script 'cpo' is set to the Vim default.
+  set cpo&vi
+  let cpo_before = &cpo
+  let lines =<< trim END
+    vim9script
+    g:cpo_in_vim9script = &cpo
+  END
+  writefile(lines, 'Xvim9_script')
+  source Xvim9_script
+  assert_equal(cpo_before, &cpo)
+  set cpo&vim
+  assert_equal(&cpo, g:cpo_in_vim9script)
+  delete('Xvim9_script')
+enddef
+
+def Test_vim9script_fails()
   CheckScriptFailure(['scriptversion 2', 'vim9script'], 'E1039:')
   CheckScriptFailure(['vim9script', 'scriptversion 2'], 'E1040:')
+  CheckScriptFailure(['export let some = 123'], 'E1042:')
+  CheckScriptFailure(['import some from "./Xexport.vim"'], 'E1042:')
+  CheckScriptFailure(['vim9script', 'export let g:some'], 'E1044:')
+  CheckScriptFailure(['vim9script', 'export echo 134'], 'E1043:')
+
+  assert_fails('vim9script', 'E1038')
+  assert_fails('export something', 'E1042')
 enddef
 
 def Test_vim9script_call()
@@ -263,6 +465,11 @@ def Test_vim9script_call()
     assert_equal(#{a: 1, b: 2}, dictvar)
     #{a: 3, b: 4}->DictFunc()
     assert_equal(#{a: 3, b: 4}, dictvar)
+
+    ('text')->MyFunc()
+    assert_equal('text', var)
+    ("some")->MyFunc()
+    assert_equal('some', var)
   END
   writefile(lines, 'Xcall.vim')
   source Xcall.vim
@@ -424,244 +631,65 @@ def do_something():
 EOF
 endfunc
 
-def HasEval()
-  if has('eval')
-    echo 'yes'
+def IfElse(what: number): string
+  let res = ''
+  if what == 1
+    res = "one"
+  elseif what == 2
+    res = "two"
   else
-    echo 'no'
+    res = "three"
   endif
+  return res
 enddef
 
-def HasNothing()
-  if has('nothing')
-    echo 'yes'
-  else
-    echo 'no'
-  endif
+def Test_if_elseif_else()
+  assert_equal('one', IfElse(1))
+  assert_equal('two', IfElse(2))
+  assert_equal('three', IfElse(3))
 enddef
 
-def Test_compile_const_expr()
-  assert_equal("\nyes", execute('call HasEval()'))
-  let instr = execute('disassemble HasEval')
-  assert_match('PUSHS "yes"', instr)
-  assert_notmatch('PUSHS "no"', instr)
-  assert_notmatch('JUMP', instr)
+def Test_delfunc()
+  let lines =<< trim END
+    vim9script
+    def GoneSoon()
+      echo 'hello'
+    enddef
 
-  assert_equal("\nno", execute('call HasNothing()'))
-  instr = execute('disassemble HasNothing')
-  assert_notmatch('PUSHS "yes"', instr)
-  assert_match('PUSHS "no"', instr)
-  assert_notmatch('JUMP', instr)
+    def CallGoneSoon()
+      GoneSoon()
+    enddef
+
+    delfunc GoneSoon
+    CallGoneSoon()
+  END
+  writefile(lines, 'XToDelFunc')
+  assert_fails('so XToDelFunc', 'E933')
+  assert_fails('so XToDelFunc', 'E933')
+
+  delete('XToDelFunc')
 enddef
 
-func NotCompiled()
-  echo "not"
-endfunc
+def Test_substitute_cmd()
+  new
+  setline(1, 'something')
+  :substitute(some(other(
+  assert_equal('otherthing', getline(1))
+  bwipe!
 
-let s:scriptvar = 4
-let g:globalvar = 'g'
+  " also when the context is Vim9 script
+  let lines =<< trim END
+    vim9script
+    new
+    setline(1, 'something')
+    :substitute(some(other(
+    assert_equal('otherthing', getline(1))
+    bwipe!
+  END
+  writefile(lines, 'Xvim9lines')
+  source Xvim9lines
 
-def s:ScriptFuncLoad(arg: string)
-  let local = 1
-  buffers
-  echo arg
-  echo local
-  echo v:version
-  echo s:scriptvar
-  echo g:globalvar
-  echo &tabstop
-  echo $ENVVAR
-  echo @z
-enddef
-
-def Test_disassembleLoad()
-  assert_fails('disass NoFunc', 'E1061:')
-  assert_fails('disass NotCompiled', 'E1062:')
-
-  let res = execute('disass s:ScriptFuncLoad')
-  assert_match('<SNR>\d*_ScriptFuncLoad.*'
-        \ .. 'buffers.*'
-        \ .. ' EXEC \+buffers.*'
-        \ .. ' LOAD arg\[-1\].*'
-        \ .. ' LOAD $0.*'
-        \ .. ' LOADV v:version.*'
-        \ .. ' LOADS s:scriptvar from .*test_vim9_script.vim.*'
-        \ .. ' LOADG g:globalvar.*'
-        \ .. ' LOADENV $ENVVAR.*'
-        \ .. ' LOADREG @z.*'
-        \, res)
-enddef
-
-def s:ScriptFuncPush()
-  let localbool = true
-  let localspec = v:none
-  let localblob = 0z1234
-  if has('float')
-    let localfloat = 1.234
-  endif
-enddef
-
-def Test_disassemblePush()
-  let res = execute('disass s:ScriptFuncPush')
-  assert_match('<SNR>\d*_ScriptFuncPush.*'
-        \ .. 'localbool = true.*'
-        \ .. ' PUSH v:true.*'
-        \ .. 'localspec = v:none.*'
-        \ .. ' PUSH v:none.*'
-        \ .. 'localblob = 0z1234.*'
-        \ .. ' PUSHBLOB 0z1234.*'
-        \, res)
-  if has('float')
-  assert_match('<SNR>\d*_ScriptFuncPush.*'
-        \ .. 'localfloat = 1.234.*'
-        \ .. ' PUSHF 1.234.*'
-        \, res)
-  endif
-enddef
-
-def s:ScriptFuncStore()
-  let localnr = 1
-  localnr = 2
-  let localstr = 'abc'
-  localstr = 'xyz'
-  v:char = 'abc'
-  s:scriptvar = 'sv'
-  g:globalvar = 'gv'
-  &tabstop = 8
-  $ENVVAR = 'ev'
-  @z = 'rv'
-enddef
-
-def Test_disassembleStore()
-  let res = execute('disass s:ScriptFuncStore')
-  assert_match('<SNR>\d*_ScriptFuncStore.*'
-        \ .. 'localnr = 2.*'
-        \ .. ' STORE 2 in $0.*'
-        \ .. 'localstr = ''xyz''.*'
-        \ .. ' STORE $1.*'
-        \ .. 'v:char = ''abc''.*'
-        \ .. 'STOREV v:char.*'
-        \ .. 's:scriptvar = ''sv''.*'
-        \ .. ' STORES s:scriptvar in .*test_vim9_script.vim.*'
-        \ .. 'g:globalvar = ''gv''.*'
-        \ .. ' STOREG g:globalvar.*'
-        \ .. '&tabstop = 8.*'
-        \ .. ' STOREOPT &tabstop.*'
-        \ .. '$ENVVAR = ''ev''.*'
-        \ .. ' STOREENV $ENVVAR.*'
-        \ .. '@z = ''rv''.*'
-        \ .. ' STOREREG @z.*'
-        \, res)
-enddef
-
-def s:ScriptFuncTry()
-  try
-    echo 'yes'
-  catch /fail/
-    echo 'no'
-  finally
-    echo 'end'
-  endtry
-enddef
-
-def Test_disassembleTry()
-  let res = execute('disass s:ScriptFuncTry')
-  assert_match('<SNR>\d*_ScriptFuncTry.*'
-        \ .. 'try.*'
-        \ .. 'TRY catch -> \d\+, finally -> \d\+.*'
-        \ .. 'catch /fail/.*'
-        \ .. ' JUMP -> \d\+.*'
-        \ .. ' PUSH v:exception.*'
-        \ .. ' PUSHS "fail".*'
-        \ .. ' COMPARESTRING =\~.*'
-        \ .. ' JUMP_IF_FALSE -> \d\+.*'
-        \ .. ' CATCH.*'
-        \ .. 'finally.*'
-        \ .. ' PUSHS "end".*'
-        \ .. 'endtry.*'
-        \ .. ' ENDTRY.*'
-        \, res)
-enddef
-
-def s:ScriptFuncNew()
-  let ll = [1, "two", 333]
-  let dd = #{one: 1, two: "val"}
-enddef
-
-def Test_disassembleNew()
-  let res = execute('disass s:ScriptFuncNew')
-  assert_match('<SNR>\d*_ScriptFuncNew.*'
-        \ .. 'let ll = \[1, "two", 333].*'
-        \ .. 'PUSHNR 1.*'
-        \ .. 'PUSHS "two".*'
-        \ .. 'PUSHNR 333.*'
-        \ .. 'NEWLIST size 3.*'
-        \ .. 'let dd = #{one: 1, two: "val"}.*'
-        \ .. 'PUSHS "one".*'
-        \ .. 'PUSHNR 1.*'
-        \ .. 'PUSHS "two".*'
-        \ .. 'PUSHS "val".*'
-        \ .. 'NEWDICT size 2.*'
-        \, res)
-enddef
-
-def FuncWithArg(arg)
-  echo arg
-enddef
-
-func UserFunc()
-  echo 'nothing'
-endfunc
-
-func UserFuncWithArg(arg)
-  echo a:arg
-endfunc
-
-def s:ScriptFuncCall(): string
-  changenr()
-  char2nr("abc")
-  Test_disassembleNew()
-  FuncWithArg(343)
-  UserFunc()
-  UserFuncWithArg("foo")
-  let FuncRef = function("UserFunc")
-  FuncRef()
-  let FuncRefWithArg = function("UserFuncWithArg")
-  FuncRefWithArg("bar")
-  return "yes"
-enddef
-
-def Test_disassembleCall()
-  let res = execute('disass s:ScriptFuncCall')
-  assert_match('<SNR>\d*_ScriptFuncCall.*'
-        \ .. 'changenr().*'
-        \ .. ' BCALL changenr(argc 0).*'
-        \ .. 'char2nr("abc").*'
-        \ .. ' PUSHS "abc".*'
-        \ .. ' BCALL char2nr(argc 1).*'
-        \ .. 'Test_disassembleNew().*'
-        \ .. ' DCALL Test_disassembleNew(argc 0).*'
-        \ .. 'FuncWithArg(343).*'
-        \ .. ' PUSHNR 343.*'
-        \ .. ' DCALL FuncWithArg(argc 1).*'
-        \ .. 'UserFunc().*'
-        \ .. ' UCALL UserFunc(argc 0).*'
-        \ .. 'UserFuncWithArg("foo").*'
-        \ .. ' PUSHS "foo".*'
-        \ .. ' UCALL UserFuncWithArg(argc 1).*'
-        \ .. 'let FuncRef = function("UserFunc").*'
-        \ .. 'FuncRef().*'
-        \ .. ' LOAD $\d.*'
-        \ .. ' PCALL (argc 0).*'
-        \ .. 'let FuncRefWithArg = function("UserFuncWithArg").*'
-        \ .. 'FuncRefWithArg("bar").*'
-        \ .. ' PUSHS "bar".*'
-        \ .. ' LOAD $\d.*'
-        \ .. ' PCALL (argc 1).*'
-        \ .. 'return "yes".*'
-        \ .. ' PUSHS "yes".*'
-        \ .. ' RETURN.*'
-        \, res)
+  delete('Xvim9lines')
 enddef
 
 
