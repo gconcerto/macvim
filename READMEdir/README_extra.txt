@@ -13,18 +13,12 @@ src/if_sniff.*		Interface to SNiFF.  If you don't know what SNiFF is,
 
 src/os_amiga.*		Files for the Amiga port.
 
-src/gui_beos.*
-src/os_beos.*		Files for the BeOS port.
-
 src/os_msdos.*
 src/os_dos.*		Files for the MS-DOS port.
 
-src/gui_mac.*           Carbon GUI (not used)
-src/os_mac*		Shared files for the different Mac ports.
+src/os_mac.*		Files for the Mac port.
 
 src/MacVim/*		Files for the MacVim port.
-
-src/os_mint.8		Files for the Atari Mint port.
 
 src/os_vms*		Files for the VMS port.
 

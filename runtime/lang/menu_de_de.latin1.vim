@@ -188,7 +188,7 @@ menutrans Set\ '&filetype'\ too			Auch\ '&filetype'\ setzen
 menutrans &Off					&Aus
 menutrans &Manual				&Manuell
 menutrans A&utomatic				A&utomatisch
-menutrans on/off\ for\ &This\ file		An/Aus (diese\ &Datei)
+menutrans on/off\ for\ &This\ file		An/Aus\ (diese\ &Datei)
 menutrans Co&lor\ test				Test\ der\ Farben
 menutrans &Highlight\ test			Test\ der\ Un&terstreichungen
 menutrans &Convert\ to\ HTML			Konvertieren\ nach\ &HTML
@@ -306,6 +306,9 @@ let g:menutrans_tags_dialog = "Geben Sie die Namen der 'tag'-Dateien ein.\nTrenn
 let g:menutrans_textwidth_dialog = "Geben Sie eine neue Text-Breite ein (oder 0, um die Formatierung abzuschalten)"
 let g:menutrans_fileformat_dialog = "Wählen Sie ein Datei-Format aus"
 " }}}
+
+so $VIMRUNTIME/lang/macvim_menu/menu_de_de.latin1.apple.vim
+so $VIMRUNTIME/lang/macvim_menu/menu_de_de.latin1.custom.vim
 
 let &cpo = s:keepcpo
 unlet s:keepcpo

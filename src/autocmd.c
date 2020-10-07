@@ -162,6 +162,7 @@ static struct event_name
     {"SessionLoadPost",	EVENT_SESSIONLOADPOST},
     {"ShellCmdPost",	EVENT_SHELLCMDPOST},
     {"ShellFilterPost",	EVENT_SHELLFILTERPOST},
+    {"SigUSR1",		EVENT_SIGUSR1},
     {"SourceCmd",	EVENT_SOURCECMD},
     {"SourcePre",	EVENT_SOURCEPRE},
     {"SourcePost",	EVENT_SOURCEPOST},
@@ -235,6 +236,10 @@ struct AutoPatCmd_S
 };
 
 static AutoPatCmd *active_apc_list = NULL; // stack of active autocommands
+
+// Macro to loop over all the patterns for an autocmd event
+#define FOR_ALL_AUTOCMD_PATTERNS(event, ap) \
+    for ((ap) = first_autopat[(int)(event)]; (ap) != NULL; (ap) = (ap)->next)
 
 /*
  * augroups stores a list of autocmd group names.
@@ -457,7 +462,7 @@ aubuflocal_remove(buf_T *buf)
     for (event = (event_T)0; (int)event < (int)NUM_EVENTS;
 					    event = (event_T)((int)event + 1))
 	// loop over all autocommand patterns
-	for (ap = first_autopat[(int)event]; ap != NULL; ap = ap->next)
+	FOR_ALL_AUTOCMD_PATTERNS(event, ap)
 	    if (ap->buflocal_nr == buf->b_fnum)
 	    {
 		au_remove_pat(ap);
@@ -520,7 +525,7 @@ au_del_group(char_u *name)
 	for (event = (event_T)0; (int)event < (int)NUM_EVENTS;
 					    event = (event_T)((int)event + 1))
 	{
-	    for (ap = first_autopat[(int)event]; ap != NULL; ap = ap->next)
+	    FOR_ALL_AUTOCMD_PATTERNS(event, ap)
 		if (ap->group == i && ap->pat != NULL)
 		{
 		    give_warning((char_u *)_("W19: Deleting augroup that is still in use"), TRUE);
@@ -760,7 +765,7 @@ au_event_disable(char *what)
     save_ei = vim_strsave(p_ei);
     if (save_ei != NULL)
     {
-	new_ei = vim_strnsave(p_ei, (int)(STRLEN(p_ei) + STRLEN(what)));
+	new_ei = vim_strnsave(p_ei, STRLEN(p_ei) + STRLEN(what));
 	if (new_ei != NULL)
 	{
 	    if (*what == ',' && *p_ei == NUL)
@@ -988,7 +993,7 @@ au_get_grouparg(char_u **argp)
 	;
     if (p > arg)
     {
-	group_name = vim_strnsave(arg, (int)(p - arg));
+	group_name = vim_strnsave(arg, p - arg);
 	if (group_name == NULL)		// out of memory
 	    return AUGROUP_ERROR;
 	group = au_find_group(group_name);
@@ -1042,7 +1047,7 @@ do_autocmd_event(
      */
     if (*pat == NUL)
     {
-	for (ap = first_autopat[(int)event]; ap != NULL; ap = ap->next)
+	FOR_ALL_AUTOCMD_PATTERNS(event, ap)
 	{
 	    if (forceit)  // delete the AutoPat, if it's in the current group
 	    {
@@ -1533,14 +1538,18 @@ win_found:
 	else
 	    // Hmm, original window disappeared.  Just use the first one.
 	    curwin = firstwin;
+	curbuf = curwin->w_buffer;
+#ifdef FEAT_JOB_CHANNEL
+	// May need to restore insert mode for a prompt buffer.
+	entering_window(curwin);
+#endif
+
 	if (win_valid(aco->save_prevwin))
 	    prevwin = aco->save_prevwin;
 #ifdef FEAT_EVAL
 	vars_clear(&aucmd_win->w_vars->dv_hashtab);  // free all w: variables
 	hash_init(&aucmd_win->w_vars->dv_hashtab);   // re-use the hashtab
 #endif
-	curbuf = curwin->w_buffer;
-
 	vim_free(globaldir);
 	globaldir = aco->globaldir;
 
@@ -1754,15 +1763,6 @@ has_insertcharpre(void)
 has_cmdundefined(void)
 {
     return (first_autopat[(int)EVENT_CMDUNDEFINED] != NULL);
-}
-
-/*
- * Return TRUE when there is an FuncUndefined autocommand defined.
- */
-    int
-has_funcundefined(void)
-{
-    return (first_autopat[(int)EVENT_FUNCUNDEFINED] != NULL);
 }
 
 #if defined(FEAT_EVAL) || defined(PROTO)
@@ -2315,7 +2315,11 @@ auto_next_pat(
  * Returns allocated string, or NULL for end of autocommands.
  */
     char_u *
-getnextac(int c UNUSED, void *cookie, int indent UNUSED, int do_concat UNUSED)
+getnextac(
+	int c UNUSED,
+	void *cookie,
+	int indent UNUSED,
+	getline_opt_T options UNUSED)
 {
     AutoPatCmd	    *acp = (AutoPatCmd *)cookie;
     char_u	    *retval;
@@ -2401,7 +2405,7 @@ has_autocmd(event_T event, char_u *sfname, buf_T *buf)
     forward_slash(fname);
 #endif
 
-    for (ap = first_autopat[(int)event]; ap != NULL; ap = ap->next)
+    FOR_ALL_AUTOCMD_PATTERNS(event, ap)
 	if (ap->pat != NULL && ap->cmds != NULL
 	      && (ap->buflocal_nr == 0
 		? match_file_pat(NULL, &ap->reg_prog,

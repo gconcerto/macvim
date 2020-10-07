@@ -1,7 +1,7 @@
 " Menu Translations:	Hungarian (Magyar)
 " Original Translation:	Zoltán Árpádffy
 " Maintained By:	Kontra Gergely <kgergely@mcl.hu>
-" Last Change:		2012 May 01
+" Last Change:		2020 Apr 23
 "
 " This file was converted from menu_hu_hu.iso_8859-2.vim.  See there for
 " remarks.
@@ -52,7 +52,7 @@ menutrans &Paste<Tab>"+gP		&Beillesztés<Tab>"+gP
 menutrans Put\ &Before<Tab>[p		Berakás\ e&lé<Tab>[p
 menutrans Put\ &After<Tab>]p		Berakás\ &mögé<Tab>]p
 menutrans &Delete<Tab>x			&Törlés<Tab>x
-menutrans &Select\ all<Tab>ggVG		A&z\ összes kijelölése<Tab>ggvG
+menutrans &Select\ all<Tab>ggVG		A&z\ összes\ kijelölése<Tab>ggvG
 menutrans &Find\.\.\.			Ke&resés\.\.\.
 menutrans Find\ and\ Rep&lace\.\.\.	Keresés\ és\ c&sere\.\.\.
 menutrans Find\ and\ Rep&lace<Tab>:%s	Keresés\ és\ c&sere<Tab>:%s
@@ -242,6 +242,9 @@ let g:menutrans_path_dialog = "Írd be a keresett fájl lehetséges elérési ú
 let g:menutrans_tags_dialog = "Írd be a tag fájl lehetséges elérési útjait, vesszővel elválasztva"
 let g:menutrans_textwidth_dialog = "Írd be a szöveg szélességét (0 = formázás kikapcsolva)"
 let g:menutrans_fileformat_dialog = "Válaszd ki a fájl formátumát"
+
+so $VIMRUNTIME/lang/macvim_menu/menu_hu_hu.utf-8.apple.vim
+so $VIMRUNTIME/lang/macvim_menu/menu_hu_hu.utf-8.custom.vim
 
 let &cpo = s:keepcpo
 unlet s:keepcpo

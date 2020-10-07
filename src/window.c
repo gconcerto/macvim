@@ -340,6 +340,7 @@ newwindow:
 
 // move window to new tab page
     case 'T':
+		CHECK_CMDWIN;
 		if (one_window())
 		    msg(_(m_onlyone));
 		else
@@ -624,6 +625,11 @@ wingotofile:
 
 		    case 'T':	    // CTRL-W gT: go to previous tab page
 			goto_tabpage(-(int)Prenum1);
+			break;
+
+		    case TAB:	    // CTRL-W g<Tab>: go to last used tab page
+			if (goto_tabpage_lastused() == FAIL)
+			    beep_flush();
 			break;
 
 		    default:
@@ -1267,18 +1273,16 @@ win_split_ins(
     if (flags & (WSP_TOP | WSP_BOT))
 	(void)win_comp_pos();
 
-    /*
-     * Both windows need redrawing
-     */
+     // Both windows need redrawing.  Update all status lines, in case they
+     // show something related to the window count or position.
     redraw_win_later(wp, NOT_VALID);
-    wp->w_redr_status = TRUE;
 #ifdef FEAT_GUI_MACVIM
-    /* The view may have moved, so clear all or display may get corrupted. */
+    // The view may have moved, so clear all or display may get corrupted.
     redraw_win_later(oldwin, gui.in_use ? CLEAR : NOT_VALID);
 #else
     redraw_win_later(oldwin, NOT_VALID);
 #endif
-    oldwin->w_redr_status = TRUE;
+    status_redraw_all();
 
     if (need_status)
     {
@@ -1384,6 +1388,8 @@ win_init(win_T *newp, win_T *oldp, int flags UNUSED)
 #endif
     newp->w_localdir = (oldp->w_localdir == NULL)
 				    ? NULL : vim_strsave(oldp->w_localdir);
+    newp->w_prevdir = (oldp->w_prevdir == NULL)
+				    ? NULL : vim_strsave(oldp->w_prevdir);
 
     // copy tagstack and folds
     for (i = 0; i < oldp->w_tagstacklen; i++)
@@ -1433,10 +1439,10 @@ win_valid_popup(win_T *win UNUSED)
 #ifdef FEAT_PROP_POPUP
     win_T	*wp;
 
-    for (wp = first_popupwin; wp != NULL; wp = wp->w_next)
+    FOR_ALL_POPUPWINS(wp)
 	if (wp == win)
 	    return TRUE;
-    for (wp = curtab->tp_first_popupwin; wp != NULL; wp = wp->w_next)
+    FOR_ALL_POPUPWINS_IN_TAB(curtab, wp)
 	if (wp == win)
 	    return TRUE;
 #endif
@@ -1478,7 +1484,7 @@ win_valid_any_tab(win_T *win)
 		return TRUE;
 	}
 #ifdef FEAT_PROP_POPUP
-	for (wp = tp->tp_first_popupwin; wp != NULL; wp = wp->w_next)
+	FOR_ALL_POPUPWINS_IN_TAB(tp, wp)
 	    if (wp == win)
 		return TRUE;
 #endif
@@ -1814,8 +1820,8 @@ win_move_after(win_T *win1, win_T *win2)
 	    return;
 	}
 
-	// may need move the status line/vertical separator of the last window
-	//
+	// may need to move the status line/vertical separator of the last
+	// window
 	if (win1 == lastwin)
 	{
 	    height = win1->w_prev->w_status_height;
@@ -2226,7 +2232,7 @@ leaving_window(win_T *win)
     }
 }
 
-    static void
+    void
 entering_window(win_T *win)
 {
     // Only matters for a prompt window.
@@ -2281,7 +2287,7 @@ close_windows(
     {
 	nexttp = tp->tp_next;
 	if (tp != curtab)
-	    for (wp = tp->tp_firstwin; wp != NULL; wp = wp->w_next)
+	    FOR_ALL_WINDOWS_IN_TAB(tp, wp)
 		if (wp->w_buffer == buf
 		    && !(wp->w_closing || wp->w_buffer->b_locked > 0))
 		{
@@ -2465,7 +2471,7 @@ win_close(win_T *win, int free_buf)
 	return FAIL; // window is already being closed
     if (win_unlisted(win))
     {
-	emsg(_("E813: Cannot close autocmd or popup window"));
+	emsg(_(e_autocmd_close));
 	return FAIL;
     }
     if ((firstwin == aucmd_win || lastwin == aucmd_win) && one_window())
@@ -2742,6 +2748,7 @@ win_free_mem(
 {
     frame_T	*frp;
     win_T	*wp;
+    tabpage_T	*win_tp = tp == NULL ? curtab : tp;
 
     // Remove the window and its frame from the tree of frames.
     frp = win->w_frame;
@@ -2749,10 +2756,10 @@ win_free_mem(
     vim_free(frp);
     win_free(win, tp);
 
-    // When deleting the current window of another tab page select a new
-    // current window.
-    if (tp != NULL && win == tp->tp_curwin)
-	tp->tp_curwin = wp;
+    // When deleting the current window in the tab, select a new current
+    // window.
+    if (win == win_tp->tp_curwin)
+	win_tp->tp_curwin = wp;
 
     return wp;
 }
@@ -2771,9 +2778,6 @@ win_free_all(void)
 	(void)win_free_mem(aucmd_win, &dummy, NULL);
 	aucmd_win = NULL;
     }
-# ifdef FEAT_PROP_POPUP
-    close_all_popups();
-# endif
 
     while (firstwin != NULL)
 	(void)win_free_mem(firstwin, &dummy, NULL);
@@ -2972,9 +2976,22 @@ win_altframe(
     if (frp->fr_next == NULL)
 	return frp->fr_prev;
 
+    // By default the next window will get the space that was abandoned by this
+    // window
     target_fr = frp->fr_next;
     other_fr  = frp->fr_prev;
-    if (p_spr || p_sb)
+
+    // If this is part of a column of windows and 'splitbelow' is true then the
+    // previous window will get the space.
+    if (frp->fr_parent != NULL && frp->fr_parent->fr_layout == FR_COL && p_sb)
+    {
+	target_fr = frp->fr_prev;
+	other_fr  = frp->fr_next;
+    }
+
+    // If this is part of a row of windows, and 'splitright' is true then the
+    // previous window will get the space.
+    if (frp->fr_parent != NULL && frp->fr_parent->fr_layout == FR_ROW && p_spr)
     {
 	target_fr = frp->fr_prev;
 	other_fr  = frp->fr_next;
@@ -3793,7 +3810,7 @@ free_tabpage(tabpage_T *tp)
 # endif
 # ifdef FEAT_PROP_POPUP
     while (tp->tp_first_popupwin != NULL)
-	popup_close_tabpage(tp, tp->tp_first_popupwin->w_id);
+	popup_close_tabpage(tp, tp->tp_first_popupwin->w_id, TRUE);
 #endif
     for (idx = 0; idx < SNAP_COUNT; ++idx)
 	clear_snapshot(tp, idx);
@@ -3803,7 +3820,11 @@ free_tabpage(tabpage_T *tp)
     unref_var_dict(tp->tp_vars);
 #endif
 
+    if (tp == lastused_tabpage)
+	lastused_tabpage = NULL;
+
     vim_free(tp->tp_localdir);
+    vim_free(tp->tp_prevdir);
 
 #ifdef FEAT_PYTHON
     python_tabpage_free(tp);
@@ -3827,6 +3848,7 @@ free_tabpage(tabpage_T *tp)
 win_new_tabpage(int after)
 {
     tabpage_T	*tp = curtab;
+    tabpage_T	*prev_tp = curtab;
     tabpage_T	*newtp;
     int		n;
 
@@ -3875,6 +3897,8 @@ win_new_tabpage(int after)
 
 	newtp->tp_topframe = topframe;
 	last_status(FALSE);
+
+	lastused_tabpage = prev_tp;
 
 #if defined(FEAT_GUI)
 	// When 'guioptions' includes 'L' or 'R' may have to remove or add
@@ -4111,6 +4135,7 @@ enter_tabpage(
     int		row;
     int		old_off = tp->tp_firstwin->w_winrow;
     win_T	*next_prevwin = tp->tp_prevwin;
+    tabpage_T	*last_tab = curtab;
 
     curtab = tp;
     firstwin = tp->tp_firstwin;
@@ -4152,6 +4177,8 @@ enter_tabpage(
 	shell_new_rows();
     if (curtab->tp_old_Columns != Columns && starting == 0)
 	shell_new_columns();	// update window widths
+
+    lastused_tabpage = last_tab;
 
 #if defined(FEAT_GUI)
     // When 'guioptions' includes 'L' or 'R' may have to remove or add
@@ -4271,6 +4298,21 @@ goto_tabpage_tp(
 }
 
 /*
+ * Go to the last accessed tab page, if there is one.
+ * Return OK or FAIL
+ */
+    int
+goto_tabpage_lastused(void)
+{
+    if (valid_tabpage(lastused_tabpage))
+    {
+	goto_tabpage_tp(lastused_tabpage, TRUE, TRUE);
+	return OK;
+    }
+    return FAIL;
+}
+
+/*
  * Enter window "wp" in tab page "tp".
  * Also updates the GUI tab.
  */
@@ -4362,7 +4404,7 @@ win_goto(win_T *wp)
 	return;
     }
 #endif
-    if (text_locked())
+    if (text_and_win_locked())
     {
 	beep_flush();
 	text_locked_msg();
@@ -4790,7 +4832,7 @@ buf_jump_open_tab(buf_T *buf)
     FOR_ALL_TABPAGES(tp)
 	if (tp != curtab)
 	{
-	    for (wp = tp->tp_firstwin; wp != NULL; wp = wp->w_next)
+	    FOR_ALL_WINDOWS_IN_TAB(tp, wp)
 		if (wp->w_buffer == buf)
 		    break;
 	    if (wp != NULL)
@@ -4969,11 +5011,12 @@ win_free(
 	vim_free(wp->w_tagstack[i].user_data);
     }
     vim_free(wp->w_localdir);
+    vim_free(wp->w_prevdir);
 
     // Remove the window from the b_wininfo lists, it may happen that the
     // freed memory is re-used for another window.
     FOR_ALL_BUFFERS(buf)
-	for (wip = buf->b_wininfo; wip != NULL; wip = wip->wi_next)
+	FOR_ALL_BUF_WININFO(buf, wip)
 	    if (wip->wi_win == wp)
 		wip->wi_win = NULL;
 

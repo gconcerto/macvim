@@ -299,7 +299,10 @@ fsEventCallback(ConstFSEventStreamRef streamRef,
         ASLogCrit(@"Failed to register connection with name '%@'", name);
         [connection release];  connection = nil;
     }
-    
+
+    // Register help search handler to support search Vim docs via the Help menu
+    [NSApp registerUserInterfaceItemSearchHandler:self];
+
 #if !DISABLE_SPARKLE
     // Sparkle is enabled (this is the default). Initialize it. It will
     // automatically check for update.
@@ -321,14 +324,22 @@ fsEventCallback(ConstFSEventStreamRef streamRef,
     [openSelectionString release];  openSelectionString = nil;
     [recentFilesMenuItem release];  recentFilesMenuItem = nil;
     [defaultMainMenu release];  defaultMainMenu = nil;
+    currentMainMenu = nil;
     [appMenuItemTemplate release];  appMenuItemTemplate = nil;
+#if !DISABLE_SPARKLE
     [updater release];  updater = nil;
+#endif
 
     [super dealloc];
 }
 
 - (void)applicationWillFinishLaunching:(NSNotification *)notification
 {
+    // This prevents macOS from injecting "Enter Full Screen" menu item.
+    // MacVim already has a separate menu item to do that.
+    // See https://developer.apple.com/library/archive/releasenotes/AppKit/RN-AppKitOlderNotes/index.html#10_11FullScreen
+    [[NSUserDefaults standardUserDefaults] setBool:NO forKey:@"NSFullScreenMenuItemEverywhere"];
+
     // Remember the default menu so that it can be restored if the user closes
     // all editor windows.
     defaultMainMenu = [[NSApp mainMenu] retain];
@@ -357,7 +368,7 @@ fsEventCallback(ConstFSEventStreamRef streamRef,
         int idx = [fileMenu indexOfItemWithAction:@selector(fileOpen:)];
         if (idx >= 0 && idx+1 < [fileMenu numberOfItems])
 
-        recentFilesMenuItem = [fileMenu itemWithTitle:@"Open Recent"];
+        recentFilesMenuItem = [fileMenu itemWithTag:15432];
         [[recentFilesMenuItem submenu] performSelector:@selector(_setMenuName:)
                                         withObject:@"NSRecentDocumentsMenu"];
 
@@ -862,7 +873,42 @@ fsEventCallback(ConstFSEventStreamRef streamRef,
 
 - (void)setMainMenu:(NSMenu *)mainMenu
 {
-    if ([NSApp mainMenu] == mainMenu) return;
+    if (currentMainMenu == mainMenu) {
+        return;
+    }
+    currentMainMenu = mainMenu;
+    [self refreshMainMenu];
+}
+
+// Refresh the currently active main menu. This call is necessary when any
+// modification was made to the menu, because refreshMainMenu makes a copy of
+// the main menu, meaning that modifications to the original menu wouldn't be
+// reflected until refreshMainMenu is invoked.
+- (void)markMainMenuDirty:(NSMenu *)mainMenu
+{
+    if (currentMainMenu != mainMenu) {
+        // The menu being updated is not the currently set menu, so just ignore,
+        // as this is likely a background Vim window.
+        return;
+    }
+    if (!mainMenuDirty) {
+        // Mark the main menu as dirty and queue up a refresh. We don't immediately
+        // execute the refresh so that multiple calls would get batched up in one go.
+        mainMenuDirty = YES;
+        [self performSelectorOnMainThread:@selector(refreshMainMenu) withObject:nil waitUntilDone:NO];
+    }
+}
+
+- (void)refreshMainMenu
+{
+    mainMenuDirty = NO;
+
+    // Make a copy of the menu before we pass to AppKit. The main reason is
+    // that setWindowsMenu: below will inject items like "Tile Window to Left
+    // of Screen" to the Window menu, and on repeated calls it will keep adding
+    // the same item over and over again, without resolving for duplicates. Using
+    // copies help keep the source menu clean.
+    NSMenu *mainMenu = [[currentMainMenu copy] autorelease];
 
     // If the new menu has a "Recent Files" dummy item, then swap the real item
     // for the dummy.  We are forced to do this since Cocoa initializes the
@@ -871,7 +917,7 @@ fsEventCallback(ConstFSEventStreamRef streamRef,
     NSMenu *fileMenu = [mainMenu findFileMenu];
     if (recentFilesMenuItem && fileMenu) {
         int dummyIdx =
-                [fileMenu indexOfItemWithAction:@selector(recentFilesDummy:)];
+            [fileMenu indexOfItemWithAction:@selector(recentFilesDummy:)];
         if (dummyIdx >= 0) {
             NSMenuItem *dummyItem = [[fileMenu itemAtIndex:dummyIdx] retain];
             [fileMenu removeItemAtIndex:dummyIdx];
@@ -889,19 +935,9 @@ fsEventCallback(ConstFSEventStreamRef streamRef,
         }
     }
 
-    // Now set the new menu.  Notice that we keep one menu for each editor
-    // window since each editor can have its own set of menus.  When swapping
-    // menus we have to tell Cocoa where the new "MacVim", "Windows", and
-    // "Services" menu are.
-    [NSApp setMainMenu:mainMenu];
-
-    // Setting the "MacVim" (or "Application") menu ensures that it is typeset
-    // in boldface.  (The setAppleMenu: method used to be public but is now
-    // private so this will have to be considered a bit of a hack!)
-    NSMenu *appMenu = [mainMenu findApplicationMenu];
-    [NSApp performSelector:@selector(setAppleMenu:) withObject:appMenu];
-    
 #if DISABLE_SPARKLE
+    NSMenu *appMenu = [mainMenu findApplicationMenu];
+
     // If Sparkle is disabled, we want to remove the "Check for Updates" menu
     // item since it's no longer useful.
     NSMenuItem *checkForUpdatesItem = [appMenu itemAtIndex:
@@ -909,26 +945,20 @@ fsEventCallback(ConstFSEventStreamRef streamRef,
     checkForUpdatesItem.hidden = true;
 #endif
 
+    // Now set the new menu.  Notice that we keep one menu for each editor
+    // window since each editor can have its own set of menus.  When swapping
+    // menus we have to tell Cocoa where the new "MacVim", "Windows", and
+    // "Services" menu are.
+    [NSApp setMainMenu:mainMenu];
+
     NSMenu *servicesMenu = [mainMenu findServicesMenu];
     [NSApp setServicesMenu:servicesMenu];
 
     NSMenu *windowsMenu = [mainMenu findWindowsMenu];
-    if (windowsMenu) {
-        // Cocoa isn't clever enough to get rid of items it has added to the
-        // "Windows" menu so we have to do it ourselves otherwise there will be
-        // multiple menu items for each window in the "Windows" menu.
-        //   This code assumes that the only items Cocoa add are ones which
-        // send off the action makeKeyAndOrderFront:.  (Cocoa will not add
-        // another separator item if the last item on the "Windows" menu
-        // already is a separator, so we needen't worry about separators.)
-        int i, count = [windowsMenu numberOfItems];
-        for (i = count-1; i >= 0; --i) {
-            NSMenuItem *item = [windowsMenu itemAtIndex:i];
-            if ([item action] == @selector(makeKeyAndOrderFront:))
-                [windowsMenu removeItem:item];
-        }
-    }
     [NSApp setWindowsMenu:windowsMenu];
+
+    NSMenu *helpMenu = [mainMenu findHelpMenu];
+    [NSApp setHelpMenu:helpMenu];
 }
 
 - (NSArray *)filterOpenFiles:(NSArray *)filenames
@@ -1072,6 +1102,15 @@ fsEventCallback(ConstFSEventStreamRef streamRef,
     return openOk;
 }
 
+- (void)refreshAllAppearances
+{
+    unsigned count = [vimControllers count];
+    for (unsigned i = 0; i < count; ++i) {
+        MMVimController *vc = [vimControllers objectAtIndex:i];
+        [vc.windowController refreshApperanceMode];
+    }
+}
+
 - (IBAction)newWindow:(id)sender
 {
     ASLogDebug(@"Open new window");
@@ -1119,10 +1158,11 @@ fsEventCallback(ConstFSEventStreamRef streamRef,
     NSInteger result = [panel runModal];
 
 #if (MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_10)
-    if (NSModalResponseOK == result) {
+    if (NSModalResponseOK == result)
 #else
-    if (NSOKButton == result) {
+    if (NSOKButton == result)
 #endif
+    {
         // NOTE: -[NSOpenPanel filenames] is deprecated on 10.7 so use
         // -[NSOpenPanel URLs] instead.  The downside is that we have to check
         // that each URL is really a path first.
@@ -1203,15 +1243,20 @@ fsEventCallback(ConstFSEventStreamRef streamRef,
             [NSURL URLWithString:MMWebsiteString]];
 }
 
-- (IBAction)showVimHelp:(id)sender
+- (IBAction)showVimHelp:(id)sender withCmd:(NSString *)cmd
 {
     ASLogDebug(@"Open window with Vim help");
-    // Open a new window with the help window maximized.
+    // Open a new window with only the help window shown.
     [self launchVimProcessWithArguments:[NSArray arrayWithObjects:
-                                    @"-c", @":h gui_mac", @"-c", @":res", nil]
+                                    @"-c", cmd, @"-c", @":only", nil]
                        workingDirectory:nil];
 }
-    
+
+- (IBAction)showVimHelp:(id)sender
+{
+    [self showVimHelp:sender withCmd:@":h gui_mac"];
+}
+
 - (IBAction)checkForUpdates:(id)sender
 {
 #if !DISABLE_SPARKLE
@@ -1389,6 +1434,99 @@ fsEventCallback(ConstFSEventStreamRef streamRef,
 
     return array;
 }
+
+// Begin NSUserInterfaceItemSearching implementation
+- (NSArray<NSString *> *)localizedTitlesForItem:(id)item
+{
+    return item;
+}
+
+- (void)searchForItemsWithSearchString:(NSString *)searchString
+                           resultLimit:(NSInteger)resultLimit
+                    matchedItemHandler:(void (^)(NSArray *items))handleMatchedItems
+{
+    // Search documentation tags and provide the results in a pair of (file
+    // name, tag name). Currently lazily parse the Vim's doc tags, and reuse
+    // that in future searches.
+    //
+    // Does not support plugins for now, as different Vim instances could have
+    // different plugins loaded. Theoretically it's possible to query the
+    // current Vim instance for what plugins are loaded and the tags associated
+    // with them but it's tricky especially since this function is not invoked
+    // on the main thread. Just providing Vim's builtin docs should be mostly
+    // good enough.
+
+    static BOOL parsed = NO;
+    static NSMutableArray *parsedLineComponents = nil;
+
+    @synchronized (self) {
+        if (!parsed) {
+            parsedLineComponents = [[NSMutableArray alloc]init];
+            
+            NSString *tagsFilePath = [[[NSBundle mainBundle] resourcePath]
+                                      stringByAppendingPathComponent:@"vim/runtime/doc/tags"];
+            NSString *fileContent = [NSString stringWithContentsOfFile:tagsFilePath encoding:NSUTF8StringEncoding error:NULL];
+            NSArray *lines = [fileContent componentsSeparatedByString:@"\n"];
+            
+            for (NSString *line in lines) {
+                NSArray<NSString *> *components = [line componentsSeparatedByString:@"\t"];
+                if ([components count] < 2) {
+                    continue;
+                }
+                [parsedLineComponents addObject:components];
+            }
+            
+            parsed = YES;
+        }
+    }
+
+    // Use a simple search algorithm where the string is split by whitespace and each word has to match
+    // substring in the tag. Don't do fuzzy matching or regex for simplicity for now.
+    NSArray<NSString *> *searchStrings = [searchString componentsSeparatedByString:@" "];
+
+    NSMutableArray *ret = [[[NSMutableArray alloc]init] autorelease];
+    for (NSArray<NSString *> *line in parsedLineComponents) {
+        BOOL found = YES;
+        for (NSString *curSearchString in searchStrings) {
+            if (![line[0] localizedCaseInsensitiveContainsString:curSearchString]) {
+                found = NO;
+                break;
+            }
+        }
+        if (found) {
+            // We flip the ordering because we want it to look like "file_name.txt > tag_name" in the results.
+            NSArray *foundObject = @[line[1], line[0]];
+            
+            if ([searchStrings count] == 1 && [searchString localizedCaseInsensitiveCompare:line[0]] == NSOrderedSame) {
+                // Exact match has highest priority.
+                [ret insertObject:foundObject atIndex:0];
+            }
+            else {
+                // Don't do any other prioritization for now. May add more sophisticated sorting/heuristics
+                // in the future.
+                [ret addObject:foundObject];
+            }
+        }
+    }
+
+    // Return the results to callback.
+    handleMatchedItems(ret);
+}
+
+- (void)performActionForItem:(id)item
+{
+    // When opening a help page, either open a new Vim instance, or reuse the
+    // existing one.
+    MMVimController *vimController = [self keyVimController];
+    if (vimController == nil) {
+        [self showVimHelp:self withCmd:[NSString stringWithFormat:
+                                        @":help %@", item[1]]];
+        return;
+    }
+    [vimController addVimInput:[NSString stringWithFormat:
+                                @"<C-\\><C-N>:help %@<CR>", item[1]]];
+}
+// End NSUserInterfaceItemSearching
 
 @end // MMAppController
 
@@ -1752,55 +1890,109 @@ fsEventCallback(ConstFSEventStreamRef streamRef,
 #if MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_11
                 f = [f stringByRemovingPercentEncoding];
 #else
-		f = [f stringByReplacingPercentEscapesUsingEncoding:NSUTF8StringEncoding];
+                f = [f stringByReplacingPercentEscapesUsingEncoding:NSUTF8StringEncoding];
 #endif
 
                 // parse value
                 NSString *v = [arr objectAtIndex:1];
 
-                // do not decode url, since it's a file URI
-                BOOL decode = ![f isEqualToString:@"url"];
-                if (decode)
-                {
+                // We need to decode the parameters here because most URL
+                // parsers treat the query component as needing to be decoded
+                // instead of treating it as is. It does mean that a link to
+                // open file "/tmp/file name.txt" will be
+                // mvim://open?url=file:///tmp/file%2520name.txt to encode a
+                // URL of file:///tmp/file%20name.txt. This double-encoding is
+                // intentional to follow the URL spec.
 #if MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_11
-                    v = [f stringByRemovingPercentEncoding];
+                v = [v stringByRemovingPercentEncoding];
 #else
-                    v = [f stringByReplacingPercentEscapesUsingEncoding:NSUTF8StringEncoding];
+                v = [v stringByReplacingPercentEscapesUsingEncoding:NSUTF8StringEncoding];
+#endif
+
+                if ([f isEqualToString:@"url"]) {
+                    // Since the URL scheme uses a double-encoding due to a
+                    // file:// URL encoded in another mvim: one, existing tools
+                    // like iTerm2 could sometimes erroneously only do a single
+                    // encode. To maximize compatiblity, we re-encode invalid
+                    // characters if we detect them as they would not work
+                    // later on when we pass this string to URLWithString.
+                    //
+                    // E.g. mvim://open?uri=file:///foo%20bar => "file:///foo bar"
+                    // which is not a valid URL, so we re-encode it to
+                    // file:///foo%20bar here. The only important case is to
+                    // not touch the "%" character as it introduces ambiguity
+                    // and the re-encoding is a nice compatibility feature, but
+                    // the canonical form should be double-encoded, i.e.
+                    // mvim://open?uri=file:///foo%2520bar
+#if MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_11
+                    NSMutableCharacterSet *charSet = [NSMutableCharacterSet characterSetWithCharactersInString:@"%"];
+                    [charSet formUnionWithCharacterSet:NSCharacterSet.URLHostAllowedCharacterSet];
+                    [charSet formUnionWithCharacterSet:NSCharacterSet.URLPathAllowedCharacterSet];
+                    v = [v stringByAddingPercentEncodingWithAllowedCharacters:charSet];
 #endif
                 }
 
-		[dict setValue:v forKey:f];
+                [dict setValue:v forKey:f];
             }
         }
 
         // Actually open the file.
         NSString *file = [dict objectForKey:@"url"];
         if (file != nil) {
-            NSURL *fileUrl= [NSURL URLWithString:file];
-            // TextMate only opens files that already exist.
-            if ([fileUrl isFileURL]
-                    && [[NSFileManager defaultManager] fileExistsAtPath:
-                           [fileUrl path]]) {
-                // Strip 'file://' path, else application:openFiles: might think
-                // the file is not yet open.
-                NSArray *filenames = [NSArray arrayWithObject:[fileUrl path]];
+            NSURL *fileUrl = [NSURL URLWithString:file];
+            if ([fileUrl isFileURL]) {
+                NSString *filePath = [fileUrl path];
+                // Only opens files that already exist.
+                if ([[NSFileManager defaultManager] fileExistsAtPath:filePath]) {
+                    NSArray *filenames = [NSArray arrayWithObject:filePath];
 
-                // Look for the line and column options.
-                NSDictionary *args = nil;
-                NSString *line = [dict objectForKey:@"line"];
-                if (line) {
-                    NSString *column = [dict objectForKey:@"column"];
-                    if (column)
-                        args = [NSDictionary dictionaryWithObjectsAndKeys:
-                                line, @"cursorLine",
-                                column, @"cursorColumn",
-                                nil];
-                    else
-                        args = [NSDictionary dictionaryWithObject:line
-                                forKey:@"cursorLine"];
+                    // Look for the line and column options.
+                    NSDictionary *args = nil;
+                    NSString *line = [dict objectForKey:@"line"];
+                    if (line) {
+                        NSString *column = [dict objectForKey:@"column"];
+                        if (column)
+                            args = [NSDictionary dictionaryWithObjectsAndKeys:
+                                    line, @"cursorLine",
+                                    column, @"cursorColumn",
+                                    nil];
+                        else
+                            args = [NSDictionary dictionaryWithObject:line
+                                                               forKey:@"cursorLine"];
+                    }
+
+                    [self openFiles:filenames withArguments:args];
+                } else {
+                    NSAlert *alert = [[NSAlert alloc] init];
+                    [alert addButtonWithTitle:NSLocalizedString(@"OK",
+                        @"Dialog button")];
+
+                    [alert setMessageText:NSLocalizedString(@"Bad file path",
+                        @"Bad file path dialog, title")];
+                    [alert setInformativeText:[NSString stringWithFormat:NSLocalizedString(
+                        @"Cannot open file path \"%@\"",
+                        @"Bad file path dialog, text"),
+                        filePath]];
+
+                    [alert setAlertStyle:NSAlertStyleWarning];
+                    [alert runModal];
+                    [alert release];
                 }
+            } else {
+                NSAlert *alert = [[NSAlert alloc] init];
+                [alert addButtonWithTitle:NSLocalizedString(@"OK",
+                    @"Dialog button")];
 
-                [self openFiles:filenames withArguments:args];
+                [alert setMessageText:NSLocalizedString(@"Invalid File URL",
+                    @"Unknown Fie URL dialog, title")];
+                [alert setInformativeText:[NSString stringWithFormat:NSLocalizedString(
+                    @"Unknown file URL in \"%@\"",
+                    @"Unknown file URL dialog, text"),
+                    file]];
+
+                [alert setAlertStyle:NSAlertStyleWarning];
+                [alert runModal];
+                [alert release];
             }
         }
     } else {
@@ -2135,7 +2327,7 @@ fsEventCallback(ConstFSEventStreamRef streamRef,
 
     NSString *path = [@"~/.vim" stringByExpandingTildeInPath];
     NSArray *pathsToWatch = [NSArray arrayWithObject:path];
- 
+
     fsEventStream = FSEventStreamCreate(NULL, &fsEventCallback, NULL,
             (CFArrayRef)pathsToWatch, kFSEventStreamEventIdSinceNow,
             MMEventStreamLatency, kFSEventStreamCreateFlagNone);

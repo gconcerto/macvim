@@ -110,7 +110,7 @@ menutrans Build\ &Tags\ File		&Vytvořit\ soubor\ tagů
 if has("spell")
    menutrans &Spelling			&Kontrola\ pravopisu
    menutrans &Spell\ Check\ On		&Zapnout\ kontrolu\ pravopisu
-   menutrans Spell\ Check\ &Off		&Vypnout \kontrolu\ pravopisu
+   menutrans Spell\ Check\ &Off		&Vypnout\ kontrolu\ pravopisu
    menutrans To\ &Next\ error<Tab>]s	&Další\ chyba<Tab>]s
    menutrans To\ &Previous\ error<Tab>[s	&Předchozí\ chyba<Tab>[s
    menutrans Suggest\ &Corrections<Tab>z=	&Navrhnout\ opravy<Tab>z=
@@ -299,6 +299,9 @@ let g:menutrans_tags_dialog = "Zadejte jména souborů s tagy. Jména oddělte �
 let g:menutrans_textwidth_dialog = "Zadejte délku řádku (0 pro zakázání formátování):"
 let g:menutrans_fileformat_dialog = "Vyberte typ konce řádků"
 " }}}" 
+
+so $VIMRUNTIME/lang/macvim_menu/menu_cs_cz.utf-8.apple.vim
+so $VIMRUNTIME/lang/macvim_menu/menu_cs_cz.utf-8.custom.vim
 
 let &cpo = s:keepcpo
 unlet s:keepcpo

@@ -29,6 +29,7 @@ NSString *MMTranslateCtrlClickKey         = @"MMTranslateCtrlClick";
 NSString *MMTopLeftPointKey               = @"MMTopLeftPoint";
 NSString *MMOpenInCurrentWindowKey        = @"MMOpenInCurrentWindow";
 NSString *MMNoFontSubstitutionKey         = @"MMNoFontSubstitution";
+NSString *MMAppearanceModeSelectionKey    = @"MMAppearanceModeSelection";
 NSString *MMNoTitleBarWindowKey           = @"MMNoTitleBarWindow";
 NSString *MMTitlebarAppearsTransparentKey = @"MMTitlebarAppearsTransparent";
 NSString *MMDisableLaunchAnimation        = @"MMDisableLaunchAnimation";
@@ -175,6 +176,11 @@ NSString *MMBufferedDrawingKey            = @"MMBufferedDrawing";
 - (NSMenu *)findFileMenu
 {
     return [self findMenuContainingItemWithAction:@selector(performClose:)];
+}
+
+- (NSMenu *)findHelpMenu
+{
+    return [self findMenuContainingItemWithAction:@selector(openWebsite:)];
 }
 
 @end // NSMenu (MMExtras)

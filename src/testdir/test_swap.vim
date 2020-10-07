@@ -1,5 +1,6 @@
 " Tests for the swap feature
 
+source check.vim
 source shared.vim
 source term_util.vim
 
@@ -9,9 +10,8 @@ endfunc
 
 " Tests for 'directory' option.
 func Test_swap_directory()
-  if !has("unix")
-    return
-  endif
+  CheckUnix
+
   let content = ['start of testfile',
 	      \ 'line 2 Abcdefghij',
 	      \ 'line 3 Abcdefghij',
@@ -55,9 +55,8 @@ func Test_swap_directory()
 endfunc
 
 func Test_swap_group()
-  if !has("unix")
-    return
-  endif
+  CheckUnix
+
   let groups = split(system('groups'))
   if len(groups) <= 1
     throw 'Skipped: need at least two groups, got ' . string(groups)
@@ -352,27 +351,56 @@ endfunc
 
 " Test for selecting 'q' in the attention prompt
 func Test_swap_prompt_splitwin()
-  if !CanRunVimInTerminal()
-    throw 'Skipped: cannot run vim in terminal'
-  endif
+  CheckRunVimInTerminal
+
   call writefile(['foo bar'], 'Xfile1')
   edit Xfile1
+  preserve  " should help to make sure the swap file exists
+
   let buf = RunVimInTerminal('', {'rows': 20})
   call term_sendkeys(buf, ":set nomore\n")
   call term_sendkeys(buf, ":set noruler\n")
   call term_sendkeys(buf, ":split Xfile1\n")
-  call term_wait(buf)
+  call TermWait(buf)
   call WaitForAssert({-> assert_match('^\[O\]pen Read-Only, (E)dit anyway, (R)ecover, (Q)uit, (A)bort: $', term_getline(buf, 20))})
   call term_sendkeys(buf, "q")
-  call term_wait(buf)
-  call term_sendkeys(buf, ":")
+  call TermWait(buf)
+  call term_sendkeys(buf, ":\<CR>")
   call WaitForAssert({-> assert_match('^:$', term_getline(buf, 20))})
-  call term_sendkeys(buf, "echomsg winnr('$')\<CR>")
-  call term_wait(buf)
+  call term_sendkeys(buf, ":echomsg winnr('$')\<CR>")
+  call TermWait(buf)
   call WaitForAssert({-> assert_match('^1$', term_getline(buf, 20))})
   call StopVimInTerminal(buf)
   %bwipe!
   call delete('Xfile1')
+endfunc
+
+func Test_swap_symlink()
+  CheckUnix
+
+  call writefile(['text'], 'Xtestfile')
+  silent !ln -s -f Xtestfile Xtestlink
+
+  set dir=.
+
+  " Test that swap file uses the name of the file when editing through a
+  " symbolic link (so that editing the file twice is detected)
+  edit Xtestlink
+  call assert_match('Xtestfile\.swp$', s:swapname())
+  bwipe!
+
+  call mkdir('Xswapdir')
+  exe 'set dir=' . getcwd() . '/Xswapdir//'
+
+  " Check that this also works when 'directory' ends with '//'
+  edit Xtestlink
+  call assert_match('Xtestfile\.swp$', s:swapname())
+  bwipe!
+
+  set dir&
+  call delete('Xtestfile')
+  call delete('Xtestlink')
+  call delete('Xswapdir', 'rf')
 endfunc
 
 " vim: shiftwidth=2 sts=2 expandtab

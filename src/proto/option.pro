@@ -14,7 +14,6 @@ void did_set_option(int opt_idx, int opt_flags, int new_value, int value_checked
 int string_to_key(char_u *arg, int multi_byte);
 void did_set_title(void);
 void set_options_bin(int oldval, int newval, int opt_flags);
-int check_fuoptions(char_u *p_fuoptions, unsigned *flags, int *bgcolor);
 void check_options(void);
 int get_term_opt_idx(char_u **p);
 int set_term_option_alloced(char_u **p);
@@ -63,7 +62,6 @@ void set_imsearch_global(void);
 void set_context_in_set_cmd(expand_T *xp, char_u *arg, int opt_flags);
 int ExpandSettings(expand_T *xp, regmatch_T *regmatch, int *num_file, char_u ***file);
 int ExpandOldSetting(int *num_file, char_u ***file);
-int has_format_option(int x);
 int shortmess(int x);
 void vimrc_found(char_u *fname, char_u *envname);
 void change_compatible(int on);

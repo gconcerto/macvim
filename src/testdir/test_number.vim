@@ -280,7 +280,7 @@ func Test_relativenumber_colors()
 
   " Check that the balloon shows up after a mouse move
   let buf = RunVimInTerminal('-S XTest_relnr', {'rows': 10, 'cols': 50})
-  call term_wait(buf, 100)
+  call TermWait(buf, 50)
   " Default colors
   call VerifyScreenDump(buf, 'Test_relnr_colors_1', {})
 
@@ -297,3 +297,5 @@ func Test_relativenumber_colors()
   call StopVimInTerminal(buf)
   call delete('XTest_relnr')
 endfunc
+
+" vim: shiftwidth=2 sts=2 expandtab

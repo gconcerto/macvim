@@ -17,12 +17,12 @@
 
 #include "vim9.h"
 
-static char e_needs_vim9[] = N_("E1042: import/export can only be used in vim9script");
-
     int
 in_vim9script(void)
 {
-    // TODO: go up the stack?
+    // Do not go up the stack, a ":function" inside vim9script uses legacy
+    // syntax.  "sc_version" is also set when compiling a ":def" function in
+    // legacy script.
     return current_sctx.sc_version == SCRIPT_VERSION_VIM9;
 }
 
@@ -32,16 +32,17 @@ in_vim9script(void)
     void
 ex_vim9script(exarg_T *eap)
 {
-    scriptitem_T *si = SCRIPT_ITEM(current_sctx.sc_sid);
+    scriptitem_T    *si;
 
     if (!getline_equal(eap->getline, eap->cookie, getsourceline))
     {
-	emsg(_("E1038: vim9script can only be used in a script"));
+	emsg(_(e_vim9script_can_only_be_used_in_script));
 	return;
     }
+    si = SCRIPT_ITEM(current_sctx.sc_sid);
     if (si->sn_had_command)
     {
-	emsg(_("E1039: vim9script must be the first command in a script"));
+	emsg(_(e_vim9script_must_be_first_command_in_script));
 	return;
     }
     current_sctx.sc_version = SCRIPT_VERSION_VIM9;
@@ -56,19 +57,38 @@ ex_vim9script(exarg_T *eap)
 }
 
 /*
+ * When in Vim9 script give an error and return FAIL.
+ */
+    int
+not_in_vim9(exarg_T *eap)
+{
+    if (in_vim9script())
+	switch (eap->cmdidx)
+	{
+	    case CMD_append:
+	    case CMD_change:
+	    case CMD_insert:
+	    case CMD_t:
+	    case CMD_xit:
+		semsg(_(e_missing_let_str), eap->cmd);
+		return FAIL;
+	    default: break;
+	}
+    return OK;
+}
+
+/*
  * ":export let Name: type"
  * ":export const Name: type"
  * ":export def Name(..."
  * ":export class Name ..."
- *
- * ":export {Name, ...}"
  */
     void
-ex_export(exarg_T *eap UNUSED)
+ex_export(exarg_T *eap)
 {
-    if (current_sctx.sc_version != SCRIPT_VERSION_VIM9)
+    if (!in_vim9script())
     {
-	emsg(_(e_needs_vim9));
+	emsg(_(e_export_can_only_be_used_in_vim9script));
 	return;
     }
 
@@ -77,6 +97,8 @@ ex_export(exarg_T *eap UNUSED)
     switch (eap->cmdidx)
     {
 	case CMD_let:
+	case CMD_var:
+	case CMD_final:
 	case CMD_const:
 	case CMD_def:
 	// case CMD_class:
@@ -87,12 +109,12 @@ ex_export(exarg_T *eap UNUSED)
 	    // The command will reset "is_export" when exporting an item.
 	    if (is_export)
 	    {
-		emsg(_("E1044: export with invalid argument"));
+		emsg(_(e_export_with_invalid_argument));
 		is_export = FALSE;
 	    }
 	    break;
 	default:
-	    emsg(_("E1043: Invalid command after :export"));
+	    emsg(_(e_invalid_command_after_export));
 	    break;
     }
 }
@@ -119,11 +141,13 @@ free_imports(int sid)
 
     for (idx = 0; idx < si->sn_imports.ga_len; ++idx)
     {
-	imported_T *imp = ((imported_T *)si->sn_imports.ga_data + idx);
+	imported_T *imp = ((imported_T *)si->sn_imports.ga_data) + idx;
 
 	vim_free(imp->imp_name);
     }
     ga_clear(&si->sn_imports);
+    ga_clear(&si->sn_var_vals);
+    clear_type_list(&si->sn_type_list);
 }
 
 /*
@@ -139,15 +163,21 @@ free_imports(int sid)
     void
 ex_import(exarg_T *eap)
 {
-    if (current_sctx.sc_version != SCRIPT_VERSION_VIM9)
-	emsg(_(e_needs_vim9));
-    else
-    {
-	char_u *cmd_end = handle_import(eap->arg, NULL, current_sctx.sc_sid);
+    char_u	*cmd_end;
+    evalarg_T	evalarg;
 
-	if (cmd_end != NULL)
-	    eap->nextcmd = check_nextcmd(cmd_end);
+    if (!getline_equal(eap->getline, eap->cookie, getsourceline))
+    {
+	emsg(_(e_import_can_only_be_used_in_script));
+	return;
     }
+    fill_evalarg_from_eap(&evalarg, eap, eap->skip);
+
+    cmd_end = handle_import(eap->arg, NULL, current_sctx.sc_sid,
+							       &evalarg, NULL);
+    if (cmd_end != NULL)
+	eap->nextcmd = check_nextcmd(cmd_end);
+    clear_evalarg(&evalarg, eap);
 }
 
 /*
@@ -159,35 +189,23 @@ ex_import(exarg_T *eap)
     int
 find_exported(
 	int	    sid,
-	char_u	    **argp,
-	int	    *name_len,
+	char_u	    *name,
 	ufunc_T	    **ufunc,
 	type_T	    **type)
 {
-    char_u	*name = *argp;
-    char_u	*arg = *argp;
-    int		cc;
     int		idx = -1;
     svar_T	*sv;
     scriptitem_T *script = SCRIPT_ITEM(sid);
 
-    // isolate one name
-    while (eval_isnamec(*arg))
-	++arg;
-    *name_len = (int)(arg - name);
-
     // find name in "script"
     // TODO: also find script-local user function
-    cc = *arg;
-    *arg = NUL;
     idx = get_script_item_idx(sid, name, FALSE);
     if (idx >= 0)
     {
 	sv = ((svar_T *)script->sn_var_vals.ga_data) + idx;
 	if (!sv->sv_export)
 	{
-	    semsg(_("E1049: Item not exported in script: %s"), name);
-	    *arg = cc;
+	    semsg(_(e_item_not_exported_in_script_str), name);
 	    return -1;
 	}
 	*type = sv->sv_type;
@@ -199,35 +217,28 @@ find_exported(
 	char_u	*funcname;
 
 	// it could be a user function.
-	if (STRLEN(name) < sizeof(buffer) - 10)
+	if (STRLEN(name) < sizeof(buffer) - 15)
 	    funcname = buffer;
 	else
 	{
-	    funcname = alloc(STRLEN(name) + 10);
+	    funcname = alloc(STRLEN(name) + 15);
 	    if (funcname == NULL)
-	    {
-		*arg = cc;
 		return -1;
-	    }
 	}
 	funcname[0] = K_SPECIAL;
 	funcname[1] = KS_EXTRA;
 	funcname[2] = (int)KE_SNR;
 	sprintf((char *)funcname + 3, "%ld_%s", (long)sid, name);
-	*ufunc = find_func(funcname, NULL);
+	*ufunc = find_func(funcname, FALSE, NULL);
 	if (funcname != buffer)
 	    vim_free(funcname);
 
 	if (*ufunc == NULL)
 	{
-	    semsg(_("E1048: Item not found in script: %s"), name);
-	    *arg = cc;
+	    semsg(_(e_item_not_found_in_script_str), name);
 	    return -1;
 	}
     }
-    *arg = cc;
-    arg = skipwhite(arg);
-    *argp = arg;
 
     return idx;
 }
@@ -238,74 +249,136 @@ find_exported(
  * Returns a pointer to after the command or NULL in case of failure
  */
     char_u *
-handle_import(char_u *arg_start, garray_T *gap, int import_sid)
+handle_import(
+	char_u	    *arg_start,
+	garray_T    *gap,
+	int	    import_sid,
+	evalarg_T   *evalarg,
+	void	    *cctx)
 {
     char_u	*arg = arg_start;
-    char_u	*cmd_end;
-    char_u	*as_ptr = NULL;
-    char_u	*from_ptr;
-    int		as_len = 0;
+    char_u	*cmd_end = NULL;
+    char_u	*as_name = NULL;
     int		ret = FAIL;
     typval_T	tv;
     int		sid = -1;
     int		res;
+    garray_T	names;
 
+    ga_init2(&names, sizeof(char_u *), 10);
     if (*arg == '{')
     {
-	// skip over {item} list
-	while (*arg != NUL && *arg != '}')
-	    ++arg;
-	if (*arg == '}')
-	    arg = skipwhite(arg + 1);
+	// "import {item, item} from ..."
+	arg = skipwhite_and_linebreak(arg + 1, evalarg);
+	for (;;)
+	{
+	    char_u  *p = arg;
+	    int	    had_comma = FALSE;
+
+	    while (eval_isnamec(*arg))
+		++arg;
+	    if (p == arg)
+		break;
+	    if (ga_grow(&names, 1) == FAIL)
+		goto erret;
+	    ((char_u **)names.ga_data)[names.ga_len] =
+						      vim_strnsave(p, arg - p);
+	    ++names.ga_len;
+	    if (*arg == ',')
+	    {
+		had_comma = TRUE;
+		++arg;
+	    }
+	    arg = skipwhite_and_linebreak(arg, evalarg);
+	    if (*arg == '}')
+	    {
+		arg = skipwhite_and_linebreak(arg + 1, evalarg);
+		break;
+	    }
+	    if (!had_comma)
+	    {
+		emsg(_(e_missing_comma_in_import));
+		goto erret;
+	    }
+	}
+	if (names.ga_len == 0)
+	{
+	    emsg(_(e_syntax_error_in_import));
+	    goto erret;
+	}
     }
     else
     {
-	if (*arg == '*')
-	    arg = skipwhite(arg + 1);
+	// "import Name from ..."
+	// "import * as Name from ..."
+	// "import item [as Name] from ..."
+	arg = skipwhite_and_linebreak(arg, evalarg);
+	if (arg[0] == '*' && IS_WHITE_OR_NUL(arg[1]))
+	    arg = skipwhite_and_linebreak(arg + 1, evalarg);
 	else if (eval_isnamec1(*arg))
 	{
+	    char_u  *p = arg;
+
 	    while (eval_isnamec(*arg))
 		++arg;
-	    arg = skipwhite(arg);
+	    if (ga_grow(&names, 1) == FAIL)
+		goto erret;
+	    ((char_u **)names.ga_data)[names.ga_len] =
+						      vim_strnsave(p, arg - p);
+	    ++names.ga_len;
+	    arg = skipwhite_and_linebreak(arg, evalarg);
 	}
-	if (STRNCMP("as", arg, 2) == 0 && VIM_ISWHITE(arg[2]))
+	else
 	{
-	    // skip over "as Name "
+	    emsg(_(e_syntax_error_in_import));
+	    goto erret;
+	}
+
+	if (STRNCMP("as", arg, 2) == 0 && IS_WHITE_OR_NUL(arg[2]))
+	{
+	    char_u *p;
+
+	    // skip over "as Name "; no line break allowed after "as"
 	    arg = skipwhite(arg + 2);
-	    as_ptr = arg;
+	    p = arg;
 	    if (eval_isnamec1(*arg))
 		while (eval_isnamec(*arg))
 		    ++arg;
-	    as_len = (int)(arg - as_ptr);
-	    arg = skipwhite(arg);
+	    if (check_defined(p, arg - p, cctx) == FAIL)
+		goto erret;
+	    as_name = vim_strnsave(p, arg - p);
+	    arg = skipwhite_and_linebreak(arg, evalarg);
 	}
 	else if (*arg_start == '*')
 	{
-	    emsg(_("E1045: Missing \"as\" after *"));
-	    return NULL;
+	    emsg(_(e_missing_as_after_star));
+	    goto erret;
 	}
     }
-    if (STRNCMP("from", arg, 4) != 0 || !VIM_ISWHITE(arg[4]))
+
+    if (STRNCMP("from", arg, 4) != 0 || !IS_WHITE_OR_NUL(arg[4]))
     {
-	emsg(_("E1070: Missing \"from\""));
-	return NULL;
+	emsg(_(e_missing_from));
+	goto erret;
     }
-    from_ptr = arg;
-    arg = skipwhite(arg + 4);
+
+    arg = skipwhite_and_linebreak(arg + 4, evalarg);
     tv.v_type = VAR_UNKNOWN;
     // TODO: should we accept any expression?
     if (*arg == '\'')
-	ret = get_lit_string_tv(&arg, &tv, TRUE);
+	ret = eval_lit_string(&arg, &tv, TRUE);
     else if (*arg == '"')
-	ret = get_string_tv(&arg, &tv, TRUE);
+	ret = eval_string(&arg, &tv, TRUE);
     if (ret == FAIL || tv.vval.v_string == NULL || *tv.vval.v_string == NUL)
     {
-	emsg(_("E1071: Invalid string after \"from\""));
-	return NULL;
+	emsg(_(e_invalid_string_after_from));
+	goto erret;
     }
     cmd_end = arg;
 
-    // find script tv.vval.v_string
+    /*
+     * find script file
+     */
     if (*tv.vval.v_string == '.')
     {
 	size_t		len;
@@ -319,7 +392,7 @@ handle_import(char_u *arg_start, garray_T *gap, int import_sid)
 	if (from_name == NULL)
 	{
 	    clear_tv(&tv);
-	    return NULL;
+	    goto erret;
 	}
 	vim_strncpy(from_name, si->sn_name, tail - si->sn_name);
 	add_pathsep(from_name);
@@ -344,7 +417,7 @@ handle_import(char_u *arg_start, garray_T *gap, int import_sid)
 	if (from_name == NULL)
 	{
 	    clear_tv(&tv);
-	    return NULL;
+	    goto erret;
 	}
 	vim_snprintf((char *)from_name, len, "import/%s", tv.vval.v_string);
 	res = source_in_path(p_rtp, from_name, DIP_NOAFTER, &sid);
@@ -353,9 +426,9 @@ handle_import(char_u *arg_start, garray_T *gap, int import_sid)
 
     if (res == FAIL || sid <= 0)
     {
-	semsg(_("E1053: Could not import \"%s\""), tv.vval.v_string);
+	semsg(_(e_could_not_import_str), tv.vval.v_string);
 	clear_tv(&tv);
-	return NULL;
+	goto erret;
     }
     clear_tv(&tv);
 
@@ -365,38 +438,44 @@ handle_import(char_u *arg_start, garray_T *gap, int import_sid)
 					: &SCRIPT_ITEM(import_sid)->sn_imports);
 
 	if (imported == NULL)
-	    return NULL;
-	imported->imp_name = vim_strnsave(as_ptr, as_len);
+	    goto erret;
+	imported->imp_name = as_name;
+	as_name = NULL;
 	imported->imp_sid = sid;
 	imported->imp_all = TRUE;
     }
     else
     {
+	int i;
+
 	arg = arg_start;
 	if (*arg == '{')
 	    arg = skipwhite(arg + 1);
-	for (;;)
+	for (i = 0; i < names.ga_len; ++i)
 	{
-	    char_u	*name = arg;
-	    int		name_len;
+	    char_u	*name = ((char_u **)names.ga_data)[i];
 	    int		idx;
 	    imported_T	*imported;
 	    ufunc_T	*ufunc = NULL;
 	    type_T	*type;
 
-	    idx = find_exported(sid, &arg, &name_len, &ufunc, &type);
+	    idx = find_exported(sid, name, &ufunc, &type);
 
 	    if (idx < 0 && ufunc == NULL)
-		return NULL;
+		goto erret;
+
+	    if (check_defined(name, STRLEN(name), cctx) == FAIL)
+		goto erret;
 
 	    imported = new_imported(gap != NULL ? gap
 				       : &SCRIPT_ITEM(import_sid)->sn_imports);
 	    if (imported == NULL)
-		return NULL;
+		goto erret;
 
 	    // TODO: check for "as" following
-	    // imported->imp_name = vim_strnsave(as_ptr, as_len);
-	    imported->imp_name = vim_strnsave(name, name_len);
+	    // imported->imp_name = vim_strsave(as_name);
+	    imported->imp_name = name;
+	    ((char_u **)names.ga_data)[i] = NULL;
 	    imported->imp_sid = sid;
 	    if (idx >= 0)
 	    {
@@ -404,32 +483,130 @@ handle_import(char_u *arg_start, garray_T *gap, int import_sid)
 		imported->imp_var_vals_idx = idx;
 	    }
 	    else
+	    {
+		imported->imp_type = ufunc->uf_func_type;
 		imported->imp_funcname = ufunc->uf_name;
-
-	    arg = skipwhite(arg);
-	    if (*arg_start != '{')
-		break;
-	    if (*arg == '}')
-	    {
-		arg = skipwhite(arg + 1);
-		break;
 	    }
-
-	    if (*arg != ',')
-	    {
-		emsg(_("E1046: Missing comma in import"));
-		return NULL;
-	    }
-	    arg = skipwhite(arg + 1);
-	}
-	if (arg != from_ptr)
-	{
-	    // cannot happen, just in case the above has a flaw
-	    emsg(_("E1047: syntax error in import"));
-	    return NULL;
 	}
     }
+erret:
+    ga_clear_strings(&names);
+    vim_free(as_name);
     return cmd_end;
+}
+
+/*
+ * Declare a script-local variable without init: "let var: type".
+ * "const" is an error since the value is missing.
+ * Returns a pointer to after the type.
+ */
+    char_u *
+vim9_declare_scriptvar(exarg_T *eap, char_u *arg)
+{
+    char_u	    *p;
+    char_u	    *name;
+    scriptitem_T    *si = SCRIPT_ITEM(current_sctx.sc_sid);
+    type_T	    *type;
+    int		    called_emsg_before = called_emsg;
+    typval_T	    init_tv;
+
+    if (eap->cmdidx == CMD_final || eap->cmdidx == CMD_const)
+    {
+	if (eap->cmdidx == CMD_final)
+	    emsg(_(e_final_requires_a_value));
+	else
+	    emsg(_(e_const_requires_a_value));
+	return arg + STRLEN(arg);
+    }
+
+    // Check for valid starting character.
+    if (!eval_isnamec1(*arg))
+    {
+	semsg(_(e_invarg2), arg);
+	return arg + STRLEN(arg);
+    }
+
+    for (p = arg + 1; *p != NUL && eval_isnamec(*p); MB_PTR_ADV(p))
+	if (*p == ':' && (VIM_ISWHITE(p[1]) || p != arg + 1))
+	    break;
+
+    if (*p != ':')
+    {
+	emsg(_(e_type_or_initialization_required));
+	return arg + STRLEN(arg);
+    }
+    if (!VIM_ISWHITE(p[1]))
+    {
+	semsg(_(e_white_space_required_after_str), ":");
+	return arg + STRLEN(arg);
+    }
+    name = vim_strnsave(arg, p - arg);
+
+    // parse type
+    p = skipwhite(p + 1);
+    type = parse_type(&p, &si->sn_type_list);
+    if (called_emsg != called_emsg_before)
+    {
+	vim_free(name);
+	return p;
+    }
+
+    // Create the variable with 0/NULL value.
+    CLEAR_FIELD(init_tv);
+    if (type->tt_type == VAR_ANY)
+	// A variable of type "any" is not possible, just use zero instead
+	init_tv.v_type = VAR_NUMBER;
+    else
+	init_tv.v_type = type->tt_type;
+    set_var_const(name, type, &init_tv, FALSE, 0);
+
+    vim_free(name);
+    return p;
+}
+
+/*
+ * Check if the type of script variable "dest" allows assigning "value".
+ * If needed convert "value" to a bool.
+ */
+    int
+check_script_var_type(typval_T *dest, typval_T *value, char_u *name)
+{
+    scriptitem_T    *si = SCRIPT_ITEM(current_sctx.sc_sid);
+    int		    idx;
+
+    if (si->sn_version != SCRIPT_VERSION_VIM9)
+	// legacy script doesn't store variable types
+	return OK;
+
+    // Find the svar_T in sn_var_vals.
+    for (idx = 0; idx < si->sn_var_vals.ga_len; ++idx)
+    {
+	svar_T    *sv = ((svar_T *)si->sn_var_vals.ga_data) + idx;
+
+	if (sv->sv_tv == dest)
+	{
+	    int	    ret;
+
+	    if (sv->sv_const)
+	    {
+		semsg(_(e_readonlyvar), name);
+		return FAIL;
+	    }
+	    ret = check_typval_type(sv->sv_type, value, 0);
+	    if (ret == OK && need_convert_to_bool(sv->sv_type, value))
+	    {
+		int	val = tv2bool(value);
+
+		clear_tv(value);
+		value->v_type = VAR_BOOL;
+		value->v_lock = 0;
+		value->vval.v_number = val ? VVAL_TRUE : VVAL_FALSE;
+	    }
+	    return ret;
+	}
+    }
+    iemsg("check_script_var_type(): not found");
+    return OK; // not really
 }
 
 #endif // FEAT_EVAL

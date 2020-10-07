@@ -461,7 +461,7 @@ get_emsg_source(void)
 
     if (SOURCING_NAME != NULL && other_sourcing_name())
     {
-	char_u	    *sname = estack_sfile();
+	char_u	    *sname = estack_sfile(ESTACK_NONE);
 	char_u	    *tofree = sname;
 
 	if (sname == NULL)
@@ -654,6 +654,15 @@ emsg_core(char_u *s)
 	    return TRUE;
 	}
 
+	if (emsg_assert_fails_used && emsg_assert_fails_msg == NULL)
+	{
+	    emsg_assert_fails_msg = vim_strsave(s);
+	    emsg_assert_fails_lnum = SOURCING_LNUM;
+	    vim_free(emsg_assert_fails_context);
+	    emsg_assert_fails_context = vim_strsave(
+			 SOURCING_NAME == NULL ? (char_u *)"" : SOURCING_NAME);
+	}
+
 	// set "v:errmsg", also when using ":silent! cmd"
 	set_vim_var_string(VV_ERRMSG, s, -1);
 #endif
@@ -838,6 +847,16 @@ internal_error(char *where)
     siemsg(_(e_intern2), where);
 }
 
+/*
+ * Like internal_error() but do not call abort(), to avoid tests using
+ * test_unknown() and test_void() causing Vim to exit.
+ */
+    void
+internal_error_no_abort(char *where)
+{
+     semsg(_(e_intern2), where);
+}
+
 // emsg3() and emsgn() are in misc2.c to avoid warnings for the prototypes.
 
     void
@@ -855,6 +874,7 @@ emsg_namelen(char *msg, char_u *name, int len)
     char_u *copy = vim_strnsave((char_u *)name, len);
 
     semsg(msg, copy == NULL ? "NULL" : (char *)copy);
+    vim_free(copy);
 }
 
 /*
@@ -1024,7 +1044,11 @@ ex_messages(exarg_T *eap)
 
     if (p == first_msg_hist)
     {
+#ifdef FEAT_MULTI_LANG
+	s = get_mess_lang();
+#else
 	s = mch_getenv((char_u *)"LANG");
+#endif
 	if (s != NULL && *s != NUL)
 	    // The next comment is extracted by xgettext and put in po file for
 	    // translators to read.
@@ -1248,7 +1272,7 @@ wait_return(int redraw)
 	{
 	    // Put the character back in the typeahead buffer.  Don't use the
 	    // stuff buffer, because lmaps wouldn't work.
-	    ins_char_typebuf(c);
+	    ins_char_typebuf(vgetc_char, vgetc_mod_mask);
 	    do_redraw = TRUE;	    // need a redraw even though there is
 				    // typeahead
 	}
@@ -1742,7 +1766,7 @@ str2special(
 	// For multi-byte characters check for an illegal byte.
 	if (has_mbyte && MB_BYTE2LEN(*str) > len)
 	{
-	    transchar_nonprint(buf, c);
+	    transchar_nonprint(curbuf, buf, c);
 	    *sp = str + 1;
 	    return buf;
 	}
@@ -3642,6 +3666,7 @@ do_dialog(
     char_u	*hotkeys;
     int		c;
     int		i;
+    tmode_T	save_tmode;
 
 #ifndef NO_CONSOLE
     // Don't output anything in silent mode ("ex -s")
@@ -3673,6 +3698,10 @@ do_dialog(
     State = CONFIRM;
     setmouse();
 
+    // Ensure raw mode here.
+    save_tmode = cur_tmode;
+    settmode(TMODE_RAW);
+
     /*
      * Since we wait for a keypress, don't make the
      * user press RETURN as well afterwards.
@@ -3702,7 +3731,7 @@ do_dialog(
 		if (c == ':' && ex_cmd)
 		{
 		    retval = dfltbutton;
-		    ins_char_typebuf(':');
+		    ins_char_typebuf(':', 0);
 		    break;
 		}
 
@@ -3733,6 +3762,7 @@ do_dialog(
 	vim_free(hotkeys);
     }
 
+    settmode(save_tmode);
     State = oldState;
     setmouse();
     --no_wait_return;
@@ -4717,9 +4747,13 @@ vim_vsnprintf_typval(
 			    // signed
 			    switch (length_modifier)
 			    {
-			    case '\0':
+			    case '\0': str_arg_l += sprintf(
+						 tmp + str_arg_l, f,
+						 int_arg);
+				       break;
 			    case 'h': str_arg_l += sprintf(
-						 tmp + str_arg_l, f, int_arg);
+						 tmp + str_arg_l, f,
+						 (short)int_arg);
 				      break;
 			    case 'l': str_arg_l += sprintf(
 						tmp + str_arg_l, f, long_arg);
@@ -4734,9 +4768,13 @@ vim_vsnprintf_typval(
 			    // unsigned
 			    switch (length_modifier)
 			    {
-			    case '\0':
+			    case '\0': str_arg_l += sprintf(
+						tmp + str_arg_l, f,
+						uint_arg);
+				       break;
 			    case 'h': str_arg_l += sprintf(
-						tmp + str_arg_l, f, uint_arg);
+						tmp + str_arg_l, f,
+						(unsigned short)uint_arg);
 				      break;
 			    case 'l': str_arg_l += sprintf(
 					       tmp + str_arg_l, f, ulong_arg);

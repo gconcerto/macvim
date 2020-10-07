@@ -464,7 +464,9 @@ screen_line(
     // First char of a popup window may go on top of the right half of a
     // double-wide character. Clear the left half to avoid it getting the popup
     // window background color.
-    if (coloff > 0 && ScreenLines[off_to] == 0)
+    if (coloff > 0 && ScreenLines[off_to] == 0
+		   && ScreenLinesUC[off_to - 1] != 0
+		   && (*mb_char2cells)(ScreenLinesUC[off_to - 1]) > 1)
     {
 	ScreenLines[off_to - 1] = ' ';
 	ScreenLinesUC[off_to - 1] = 0;
@@ -1160,7 +1162,7 @@ get_keymap_str(
 	curwin = wp;
 	STRCPY(buf, "b:keymap_name");	// must be writable
 	++emsg_skip;
-	s = p = eval_to_string(buf, NULL, FALSE);
+	s = p = eval_to_string(buf, FALSE);
 	--emsg_skip;
 	curbuf = old_curbuf;
 	curwin = old_curwin;
@@ -1734,6 +1736,7 @@ start_search_hl(void)
 {
     if (p_hls && !no_hlsearch)
     {
+	end_search_hl();  // just in case it wasn't called before
 	last_pat_prog(&screen_search_hl.rm);
 	screen_search_hl.attr = HL_ATTR(HLF_L);
 # ifdef FEAT_RELTIME
@@ -1881,6 +1884,19 @@ screen_start_highlight(int attr)
 		    if (aep->ae_u.cterm.bg_color)
 			term_bg_color(aep->ae_u.cterm.bg_color - 1);
 		}
+#ifdef FEAT_TERMGUICOLORS
+		if (p_tgc && aep->ae_u.cterm.ul_rgb != CTERMCOLOR)
+		{
+		    if (aep->ae_u.cterm.ul_rgb != INVALCOLOR)
+			term_ul_rgb_color(aep->ae_u.cterm.ul_rgb);
+		}
+		else
+#endif
+		if (t_colors > 1)
+		{
+		    if (aep->ae_u.cterm.ul_color)
+			term_ul_color(aep->ae_u.cterm.ul_color - 1);
+		}
 
 		if (!IS_CTERM)
 		{
@@ -1896,6 +1912,9 @@ screen_start_highlight(int attr)
 screen_stop_highlight(void)
 {
     int	    do_ME = FALSE;	    // output T_ME code
+#if defined(FEAT_VTP) && defined(FEAT_TERMGUICOLORS)
+    int	    do_ME_fg = FALSE, do_ME_bg = FALSE;
+#endif
 
     if (screen_attr != 0
 #ifdef MSWIN
@@ -1929,16 +1948,42 @@ screen_stop_highlight(void)
 #ifdef FEAT_TERMGUICOLORS
 			    p_tgc && aep->ae_u.cterm.fg_rgb != CTERMCOLOR
 				? aep->ae_u.cterm.fg_rgb != INVALCOLOR
+# ifdef FEAT_VTP
+				    ? !(do_ME_fg = TRUE) : (do_ME_fg = FALSE)
+# endif
 				:
 #endif
 				aep->ae_u.cterm.fg_color) || (
 #ifdef FEAT_TERMGUICOLORS
 			    p_tgc && aep->ae_u.cterm.bg_rgb != CTERMCOLOR
 				? aep->ae_u.cterm.bg_rgb != INVALCOLOR
+# ifdef FEAT_VTP
+				    ? !(do_ME_bg = TRUE) : (do_ME_bg = FALSE)
+# endif
 				:
 #endif
 				aep->ae_u.cterm.bg_color)))
 			do_ME = TRUE;
+#if defined(FEAT_VTP) && defined(FEAT_TERMGUICOLORS)
+		    if (use_vtp())
+		    {
+			if (do_ME_fg && do_ME_bg)
+			    do_ME = TRUE;
+
+			// FG and BG cannot be separated in T_ME, which is not
+			// efficient.
+			if (!do_ME && do_ME_fg)
+			    out_str((char_u *)"\033|39m"); // restore FG
+			if (!do_ME && do_ME_bg)
+			    out_str((char_u *)"\033|49m"); // restore BG
+		    }
+		    else
+		    {
+			// Process FG and BG at once.
+			if (!do_ME)
+			    do_ME = do_ME_fg | do_ME_bg;
+		    }
+#endif
 		}
 		else
 		{
@@ -2007,6 +2052,8 @@ screen_stop_highlight(void)
 		    term_fg_rgb_color(cterm_normal_fg_gui_color);
 		if (cterm_normal_bg_gui_color != INVALCOLOR)
 		    term_bg_rgb_color(cterm_normal_bg_gui_color);
+		if (cterm_normal_ul_gui_color != INVALCOLOR)
+		    term_ul_rgb_color(cterm_normal_ul_gui_color);
 	    }
 	    else
 #endif
@@ -2018,6 +2065,8 @@ screen_stop_highlight(void)
 			term_fg_color(cterm_normal_fg_color - 1);
 		    if (cterm_normal_bg_color != 0)
 			term_bg_color(cterm_normal_bg_color - 1);
+		    if (cterm_normal_ul_color != 0)
+			term_ul_color(cterm_normal_ul_color - 1);
 		    if (cterm_normal_fg_bold)
 			out_str(T_MD);
 		}
@@ -2590,6 +2639,10 @@ retry:
 
     win_new_shellsize();    // fit the windows in the new sized shell
 
+#ifdef FEAT_GUI_HAIKU
+    vim_lock_screen();  // be safe, put it here
+#endif
+
     comp_col();		// recompute columns for shown command and ruler
 
     /*
@@ -2609,11 +2662,11 @@ retry:
 	win_free_lsize(aucmd_win);
 #ifdef FEAT_PROP_POPUP
     // global popup windows
-    for (wp = first_popupwin; wp != NULL; wp = wp->w_next)
+    FOR_ALL_POPUPWINS(wp)
 	win_free_lsize(wp);
     // tab-local popup windows
     FOR_ALL_TABPAGES(tp)
-	for (wp = tp->tp_first_popupwin; wp != NULL; wp = wp->w_next)
+	FOR_ALL_POPUPWINS_IN_TAB(tp, wp)
 	    win_free_lsize(wp);
 #endif
 
@@ -2651,7 +2704,7 @@ retry:
 	outofmem = TRUE;
 #ifdef FEAT_PROP_POPUP
     // global popup windows
-    for (wp = first_popupwin; wp != NULL; wp = wp->w_next)
+    FOR_ALL_POPUPWINS(wp)
 	if (win_alloc_lines(wp) == FAIL)
 	{
 	    outofmem = TRUE;
@@ -2659,7 +2712,7 @@ retry:
 	}
     // tab-local popup windows
     FOR_ALL_TABPAGES(tp)
-	for (wp = tp->tp_first_popupwin; wp != NULL; wp = wp->w_next)
+	FOR_ALL_POPUPWINS_IN_TAB(tp, wp)
 	    if (win_alloc_lines(wp) == FAIL)
 	    {
 		outofmem = TRUE;
@@ -2825,11 +2878,10 @@ give_up:
 	    && ScreenLines != NULL
 	    && old_Rows != Rows)
     {
-	(void)gui_redraw_block(0, 0, (int)Rows - 1, (int)Columns - 1, 0);
-	/*
-	 * Adjust the position of the cursor, for when executing an external
-	 * command.
-	 */
+	gui_redraw_block(0, 0, (int)Rows - 1, (int)Columns - 1, 0);
+
+	// Adjust the position of the cursor, for when executing an external
+	// command.
 	if (msg_row >= Rows)		// Rows got smaller
 	    msg_row = Rows - 1;		// put cursor at last row
 	else if (Rows > old_Rows)	// Rows got bigger
@@ -2839,6 +2891,10 @@ give_up:
     }
 #endif
     clear_TabPageIdxs();
+
+#ifdef FEAT_GUI_HAIKU
+    vim_unlock_screen();
+#endif
 
     entered = FALSE;
     --RedrawingDisabled;
@@ -2966,6 +3022,16 @@ lineclear(unsigned off, int width, int attr)
 lineinvalid(unsigned off, int width)
 {
     (void)vim_memset(ScreenAttrs + off, -1, (size_t)width * sizeof(sattr_T));
+}
+
+/*
+ * To be called when characters were sent to the terminal directly, outputting
+ * test on "screen_lnum".
+ */
+    void
+line_was_clobbered(int screen_lnum)
+{
+    lineinvalid(LineOffset[screen_lnum], (int)Columns);
 }
 
 /*
@@ -3687,6 +3753,10 @@ screen_ins_lines(
 	clip_scroll_selection(-line_count);
 #endif
 
+#ifdef FEAT_GUI_HAIKU
+    vim_lock_screen();
+#endif
+
 #ifdef FEAT_GUI
     // Don't update the GUI cursor here, ScreenLines[] is invalid until the
     // scrolling is actually carried out.
@@ -3740,6 +3810,10 @@ screen_ins_lines(
 		lineinvalid(temp, (int)Columns);
 	}
     }
+
+#ifdef FEAT_GUI_HAIKU
+    vim_unlock_screen();
+#endif
 
     screen_stop_highlight();
     windgoto(cursor_row, cursor_col);
@@ -3864,19 +3938,6 @@ screen_del_lines(
 	type = USE_REDRAW;
     else if (can_clear(T_CD) && result_empty)
 	type = USE_T_CD;
-#if defined(__BEOS__) && defined(BEOS_DR8)
-    /*
-     * USE_NL does not seem to work in Terminal of DR8 so we set T_DB="" in
-     * its internal termcap... this works okay for tests which test *T_DB !=
-     * NUL.  It has the disadvantage that the user cannot use any :set t_*
-     * command to get T_DB (back) to empty_option, only :set term=... will do
-     * the trick...
-     * Anyway, this hack will hopefully go away with the next OS release.
-     * (Olaf Seibert)
-     */
-    else if (row == 0 && T_DB == empty_option
-					&& (line_count == 1 || *T_CDL == NUL))
-#else
     else if (row == 0 && (
 #ifndef AMIGA
 	// On the Amiga, somehow '\n' on the last line doesn't always scroll
@@ -3884,7 +3945,6 @@ screen_del_lines(
 			    line_count == 1 ||
 #endif
 						*T_CDL == NUL))
-#endif
 	type = USE_NL;
     else if (*T_CDL != NUL && line_count > 1 && can_delete)
 	type = USE_T_CDL;
@@ -3905,6 +3965,10 @@ screen_del_lines(
 	clip_clear_selection(&clip_star);
     else
 	clip_scroll_selection(line_count);
+#endif
+
+#ifdef FEAT_GUI_HAIKU
+    vim_lock_screen();
 #endif
 
 #ifdef FEAT_GUI
@@ -3968,6 +4032,10 @@ screen_del_lines(
 		lineinvalid(temp, (int)Columns);
 	}
     }
+
+#ifdef FEAT_GUI_HAIKU
+    vim_unlock_screen();
+#endif
 
     if (screen_attr != clear_attr)
 	screen_stop_highlight();

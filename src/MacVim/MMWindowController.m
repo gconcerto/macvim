@@ -127,6 +127,8 @@
 
 - (id)initWithVimController:(MMVimController *)controller
 {
+    backgroundDark = NO;
+    
     unsigned styleMask = NSWindowStyleMaskTitled | NSWindowStyleMaskClosable
             | NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable
             | NSWindowStyleMaskUnifiedTitleAndToolbar
@@ -148,12 +150,6 @@
                         backing:NSBackingStoreBuffered
                           defer:YES];
     [win autorelease];
-    
-    if ([[NSUserDefaults standardUserDefaults]
-         boolForKey:MMTitlebarAppearsTransparentKey]) {
-        // Transparent title bar setting
-        win.titlebarAppearsTransparent = true;
-    }
 
     self = [super initWithWindow:win];
     if (!self) return nil;
@@ -162,6 +158,8 @@
 
     vimController = controller;
     decoratedWindow = [win retain];
+    
+    [self refreshApperanceMode];
 
     // Window cascading is handled by MMAppController.
     [self setShouldCascadeWindows:NO];
@@ -479,6 +477,17 @@
 
 - (void)setTitle:(NSString *)title
 {
+    // Save the original title, if we haven't already.
+    [lastSetTitle release];
+    lastSetTitle = [title retain];
+    
+    // While in live resize the window title displays the dimensions of the
+    // window so don't clobber this with the new title. We have already set
+    // lastSetTitle above so once live resize is done we will set it back.
+    if ([vimView inLiveResize]) {
+        return;
+    }
+
     if (!title)
         return;
 
@@ -504,6 +513,13 @@
 
     [decoratedWindow setRepresentedFilename:filename];
     [fullScreenWindow setRepresentedFilename:filename];
+
+    if ([[NSUserDefaults standardUserDefaults] boolForKey:MMTitlebarAppearsTransparentKey]) {
+        // Remove the draggable file icon in the title bar for a clean look
+        // when we are in transparent titlebar mode.
+        [[decoratedWindow standardWindowButton:NSWindowDocumentIconButton] setImage: nil];
+        [[fullScreenWindow standardWindowButton:NSWindowDocumentIconButton] setImage: nil];
+    }
 }
 
 - (void)setToolbar:(NSToolbar *)theToolbar
@@ -553,6 +569,78 @@
                     identifier:(int32_t)ident
 {
     [vimView setScrollbarThumbValue:val proportion:prop identifier:ident];
+}
+
+- (void)setBackgroundOption:(int)dark
+{
+    backgroundDark = dark;
+    if ([[NSUserDefaults standardUserDefaults]
+         integerForKey:MMAppearanceModeSelectionKey] == MMAppearanceModeSelectionBackgroundOption)
+    {
+        [self refreshApperanceMode];
+    }
+}
+
+- (void)refreshApperanceMode
+{
+    // This function calculates what apperance mode (light vs dark mode and
+    // titlebar settings) to use for this window, depending on what the user
+    // has selected as a preference.
+    
+    // Transparent title bar setting
+    decoratedWindow.titlebarAppearsTransparent = [[NSUserDefaults standardUserDefaults]
+                                                  boolForKey:MMTitlebarAppearsTransparentKey];
+    
+    // No title bar setting
+    if ([[NSUserDefaults standardUserDefaults]
+            boolForKey:MMNoTitleBarWindowKey]) {
+        [decoratedWindow setStyleMask:([decoratedWindow styleMask] & ~NSWindowStyleMaskTitled)];
+    } else {
+        [decoratedWindow setStyleMask:([decoratedWindow styleMask] | NSWindowStyleMaskTitled)];
+    }
+
+    // Title may have been lost if we hid the title-bar. Reset it.
+    [self setTitle:lastSetTitle];
+
+    // Dark mode only works on 10.14+ because that's when dark mode was
+    // introduced.
+#if MAC_OS_X_VERSION_MAX_ALLOWED >= MAC_OS_X_VERSION_10_14
+    if (@available(macos 10.14, *)) {
+        NSAppearance* desiredAppearance;
+        switch ([[NSUserDefaults standardUserDefaults] integerForKey:MMAppearanceModeSelectionKey])
+        {
+            case MMAppearanceModeSelectionLight:
+            {
+                desiredAppearance = [NSAppearance appearanceNamed: NSAppearanceNameAqua];
+                break;
+            }
+            case MMAppearanceModeSelectionDark:
+            {
+                desiredAppearance = [NSAppearance appearanceNamed: NSAppearanceNameDarkAqua];
+                break;
+            }
+            case MMAppearanceModeSelectionBackgroundOption:
+            {
+                if (backgroundDark) {
+                    desiredAppearance = [NSAppearance appearanceNamed: NSAppearanceNameDarkAqua];
+                } else {
+                    desiredAppearance = [NSAppearance appearanceNamed: NSAppearanceNameAqua];
+                }
+                break;
+            }
+            case MMAppearanceModeSelectionAuto:
+            default:
+            {
+                // Use the system appearance. This will also auto-switch when OS changes mode.
+                desiredAppearance = nil;
+                break;
+            }
+        }
+        
+        decoratedWindow.appearance = desiredAppearance;
+        fullScreenWindow.appearance = desiredAppearance;
+    }
+#endif
 }
 
 - (void)setDefaultColorsBackground:(NSColor *)back foreground:(NSColor *)fore
@@ -759,11 +847,6 @@
 {
     if (!setupDone) return;
 
-    // Save the original title, if we haven't already.
-    if (lastSetTitle == nil) {
-        lastSetTitle = [[decoratedWindow title] retain];
-    }
-
     // NOTE: During live resize Cocoa goes into "event tracking mode".  We have
     // to add the backend connection to this mode in order for resize messages
     // from Vim to reach MacVim.  We do not wish to always listen to requests
@@ -787,8 +870,6 @@
     // If we saved the original title while resizing, restore it.
     if (lastSetTitle != nil) {
         [decoratedWindow setTitle:lastSetTitle];
-        [lastSetTitle release];
-        lastSetTitle = nil;
     }
 
     // If we are in the middle of rapid resize (e.g. double-clicking on the border/corner
@@ -1002,7 +1083,7 @@
 #if MAC_OS_X_VERSION_MAX_ALLOWED >= MAC_OS_X_VERSION_10_12_2
 - (IBAction)vimTouchbarItemAction:(id)sender
 {
-    NSArray *desc = [NSArray arrayWithObjects:@"TouchBar", [sender title], nil];
+    NSArray *desc = [sender desc];
     NSDictionary *attrs = [NSDictionary dictionaryWithObject:desc
                                                       forKey:@"descriptor"];
     [vimController sendMessage:ExecuteMenuMsgID data:[attrs dictionaryAsData]];
@@ -1338,6 +1419,11 @@
         // full-screen using :fullscreen option (including Ctrl-Cmd-f).
         [vimController sendMessage:BackingPropertiesChangedMsgID data:nil];
     }
+
+    // Sometimes full screen will de-focus the text view. This seems to happen
+    // when titlebar is configured as hidden. Simply re-assert it to make sure
+    // text is still focused.
+    [decoratedWindow makeFirstResponder:[vimView textView]];
 }
 
 - (void)windowDidFailToEnterFullScreen:(NSWindow *)window
@@ -1355,6 +1441,11 @@
     [[vimView tabBarControl] setStyleNamed:tabBarStyle];
     [self updateTablineSeparator];
     [window setFrame:preFullScreenFrame display:YES];
+
+    // Sometimes full screen will de-focus the text view. This seems to happen
+    // when titlebar is configured as hidden. Simply re-assert it to make sure
+    // text is still focused.
+    [decoratedWindow makeFirstResponder:[vimView textView]];
 }
 
 - (NSArray *)customWindowsToExitFullScreenForWindow:(NSWindow *)window
@@ -1419,6 +1510,11 @@
     }
 
     [self updateTablineSeparator];
+
+    // Sometimes full screen will de-focus the text view. This seems to happen
+    // when titlebar is configured as hidden. Simply re-assert it to make sure
+    // text is still focused.
+    [decoratedWindow makeFirstResponder:[vimView textView]];
 }
 
 - (void)windowDidFailToExitFullScreen:(NSWindow *)window
@@ -1434,6 +1530,11 @@
     [[vimView tabBarControl] setStyleNamed:tabBarStyle];
     [self updateTablineSeparator];
     [self maximizeWindow:fullScreenOptions];
+
+    // Sometimes full screen will de-focus the text view. This seems to happen
+    // when titlebar is configured as hidden. Simply re-assert it to make sure
+    // text is still focused.
+    [decoratedWindow makeFirstResponder:[vimView textView]];
 }
 
 #endif // (MAC_OS_X_VERSION_MAX_ALLOWED >= MAC_OS_X_VERSION_10_7)

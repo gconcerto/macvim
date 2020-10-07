@@ -98,9 +98,9 @@ menutrans Toggle\ Line\ &Numbering<Tab>:set\ nu!	Activar/Desactivar\ &numeração\
 menutrans Toggle\ &List\ Mode<Tab>:set\ list!		Activar/Desactivar\ modo\ &list<Tab>:set\ list!
 menutrans Toggle\ Line\ &Wrap<Tab>:set\ wrap!		Activar/Desactivar\ &quebra\ de\ linhas<Tab>:set\ wrap!
 menutrans Toggle\ W&rap\ at\ word<Tab>:set\ lbr!	Activar/Desactivar\ quebra\ na\ &palavra<Tab>:set\ lbr!
-menutrans Toggle\ &expand-tab<Tab>:set\ et!		Activar/Desactivar\ expansão de tabs<Tab>:set\ et!
+menutrans Toggle\ &expand-tab<Tab>:set\ et!		Activar/Desactivar\ expansão\ de\ tabs<Tab>:set\ et!
 menutrans Toggle\ &auto-indent<Tab>:set\ ai!		Activar/Desactivar\ &auto-indentação<Tab>:set\ ai!
-menutrans Toggle\ &C-indenting<Tab>:set\ cin!		Activar/Desactivar\ indentação estilo &C<Tab>:set\ cin!
+menutrans Toggle\ &C-indenting<Tab>:set\ cin!		Activar/Desactivar\ indentação\ estilo\ &C<Tab>:set\ cin!
 
 " other options
 menutrans &Shiftwidth			Largura\ da\ &indentação
@@ -264,6 +264,9 @@ menutrans &Convert\ to\ HTML		&Converter\ para\ HTML
 
 " Find Help dialog text
 let g:menutrans_help_dialog = "Digite um comando ou palavra para obter ajuda;\n\nAnteponha i_ para comandos de entrada (ex.: i_CTRL-X)\nAnteponha c_ para comandos da linha de comandos (ex.: c_<Del>)\nAnteponha ` para um nome de opção (ex.: `shiftwidth`)"
+
+so $VIMRUNTIME/lang/macvim_menu/menu_pt_pt.apple.vim
+so $VIMRUNTIME/lang/macvim_menu/menu_pt_pt.custom.vim
 
 let &cpo = s:keepcpo
 unlet s:keepcpo

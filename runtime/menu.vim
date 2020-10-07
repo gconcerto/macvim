@@ -2,7 +2,7 @@
 " You can also use this as a start for your own set of menus.
 "
 " Maintainer:	Bram Moolenaar <Bram@vim.org>
-" Last Change:	2019 Dec 10
+" Last Change:	2020 Sep 28
 
 " Note that ":an" (short for ":anoremenu") is often used to make a menu work
 " in all modes and avoid side effects from mappings defined by the user.
@@ -82,10 +82,13 @@ if has("gui_macvim")
   an <silent> 9998.310 Window.Zoom		    <Nop>
   an <silent> 9998.311 Window.Zoom\ All		    <Nop>
   an <silent> 9998.320 Window.Toggle\ Full\ Screen\ Mode :set invfullscreen<CR>
+  tln <silent> 9998.320 Window.Toggle\ Full\ Screen\ Mode <C-W>:set invfullscreen<CR>
   an 9998.330 Window.-SEP1-			    <Nop>
   " TODO! Grey out if no tabs are visible.
-  an <silent> 9998.340 Window.Select\ Next\ Tab	    :tabnext<CR>
-  an <silent> 9998.350 Window.Select\ Previous\ Tab :tabprevious<CR>
+  an <silent> 9998.340 Window.Show\ Next\ Tab	    :tabnext<CR>
+  tln <silent> 9998.340 Window.Show\ Next\ Tab	<C-W>:tabnext<CR>
+  an <silent> 9998.350 Window.Show\ Previous\ Tab :tabprevious<CR>
+  tln <silent> 9998.350 Window.Show\ Previous\ Tab <C-W>:tabprevious<CR>
   an 9998.360 Window.-SEP2-			    <Nop>
   an <silent> 9998.370 Window.Bring\ All\ To\ Front <Nop>
   an <silent> 9998.380 Window.Stay\ in\ Front <Nop>
@@ -96,8 +99,16 @@ endif
 " Help menu
 if has("gui_macvim")
   an 9999.1 &Help.MacVim\ Help		    :h gui_mac<CR>
-  an <silent> 9999.2 Help.MacVim\ Website   <Nop>
+  tln 9999.1 &Help.MacVim\ Help		    <C-W>:h gui_mac<CR>
+  an <silent> 9999.2 &Help.MacVim\ Website   <Nop>
   an 9999.3 &Help.-sep0-		    <Nop>
+endif
+if has("gui_macvim")
+  " Run vimtutor in GUI mode. Need to make sure to override the PATH so we use
+  " this app instead of accidentally opening another installed Vim/MacVim.
+  an 9999.5 &Help.Vim\ Tutor       :silent !PATH="$VIM/../../bin":/usr/bin:/bin:/usr/sbin:/sbin $VIM/../../bin/vimtutor -g&<CR>
+  tln 9999.5 &Help.Vim\ Tutor      <C-W>:silent !PATH="$VIM/../../bin":/usr/bin:/bin:/usr/sbin:/sbin $VIM/../../bin/vimtutor -g&<CR>
+  an 9999.6 &Help.-sep-vim-tutor-  <Nop>
 endif
 an 9999.10 &Help.&Overview<Tab><F1>	:help<CR>
 an 9999.20 &Help.&User\ Manual		:help usr_toc<CR>
@@ -111,6 +122,21 @@ an 9999.70 &Help.O&rphans		:help kcc<CR>
 an 9999.75 &Help.-sep2-			<Nop>
 an 9999.80 &Help.&Version		:version<CR>
 an 9999.90 &Help.&About			:intro<CR>
+
+if exists(':tlmenu')
+  tlnoremenu 9999.10 &Help.&Overview<Tab><F1>		<C-W>:help<CR>
+  tlnoremenu 9999.20 &Help.&User\ Manual		<C-W>:help usr_toc<CR>
+  tlnoremenu 9999.30 &Help.&How-To\ Links		<C-W>:help how-to<CR>
+  tlnoremenu <silent> 9999.40 &Help.&Find\.\.\.		<C-W>:call <SID>Helpfind()<CR>
+  tlnoremenu 9999.45 &Help.-sep1-			<Nop>
+  tlnoremenu 9999.50 &Help.&Credits			<C-W>:help credits<CR>
+  tlnoremenu 9999.60 &Help.Co&pying			<C-W>:help copying<CR>
+  tlnoremenu 9999.70 &Help.&Sponsor/Register		<C-W>:help sponsor<CR>
+  tlnoremenu 9999.70 &Help.O&rphans			<C-W>:help kcc<CR>
+  tlnoremenu 9999.75 &Help.-sep2-			<Nop>
+  tlnoremenu 9999.80 &Help.&Version			<C-W>:version<CR>
+  tlnoremenu 9999.90 &Help.&About			<C-W>:intro<CR>
+endif
 
 fun! s:Helpfind()
   if !exists("g:menutrans_help_dialog")
@@ -130,13 +156,15 @@ endfun
 if has("gui_macvim")
   an <silent> 10.290 &File.New\ Window		    <Nop>
   an  10.295 &File.New\ Tab			    :tabnew<CR>
-  an <silent> 10.310 &File.Open\.\.\.		    <Nop>
+  tln 10.295 &File.New\ Tab			    <C-W>:tabnew<CR>
+  an <silent> 10.310 &File.Open…		    <Nop>
   an <silent> 10.325 &File.Open\ Recent		    <Nop>
   an 10.328 &File.-SEP0-			    <Nop>
   an <silent> 10.330 &File.Close\ Window<Tab>:qa    :conf qa<CR>
-  an <silent> 10.332 &File.Close		    :conf q<CR>
+  tln <silent> 10.330 &File.Close\ Window<Tab>:qa   <C-W>:conf qa<CR>
+  an <silent> 10.332 &File.Close<Tab>:q		    :conf q<CR>
   an <silent> 10.341 &File.Save\ All		    :browse conf wa<CR>
-  an 10.350 &File.Save\ As\.\.\.<Tab>:sav	    :browse confirm saveas<CR>
+  an 10.350 &File.Save\ As…<Tab>:sav	    :browse confirm saveas<CR>
 else
 endif
 if !has("gui_macvim")
@@ -155,7 +183,9 @@ if !has("gui_macvim")
 endif
 an 10.335 &File.-SEP1-				<Nop>
 an <silent> 10.340 &File.&Save<Tab>:w		:if expand("%") == ""<Bar>browse confirm w<Bar>else<Bar>confirm w<Bar>endif<CR>
-an 10.350 &File.Save\ &As\.\.\.<Tab>:sav	:browse confirm saveas<CR>
+if !has("gui_macvim")
+  an 10.350 &File.Save\ &As\.\.\.<Tab>:sav	:browse confirm saveas<CR>
+endif
 
 if has("diff")
   an 10.400 &File.-SEP2-			<Nop>
@@ -180,11 +210,11 @@ if !has("gui_macvim")
   an 10.620 &File.E&xit<Tab>:qa			:confirm qa<CR>
 endif
 
-func! <SID>SelectAll()
+func s:SelectAll()
   exe "norm! gg" . (&slm == "" ? "VG" : "gH\<C-O>G")
 endfunc
 
-func! s:FnameEscape(fname)
+func s:FnameEscape(fname)
   if exists('*fnameescape')
     return fnameescape(a:fname)
   endif
@@ -230,9 +260,9 @@ if has("win32") || has("gui_gtk") || has("gui_kde") || has("gui_motif")
   vunmenu	 &Edit.Find\ and\ Rep&lace\.\.\.
   vnoremenu <silent>	 &Edit.Find\ and\ Rep&lace\.\.\. y:promptrepl <C-R>=<SID>FixFText()<CR><CR>
 elseif has("gui_macvim")
-  an <silent> 20.410.10 &Edit.Find.Find\.\.\.	:promptfind<CR>
-  vunmenu &Edit.Find.Find\.\.\.
-  vnoremenu <silent> &Edit.Find.Find\.\.\.	y:promptfind <C-R>=<SID>FixFText()<CR><CR>
+  an <silent> 20.410.10 &Edit.Find.Find…	:promptfind<CR>
+  vunmenu &Edit.Find.Find…
+  vnoremenu <silent> &Edit.Find.Find…	y:promptfind <C-R>=<SID>FixFText()<CR><CR>
   an 20.410.20 &Edit.Find.Find\ Next			<Nop>
   an 20.410.30 &Edit.Find.Find\ Previous		<Nop>
   vnoremenu 20.410.35 &Edit.Find.Use\ Selection\ for\ Find	<Nop>
@@ -404,7 +434,7 @@ endfun
 let s:did_setup_color_schemes = 0
 
 " Setup the Edit.Color Scheme submenu
-func! s:SetupColorSchemes() abort
+func s:SetupColorSchemes() abort
   if s:did_setup_color_schemes
     return
   endif
@@ -436,7 +466,7 @@ endif
 if has("keymap")
   let s:did_setup_keymaps = 0
 
-  func! s:SetupKeymaps() abort
+  func s:SetupKeymaps() abort
     if s:did_setup_keymaps
       return
     endif
@@ -469,7 +499,6 @@ elseif has("gui_macvim")
   an 20.475.20 &Edit.Font.-SEP5-               <Nop>
   an 20.475.30 &Edit.Font.Bigger               <Nop>
   an 20.475.40 &Edit.Font.Smaller              <Nop>
-  an 20.480 &Edit.Emoji\ &&\ Symbols           <Nop>
 endif
 
 " Programming menu
@@ -508,12 +537,12 @@ if has("spell")
   an 40.335.260 &Tools.&Spelling.Set\ Language\ to\ "en_us"	:set spl=en_us spell<CR>
   an <silent> 40.335.270 &Tools.&Spelling.&Find\ More\ Languages	:call <SID>SpellLang()<CR>
 
-  let s:undo_spellang = ['aun &Tools.&Spelling.&Find\ More\ Languages']
-  func! s:SpellLang()
-    for cmd in s:undo_spellang
+  let s:undo_spelllang = ['aun &Tools.&Spelling.&Find\ More\ Languages']
+  func s:SpellLang()
+    for cmd in s:undo_spelllang
       exe "silent! " . cmd
     endfor
-    let s:undo_spellang = []
+    let s:undo_spelllang = []
 
     if &enc == "iso-8859-15"
       let enc = "latin1"
@@ -536,7 +565,7 @@ if has("spell")
 	  let found += 1
 	  let menuname = '&Tools.&Spelling.' . escape(g:menutrans_set_lang_to, "\\. \t|") . '\ "' . nm . '"'
 	  exe 'an 40.335.' . n . ' ' . menuname . ' :set spl=' . nm . ' spell<CR>'
-	  let s:undo_spellang += ['aun ' . menuname]
+	  let s:undo_spelllang += ['aun ' . menuname]
 	endif
 	let n += 10
       endfor
@@ -621,7 +650,7 @@ an <silent> 40.540 &Tools.Conve&rt\ Back<Tab>:%!xxd\ -r
 
 " Use a function to do the conversion, so that it also works with 'insertmode'
 " set.
-func! s:XxdConv()
+func s:XxdConv()
   let mod = &mod
   if has("vms")
     %!mc vim:xxd
@@ -635,7 +664,7 @@ func! s:XxdConv()
   let &mod = mod
 endfun
 
-func! s:XxdBack()
+func s:XxdBack()
   let mod = &mod
   if has("vms")
     %!mc vim:xxd -r
@@ -648,7 +677,7 @@ func! s:XxdBack()
   let &mod = mod
 endfun
 
-func! s:XxdFind()
+func s:XxdFind()
   if !exists("g:xxdprogram")
     " On the PC xxd may not be in the path but in the install directory
     if has("win32") && !executable("xxd")
@@ -665,7 +694,7 @@ endfun
 let s:did_setup_compilers = 0
 
 " Setup the Tools.Compiler submenu
-func! s:SetupCompilers() abort
+func s:SetupCompilers() abort
   if s:did_setup_compilers
     return
   endif
@@ -689,7 +718,7 @@ endif
 
 " Load ColorScheme, Compiler Setting and Keymap menus when idle.
 if !exists("do_no_lazyload_menus")
-  func! s:SetupLazyloadMenus()
+  func s:SetupLazyloadMenus()
     call s:SetupColorSchemes()
     call s:SetupCompilers()
     if has("keymap")
@@ -711,51 +740,75 @@ if !exists("no_buffers_menu")
 " startup faster.
 let s:bmenu_wait = 1
 
+" Dictionary of buffer number to name. This helps prevent problems where a
+" buffer as renamed and we didn't keep track of that.
+let s:bmenu_items = {}
+
 if !exists("bmenu_priority")
   let bmenu_priority = 60
 endif
 
-func! s:BMAdd()
+" invoked from a BufCreate or BufFilePost autocommand
+func s:BMAdd()
   if s:bmenu_wait == 0
     " when adding too many buffers, redraw in short format
     if s:bmenu_count == &menuitems && s:bmenu_short == 0
       call s:BMShow()
     else
-      call <SID>BMFilename(expand("<afile>"), expand("<abuf>"))
-      let s:bmenu_count = s:bmenu_count + 1
+      let name = expand("<afile>")
+      let num = expand("<abuf>") + 0 " add zero to convert to a number type
+      if s:BMCanAdd(name, num)
+	call <SID>BMFilename(name, num)
+	let s:bmenu_count += 1
+      endif
     endif
   endif
 endfunc
 
-func! s:BMRemove()
+" invoked from a BufDelete or BufFilePre autocommand
+func s:BMRemove()
   if s:bmenu_wait == 0
-    let name = expand("<afile>")
-    if isdirectory(name)
-      return
+    let bufnum = expand("<abuf>")
+    if s:bmenu_items->has_key(bufnum)
+      let menu_name = s:bmenu_items[bufnum]
+      exe 'silent! aun &Buffers.' . menu_name
+      let s:bmenu_count = s:bmenu_count - 1
+      unlet s:bmenu_items[bufnum]
     endif
-    let munge = <SID>BMMunge(name, expand("<abuf>"))
-
-    if s:bmenu_short == 0
-      exe 'silent! aun &Buffers.' . munge
-    else
-      exe 'silent! aun &Buffers.' . <SID>BMHash2(munge) . munge
-    endif
-    let s:bmenu_count = s:bmenu_count - 1
   endif
+endfunc
+
+" Return non-zero if buffer with number "name" / "num" is useful to add in the
+" buffer menu.
+func s:BMCanAdd(name, num)
+  " no directory or unlisted buffer
+  if isdirectory(a:name) || !buflisted(a:num)
+    return 0
+  endif
+
+  " no special buffer, such as terminal or popup
+  let buftype = getbufvar(a:num, '&buftype')
+  if buftype != '' && buftype != 'nofile' && buftype != 'nowrite'
+    return 0
+  endif
+
+  " only existing buffers
+  return bufexists(a:num)
 endfunc
 
 " Create the buffer menu (delete an existing one first).
-func! s:BMShow(...)
+func s:BMShow(...)
   let s:bmenu_wait = 1
   let s:bmenu_short = 1
   let s:bmenu_count = 0
+  let s:bmenu_items = {}
   "
   " get new priority, if exists
   if a:0 == 1
     let g:bmenu_priority = a:1
   endif
 
-  " Remove old menu, if exists; keep one entry to avoid a torn off menu to
+  " Remove old menu, if it exists; keep one entry to avoid a torn off menu to
   " disappear.  Use try/catch to avoid setting v:errmsg
   try | unmenu &Buffers | catch | endtry
   exe 'noremenu ' . g:bmenu_priority . ".1 &Buffers.Dummy l"
@@ -776,7 +829,7 @@ func! s:BMShow(...)
   " figure out how many buffers there are
   let buf = 1
   while buf <= bufnr('$')
-    if bufexists(buf) && !isdirectory(bufname(buf)) && buflisted(buf)
+    if s:BMCanAdd(bufname(buf), buf)
       let s:bmenu_count = s:bmenu_count + 1
     endif
     let buf = buf + 1
@@ -788,8 +841,9 @@ func! s:BMShow(...)
   " iterate through buffer list, adding each buffer to the menu:
   let buf = 1
   while buf <= bufnr('$')
-    if bufexists(buf) && !isdirectory(bufname(buf)) && buflisted(buf)
-      call <SID>BMFilename(bufname(buf), buf)
+    let name = bufname(buf)
+    if s:BMCanAdd(name, buf)
+      call <SID>BMFilename(name, buf)
     endif
     let buf = buf + 1
   endwhile
@@ -801,7 +855,7 @@ func! s:BMShow(...)
   aug END
 endfunc
 
-func! s:BMHash(name)
+func s:BMHash(name)
   " Make name all upper case, so that chars are between 32 and 96
   let nm = substitute(a:name, ".*", '\U\0', "")
   if has("ebcdic")
@@ -816,7 +870,7 @@ func! s:BMHash(name)
   return (char2nr(nm[0]) - sp) * 0x800000 + (char2nr(nm[1]) - sp) * 0x20000 + (char2nr(nm[2]) - sp) * 0x1000 + (char2nr(nm[3]) - sp) * 0x80 + (char2nr(nm[4]) - sp) * 0x20 + (char2nr(nm[5]) - sp)
 endfunc
 
-func! s:BMHash2(name)
+func s:BMHash2(name)
   let nm = substitute(a:name, ".", '\L\0', "")
   " Not exactly right for EBCDIC...
   if nm[0] < 'a' || nm[0] > 'z'
@@ -836,22 +890,22 @@ func! s:BMHash2(name)
   endif
 endfunc
 
-" insert a buffer name into the buffer menu:
-func! s:BMFilename(name, num)
-  if isdirectory(a:name)
-    return
-  endif
+" Insert a buffer name into the buffer menu.
+func s:BMFilename(name, num)
   let munge = <SID>BMMunge(a:name, a:num)
   let hash = <SID>BMHash(munge)
   if s:bmenu_short == 0
-    let name = 'an ' . g:bmenu_priority . '.' . hash . ' &Buffers.' . munge
+    let s:bmenu_items[a:num] = munge
+    let cmd = 'an ' . g:bmenu_priority . '.' . hash . ' &Buffers.' . munge
   else
-    let name = 'an ' . g:bmenu_priority . '.' . hash . '.' . hash . ' &Buffers.' . <SID>BMHash2(munge) . munge
+    let menu_name = <SID>BMHash2(munge) . munge
+    let s:bmenu_items[a:num] = menu_name
+    let cmd = 'an ' . g:bmenu_priority . '.' . hash . '.' . hash . ' &Buffers.' . menu_name
   endif
   " set 'cpo' to include the <CR>
   let cpo_save = &cpo
   set cpo&vim
-  exe name . ' :confirm b' . a:num . '<CR>'
+  exe cmd . ' :confirm b' . a:num . '<CR>'
   let &cpo = cpo_save
 endfunc
 
@@ -859,7 +913,7 @@ endfunc
 if !exists("g:bmenu_max_pathlen")
   let g:bmenu_max_pathlen = 35
 endif
-func! s:BMTruncName(fname)
+func s:BMTruncName(fname)
   let name = a:fname
   if g:bmenu_max_pathlen < 5
     let name = ""
@@ -879,7 +933,7 @@ func! s:BMTruncName(fname)
   return name
 endfunc
 
-func! s:BMMunge(fname, bnum)
+func s:BMMunge(fname, bnum)
   let name = a:fname
   if name == ''
     if !exists("g:menutrans_no_file")
@@ -999,7 +1053,7 @@ cnoremenu <script> <silent> 1.100 PopUp.Select\ &All	<C-U>call <SID>SelectAll()<
 if has("spell")
   " Spell suggestions in the popup menu.  Note that this will slow down the
   " appearance of the menu!
-  func! <SID>SpellPopup()
+  func s:SpellPopup()
     if exists("s:changeitem") && s:changeitem != ''
       call <SID>SpellDel()
     endif
@@ -1055,7 +1109,7 @@ if has("spell")
     call cursor(0, curcol)	" put the cursor back where it was
   endfunc
 
-  func! <SID>SpellReplace(n)
+  func s:SpellReplace(n)
     let l = getline('.')
     " Move the cursor to the start of the word.
     call spellbadword()
@@ -1063,7 +1117,7 @@ if has("spell")
 	  \ . strpart(l, col('.') + len(s:fromword) - 1))
   endfunc
 
-  func! <SID>SpellDel()
+  func s:SpellDel()
     exe "aunmenu PopUp." . s:changeitem
     exe "aunmenu PopUp." . s:additem
     exe "aunmenu PopUp." . s:ignoreitem
@@ -1247,14 +1301,14 @@ if has("gui_macvim")
   "
   macm File.New\ Window				key=<D-n> action=newWindow:
   macm File.New\ Tab				key=<D-t>
-  macm File.Open\.\.\.				key=<D-o> action=fileOpen:
+  macm File.Open…				key=<D-o> action=fileOpen:
   macm File.Open\ Tab\.\.\.<Tab>:tabnew		key=<D-T>
   macm File.Open\ Recent			action=recentFilesDummy:
   macm File.Close\ Window<Tab>:qa		key=<D-W>
   macm File.Close				key=<D-w> action=performClose:
   macm File.Save<Tab>:w				key=<D-s>
   macm File.Save\ All				key=<D-M-s> alt=YES
-  macm File.Save\ As\.\.\.<Tab>:sav		key=<D-S>
+  macm File.Save\ As…<Tab>:sav		key=<D-S>
   macm File.Print				key=<D-p>
 
   macm Edit.Undo<Tab>u				key=<D-z> action=undo:
@@ -1263,14 +1317,13 @@ if has("gui_macvim")
   macm Edit.Copy<Tab>"+y			key=<D-c> action=copy:
   macm Edit.Paste<Tab>"+gP			key=<D-v> action=paste:
   macm Edit.Select\ All<Tab>ggVG		key=<D-a> action=selectAll:
-  macm Edit.Find.Find\.\.\.			key=<D-f>
+  macm Edit.Find.Find…			key=<D-f>
   macm Edit.Find.Find\ Next			key=<D-g> action=findNext:
   macm Edit.Find.Find\ Previous			key=<D-G> action=findPrevious:
   macm Edit.Find.Use\ Selection\ for\ Find	key=<D-e> action=useSelectionForFind:
   macm Edit.Font.Show\ Fonts			action=orderFrontFontPanel:
   macm Edit.Font.Bigger				key=<D-=> action=fontSizeUp:
   macm Edit.Font.Smaller			key=<D--> action=fontSizeDown:
-  macm Edit.Emoji\ &&\ Symbols			key=<D-C-Space> action=orderFrontCharacterPalette:
 
   macm Tools.Spelling.To\ Next\ Error<Tab>]s	key=<D-;>
   macm Tools.Spelling.Suggest\ Corrections<Tab>z=   key=<D-:>
@@ -1286,8 +1339,8 @@ if has("gui_macvim")
   macm Window.Zoom		key=<D-C-z>	action=performZoom:
   macm Window.Zoom\ All		key=<D-M-C-z>	action=zoomAll:		alt=YES
   macm Window.Toggle\ Full\ Screen\ Mode	key=<D-C-f>
-  macm Window.Select\ Next\ Tab			key=<D-}>
-  macm Window.Select\ Previous\ Tab		key=<D-{>
+  macm Window.Show\ Next\ Tab			key=<D-}>
+  macm Window.Show\ Previous\ Tab		key=<D-{>
   macm Window.Bring\ All\ To\ Front		action=arrangeInFront:
   macm Window.Stay\ in\ Front 	action=stayInFront:
   macm Window.Stay\ in\ Back 	action=stayInBack:
@@ -1302,21 +1355,26 @@ if has("touchbar")
   " 1. Smart fullscreen icon that toggles between going full screen or not.
 
   if !exists("g:macvim_default_touchbar_fullscreen") || g:macvim_default_touchbar_fullscreen
-    an icon=NSTouchBarEnterFullScreenTemplate 1.10 TouchBar.EnterFullScreen :set fullscreen<CR>
+    an icon=NSTouchBarEnterFullScreenTemplate 1.20 TouchBar.EnterFullScreen :set fullscreen<CR>
+    tln icon=NSTouchBarEnterFullScreenTemplate 1.20 TouchBar.EnterFullScreen <C-W>:set fullscreen<CR>
   endif
 
   let s:touchbar_fullscreen=0
   func! s:SetupFullScreenTouchBar()
     if &fullscreen && s:touchbar_fullscreen != 1
       silent! aun TouchBar.EnterFullScreen
+      silent! tlun TouchBar.EnterFullScreen
       if !exists("g:macvim_default_touchbar_fullscreen") || g:macvim_default_touchbar_fullscreen
-        an icon=NSTouchBarExitFullScreenTemplate 1.10 TouchBar.ExitFullScreen :set nofullscreen<CR>
+        an icon=NSTouchBarExitFullScreenTemplate 1.20 TouchBar.ExitFullScreen :set nofullscreen<CR>
+        tln icon=NSTouchBarExitFullScreenTemplate 1.20 TouchBar.ExitFullScreen <C-W>:set nofullscreen<CR>
       endif
       let s:touchbar_fullscreen = 1
     elseif !&fullscreen && s:touchbar_fullscreen != 0
       silent! aun TouchBar.ExitFullScreen
+      silent! tlun TouchBar.ExitFullScreen
       if !exists("g:macvim_default_touchbar_fullscreen") || g:macvim_default_touchbar_fullscreen
-        an icon=NSTouchBarEnterFullScreenTemplate 1.10 TouchBar.EnterFullScreen :set fullscreen<CR>
+        an icon=NSTouchBarEnterFullScreenTemplate 1.20 TouchBar.EnterFullScreen :set fullscreen<CR>
+        tln icon=NSTouchBarEnterFullScreenTemplate 1.20 TouchBar.EnterFullScreen <C-W>:set fullscreen<CR>
       endif
       let s:touchbar_fullscreen = 0
     endif
@@ -1325,6 +1383,14 @@ if has("touchbar")
     au!
     au VimEnter,VimResized * call <SID>SetupFullScreenTouchBar()
   aug END
+
+  " 2. Character (i.e. emojis) picker. Only in modes where user is actively
+  " entering text.
+  if !exists("g:macvim_default_touchbar_characterpicker") || g:macvim_default_touchbar_characterpicker
+    inoremenu 1.40 TouchBar.-characterpicker- <Nop>
+    cnoremenu 1.40 TouchBar.-characterpicker- <Nop>
+    tlnoremenu 1.40 TouchBar.-characterpicker- <Nop>
+  endif
 endif
 
 " vim: set sw=2 :

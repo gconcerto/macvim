@@ -21,7 +21,7 @@ static char *(p_bo_values[]) = {"all", "backspace", "cursor", "complete",
 				 "hangul", "insertmode", "lang", "mess",
 				 "showmatch", "operator", "register", "shell",
 				 "spell", "wildmode", NULL};
-static char *(p_nf_values[]) = {"bin", "octal", "hex", "alpha", NULL};
+static char *(p_nf_values[]) = {"bin", "octal", "hex", "alpha", "unsigned", NULL};
 static char *(p_ff_values[]) = {FF_UNIX, FF_DOS, FF_MAC, NULL};
 #ifdef FEAT_CRYPT
 static char *(p_cm_values[]) = {"zip", "blowfish", "blowfish2", NULL};
@@ -68,7 +68,7 @@ static char *(p_debug_values[]) = {"msg", "throw", "beep", NULL};
 static char *(p_ead_values[]) = {"both", "ver", "hor", NULL};
 static char *(p_buftype_values[]) = {"nofile", "nowrite", "quickfix", "help", "terminal", "acwrite", "prompt", "popup", NULL};
 static char *(p_bufhidden_values[]) = {"hide", "unload", "delete", "wipe", NULL};
-static char *(p_bs_values[]) = {"indent", "eol", "start", NULL};
+static char *(p_bs_values[]) = {"indent", "eol", "start", "nostop", NULL};
 #ifdef FEAT_FOLDING
 static char *(p_fdm_values[]) = {"manual", "expr", "marker", "indent", "syntax",
 # ifdef FEAT_DIFF
@@ -248,6 +248,7 @@ check_buf_options(buf_T *buf)
     check_string_option(&buf->b_s.b_p_spc);
     check_string_option(&buf->b_s.b_p_spf);
     check_string_option(&buf->b_s.b_p_spl);
+    check_string_option(&buf->b_s.b_p_spo);
 #endif
 #ifdef FEAT_SEARCHPATH
     check_string_option(&buf->b_p_sua);
@@ -500,7 +501,7 @@ set_string_option(
     if (is_hidden_option(opt_idx))	// don't set hidden option
 	return NULL;
 
-    s = vim_strsave(value);
+    s = vim_strsave(value == NULL ? (char_u *)"" : value);
     if (s != NULL)
     {
 	varp = (char_u **)get_option_varp_scope(opt_idx,
@@ -897,6 +898,12 @@ did_set_string_option(
 		init_highlight(FALSE, FALSE);
 	    }
 #endif
+
+#ifdef FEAT_GUI_MACVIM
+	    // MacVim needs to know about background changes to optionally
+	    // change the appearance mode.
+	    gui_macvim_set_background(dark);
+#endif
 	}
 	else
 	    errmsg = e_invarg;
@@ -1161,8 +1168,11 @@ did_set_string_option(
 
 	if (STRCMP(curbuf->b_p_key, oldval) != 0)
 	    // Need to update the swapfile.
+	{
 	    ml_set_crypt_key(curbuf, oldval,
 			      *curbuf->b_p_cm == NUL ? p_cm : curbuf->b_p_cm);
+	    changed_internal();
+	}
     }
 
     else if (gvarp == &p_cm)
@@ -1434,6 +1444,9 @@ did_set_string_option(
 	}
 	if (varp == &T_BE && termcap_active)
 	{
+#ifdef FEAT_JOB_CHANNEL
+	    ch_log_output = TRUE;
+#endif
 	    if (*T_BE == NUL)
 		// When clearing t_BE we assume the user no longer wants
 		// bracketed paste, thus disable it by writing t_BD.
@@ -1705,7 +1718,7 @@ did_set_string_option(
 	int	is_spellfile = varp == &(curwin->w_s->b_p_spf);
 
 	if ((is_spellfile && !valid_spellfile(*varp))
-	    || (!is_spellfile && !valid_spellang(*varp)))
+	    || (!is_spellfile && !valid_spelllang(*varp)))
 	    errmsg = e_invarg;
 	else
 	    errmsg = did_set_spell_option(is_spellfile);
@@ -1714,6 +1727,12 @@ did_set_string_option(
     else if (varp == &(curwin->w_s->b_p_spc))
     {
 	errmsg = compile_cap_prog(curwin->w_s);
+    }
+    // 'spelloptions'
+    else if (varp == &(curwin->w_s->b_p_spo))
+    {
+	if (**varp != NUL && STRCMP("camel", *varp) != 0)
+	    errmsg = e_invarg;
     }
     // 'spellsuggest'
     else if (varp == &p_sps)
@@ -1914,7 +1933,7 @@ did_set_string_option(
     {
 	if (VIM_ISDIGIT(*p_bs))
 	{
-	    if (*p_bs > '2' || p_bs[1] != NUL)
+	    if (*p_bs > '3' || p_bs[1] != NUL)
 		errmsg = e_invarg;
 	}
 	else if (check_opt_strings(p_bs, p_bs_values, TRUE) != OK)
@@ -2026,15 +2045,14 @@ did_set_string_option(
 #endif
 
 #ifdef FEAT_FULLSCREEN
-    /* 'fuoptions' */
+    // 'fuoptions'
     else if (varp == &p_fuoptions)
     {
-        if (check_fuoptions(p_fuoptions, &fuoptions_flags, 
-                    &fuoptions_bgcolor) != OK)
+	if (check_fuoptions() != OK)
 	    errmsg = e_invarg;
     }
 #endif
-    
+
     // 'virtualedit'
     else if (varp == &p_ve)
     {
@@ -2253,8 +2271,18 @@ did_set_string_option(
     {
 	if (parse_completepopup(NULL) == FAIL)
 	    errmsg = e_invarg;
+	else
+	    popup_close_info();
     }
 # endif
+#endif
+
+#ifdef FEAT_QUICKFIX
+    else if (varp == &p_qftf)
+    {
+	if (qf_process_qftf_option() == FALSE)
+	    errmsg = e_invarg;
+    }
 #endif
 
     // Options that are a list of flags.
@@ -2413,6 +2441,11 @@ did_set_string_option(
 	    setmouse();		    // in case 'mouse' changed
     }
 
+#if defined(FEAT_LUA) || defined(PROTO)
+    if (varp == &p_rtp)
+	update_package_paths_in_lua();
+#endif
+
     if (curwin->w_curswant != MAXCOL
 		   && (get_option_flags(opt_idx) & (P_CURSWANT | P_RALL)) != 0)
 	curwin->w_set_curswant = TRUE;
@@ -2498,3 +2531,94 @@ check_ff_value(char_u *p)
 {
     return check_opt_strings(p, p_ff_values, FALSE);
 }
+
+#if defined(FEAT_FULLSCREEN) || defined(PROTO)
+/*
+ * Read the 'fuoptions' option, set fuoptions_flags and fuoptions_bgcolor.
+ */
+    int
+check_fuoptions(void)
+{
+    unsigned	new_fuoptions_flags;
+    int		new_fuoptions_bgcolor;
+    char_u	*p;
+
+    new_fuoptions_flags = 0;
+    new_fuoptions_bgcolor = 0xFF000000;
+
+    for (p = p_fuoptions; *p; ++p)
+    {
+	int i, j, k;
+
+	for (i = 0; ASCII_ISALPHA(p[i]); ++i)
+	    ;
+	if (p[i] != NUL && p[i] != ',' && p[i] != ':')
+	    return FAIL;
+	if (i == 10 && STRNCMP(p, "background", 10) == 0)
+	{
+	    if (p[i] != ':')
+		return FAIL;
+	    i++;
+	    if (p[i] == NUL)
+		return FAIL;
+	    if (p[i] == '#')
+	    {
+		// explicit color (#aarrggbb)
+		i++;
+		for (j = i; j < i + 8 && vim_isxdigit(p[j]); ++j)
+		    ;
+		if (j < i + 8)
+		    return FAIL;    // less than 8 digits
+		if (p[j] != NUL && p[j] != ',')
+		    return FAIL;
+		new_fuoptions_bgcolor = 0;
+		for (k = 0; k < 8; ++k)
+		    new_fuoptions_bgcolor = new_fuoptions_bgcolor * 16
+							   + hex2nr(p[i + k]);
+		i = j;
+		// mark bgcolor as an explicit argb color
+		new_fuoptions_flags &= ~FUOPT_BGCOLOR_HLGROUP;
+	    }
+	    else
+	    {
+		char_u hg_term; // character terminating highlight group string
+                                // in 'background' option
+
+		// highlight group name
+		for (j = i; ASCII_ISALPHA(p[j]); ++j)
+		    ;
+		if (p[j] != NUL && p[j] != ',')
+		    return FAIL;
+		hg_term = p[j];
+		p[j] = NUL;     // temporarily terminate string
+		new_fuoptions_bgcolor = syn_name2id((char_u*)(p + i));
+		p[j] = hg_term; // restore string
+		if (! new_fuoptions_bgcolor)
+		    return FAIL;
+		i = j;
+		// mark bgcolor as highlight group id
+		new_fuoptions_flags |= FUOPT_BGCOLOR_HLGROUP;
+	    }
+	}
+	else if (i == 7 && STRNCMP(p, "maxhorz", 7) == 0)
+	    new_fuoptions_flags |= FUOPT_MAXHORZ;
+	else if (i == 7 && STRNCMP(p, "maxvert", 7) == 0)
+	    new_fuoptions_flags |= FUOPT_MAXVERT;
+	else
+	    return FAIL;
+	p += i;
+	if (*p == NUL)
+	    break;
+	if (*p == ':')
+	    return FAIL;
+    }
+
+    fuoptions_flags = new_fuoptions_flags;
+    fuoptions_bgcolor = new_fuoptions_bgcolor;
+
+    // Let the GUI know, in case the background color has changed.
+    gui_mch_fuopt_update();
+
+    return OK;
+}
+#endif

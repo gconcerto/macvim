@@ -106,18 +106,18 @@ win_id2wp_tp(int id, tabpage_T **tpp)
 #ifdef FEAT_PROP_POPUP
     // popup windows are in separate lists
      FOR_ALL_TABPAGES(tp)
-	 for (wp = tp->tp_first_popupwin; wp != NULL; wp = wp->w_next)
+	 FOR_ALL_POPUPWINS_IN_TAB(tp, wp)
 	     if (wp->w_id == id)
 	     {
 		 if (tpp != NULL)
 		     *tpp = tp;
 		 return wp;
 	     }
-    for (wp = first_popupwin; wp != NULL; wp = wp->w_next)
+    FOR_ALL_POPUPWINS(wp)
 	if (wp->w_id == id)
 	{
 	    if (tpp != NULL)
-		*tpp = tp;
+		*tpp = curtab;  // any tabpage would do
 	    return wp;
 	}
 #endif
@@ -188,7 +188,7 @@ find_win_by_nr(
 	    if (wp->w_id == nr)
 		return wp;
 	// check global popup windows
-	for (wp = first_popupwin; wp != NULL; wp = wp->w_next)
+	FOR_ALL_POPUPWINS(wp)
 	    if (wp->w_id == nr)
 		return wp;
 #endif
@@ -444,8 +444,7 @@ get_tabpage_info(tabpage_T *tp, int tp_idx)
     l = list_alloc();
     if (l != NULL)
     {
-	for (wp = (tp == curtab) ? firstwin : tp->tp_firstwin;
-						   wp != NULL; wp = wp->w_next)
+	FOR_ALL_WINDOWS_IN_TAB(tp, wp)
 	    list_append_number(l, (varnumber_T)wp->w_id);
 	dict_add_list(dict, "windows", l);
     }
@@ -531,6 +530,22 @@ f_getwininfo(typval_T *argvars, typval_T *rettv)
 		return;
 	}
     }
+#ifdef FEAT_PROP_POPUP
+    if (wparg != NULL)
+    {
+	tabnr = 0;
+	FOR_ALL_TABPAGES(tp)
+	{
+	    tabnr++;
+	    FOR_ALL_POPUPWINS_IN_TAB(tp, wp)
+	    if (wp == wparg)
+		break;
+	}
+	d = get_win_info(wparg, tp == NULL ? 0 : tabnr, 0);
+	if (d != NULL)
+	    list_append_dict(rettv->vval.v_list, d);
+    }
+#endif
 }
 
 /*
@@ -617,6 +632,9 @@ f_tabpagenr(typval_T *argvars UNUSED, typval_T *rettv)
 	{
 	    if (STRCMP(arg, "$") == 0)
 		nr = tabpage_index(NULL) - 1;
+	    else if (STRCMP(arg, "#") == 0)
+		nr = valid_tabpage(lastused_tabpage) ?
+					tabpage_index(lastused_tabpage) : 0;
 	    else
 		semsg(_(e_invexpr2), arg);
 	}
@@ -810,7 +828,8 @@ f_win_splitmove(typval_T *argvars, typval_T *rettv)
     targetwin = find_win_by_nr_or_id(&argvars[1]);
 
     if (wp == NULL || targetwin == NULL || wp == targetwin
-	    || !win_valid(wp) || !win_valid(targetwin))
+	    || !win_valid(wp) || !win_valid(targetwin)
+	    || win_valid_popup(wp) || win_valid_popup(targetwin))
     {
         emsg(_(e_invalwindow));
 	rettv->vval.v_number = -1;
@@ -829,10 +848,10 @@ f_win_splitmove(typval_T *argvars, typval_T *rettv)
         }
 
         d = argvars[2].vval.v_dict;
-        if (dict_get_number(d, (char_u *)"vertical"))
+        if (dict_get_bool(d, (char_u *)"vertical", FALSE))
             flags |= WSP_VERT;
         if ((di = dict_find(d, (char_u *)"rightbelow", -1)) != NULL)
-            flags |= tv_get_number(&di->di_tv) ? WSP_BELOW : WSP_ABOVE;
+            flags |= tv_get_bool(&di->di_tv) ? WSP_BELOW : WSP_ABOVE;
         size = (int)dict_get_number(d, (char_u *)"size");
     }
 
@@ -858,13 +877,18 @@ f_win_gettype(typval_T *argvars, typval_T *rettv)
 	    return;
 	}
     }
+    if (wp == aucmd_win)
+	rettv->vval.v_string = vim_strsave((char_u *)"autocmd");
+#if defined(FEAT_QUICKFIX)
+    else if (wp->w_p_pvw)
+	rettv->vval.v_string = vim_strsave((char_u *)"preview");
+#endif
 #ifdef FEAT_PROP_POPUP
-    if (WIN_IS_POPUP(wp))
+    else if (WIN_IS_POPUP(wp))
 	rettv->vval.v_string = vim_strsave((char_u *)"popup");
-    else
 #endif
 #ifdef FEAT_CMDWIN
-    if (wp == curwin && cmdwin_type != 0)
+    else if (wp == curwin && cmdwin_type != 0)
 	rettv->vval.v_string = vim_strsave((char_u *)"command");
 #endif
 }

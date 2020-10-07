@@ -203,6 +203,7 @@ extern const char * const MMVimMsgIDStrings[];
     MSG(RemoveMenuItemMsgID) \
     MSG(EnableMenuItemMsgID) \
     MSG(ExecuteMenuMsgID) \
+    MSG(UpdateMenuItemTooltipMsgID) \
     MSG(ShowToolbarMsgID) \
     MSG(ToggleToolbarMsgID) \
     MSG(CreateScrollbarMsgID) \
@@ -264,6 +265,7 @@ extern const char * const MMVimMsgIDStrings[];
     MSG(AddToMRUMsgID) \
     MSG(BackingPropertiesChangedMsgID) \
     MSG(SetBlurRadiusMsgID) \
+    MSG(SetBackgroundOptionMsgID) \
     MSG(NotifyAppearanceChangeMsgID) \
     MSG(EnableLigaturesMsgID) \
     MSG(DisableLigaturesMsgID) \
