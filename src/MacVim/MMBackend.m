@@ -46,12 +46,6 @@
 
 static unsigned MMServerMax = 1000;
 
-#ifdef FEAT_BEVAL
-// Seconds to delay balloon evaluation after mouse event (subtracted from
-// p_bdlay so that this effectively becomes the smallest possible delay).
-NSTimeInterval MMBalloonEvalInternalDelay = 0.1;
-#endif
-
 // TODO: Move to separate file.
 static int eventModifierFlagsToVimModMask(int modifierFlags);
 static int eventModifierFlagsToVimMouseModMask(int modifierFlags);
@@ -1919,7 +1913,7 @@ extern GuiFont gui_mch_retain_font(GuiFont font);
                                                object:nil];
             [self performSelector:@selector(bevalCallback:)
                        withObject:nil
-                       afterDelay:MMBalloonEvalInternalDelay];
+                       afterDelay:p_bdlay/1000.0];
         }
 #endif
     } else if (MouseDownMsgID == msgid) {
@@ -1978,7 +1972,7 @@ extern GuiFont gui_mch_retain_font(GuiFont font);
                                                object:nil];
             [self performSelector:@selector(bevalCallback:)
                        withObject:nil
-                       afterDelay:MMBalloonEvalInternalDelay];
+                       afterDelay:p_bdlay/1000.0];
         }
 #endif
     } else if (AddInputMsgID == msgid) {
@@ -2811,7 +2805,7 @@ extern GuiFont gui_mch_retain_font(GuiFont font);
                     }
 
                     // Convert ":drop ..." to ":$tab drop ..."
-                    cmdmod.tab = numTabs + 1;
+                    cmdmod.cmod_tab = numTabs + 1;
                 }
 
                 if (splitInNewTab) {
@@ -2842,7 +2836,7 @@ extern GuiFont gui_mch_retain_font(GuiFont font);
                     vim_memset(&cmdmod, 0, sizeof(cmdmod));
                     if (WIN_VER == layout) {
                         // Convert :sall to :vert sall
-                        cmdmod.split |= WSP_VERT;
+                        cmdmod.cmod_split |= WSP_VERT;
                     }
 
                     char_u sallArg[] = "";
@@ -2915,7 +2909,7 @@ extern GuiFont gui_mch_retain_font(GuiFont font);
                         FOR_ALL_TABPAGES(tp) {
                             numTabs += 1;
                         }
-                        cmdmod.tab = numTabs + 1;
+                        cmdmod.cmod_tab = numTabs + 1;
                     }
                 } else {
                     // (The :drop command will split if there is a modified
@@ -3073,7 +3067,7 @@ extern GuiFont gui_mch_retain_font(GuiFont font);
             ea.cmdidx = CMD_sbuffer;
             ea.cmd = sbufferCmd;
 
-            cmdmod.split |= WSP_VERT;
+            cmdmod.cmod_split |= WSP_VERT;
         } else if (WIN_TABS == layout) {
             // :tab sb <filename>
             ea.cmdidx = CMD_sbuffer;
@@ -3084,7 +3078,7 @@ extern GuiFont gui_mch_retain_font(GuiFont font);
             FOR_ALL_TABPAGES(tp) {
                 numTabs += 1;
             }
-            cmdmod.tab = numTabs + 1;
+            cmdmod.cmod_tab = numTabs + 1;
         } else {
             // :b <filename>
             ea.cmdidx = CMD_buffer;
@@ -3360,14 +3354,14 @@ extern GuiFont gui_mch_retain_font(GuiFont font);
         // variable.  (The reason we need to know is due to how the Cocoa tool
         // tips work: if there is no tool tip we must set it to nil explicitly
         // or it might never go away.)
-        [self setLastToolTip:nil];
-
         (*balloonEval->msgCB)(balloonEval, 0);
 
         [self queueMessage:SetTooltipMsgID properties:
             [NSDictionary dictionaryWithObject:(lastToolTip ? lastToolTip : @"")
                                         forKey:@"toolTip"]];
         [self flushQueue:YES];
+
+        [self setLastToolTip:nil];
     }
 }
 #endif

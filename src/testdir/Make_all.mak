@@ -31,17 +31,21 @@ SCRIPTS_TINY_OUT = \
 # Tests for Vim9 script.
 TEST_VIM9 = \
 	test_vim9_assign \
+	test_vim9_builtin \
 	test_vim9_cmd \
 	test_vim9_disassemble \
 	test_vim9_expr \
+	test_vim9_fails \
 	test_vim9_func \
 	test_vim9_script
 
 TEST_VIM9_RES = \
 	test_vim9_assign.res \
+	test_vim9_builtin.res \
 	test_vim9_cmd.res \
 	test_vim9_disassemble.res \
 	test_vim9_expr.res \
+	test_vim9_fails.res \
 	test_vim9_func.res \
 	test_vim9_script.res
 
@@ -243,6 +247,7 @@ NEW_TESTS = \
 	test_shortpathname \
 	test_signals \
 	test_signs \
+	test_sleep \
 	test_smartindent \
 	test_sort \
 	test_sound \
@@ -413,6 +418,7 @@ NEW_TESTS_RES = \
 	test_listdict.res \
 	test_listener.res \
 	test_listlbr.res \
+	test_listlbr_utf8.res \
 	test_lua.res \
 	test_macvim.res \
 	test_makeencoding.res \
@@ -455,6 +461,7 @@ NEW_TESTS_RES = \
 	test_quickfix.res \
 	test_quotestar.res \
 	test_random.res \
+	test_recover.res \
 	test_regex_char_classes.res \
 	test_registers.res \
 	test_rename.res \
@@ -469,6 +476,7 @@ NEW_TESTS_RES = \
 	test_shortpathname.res \
 	test_signals.res \
 	test_signs.res \
+	test_sleep.res \
 	test_smartindent.res \
 	test_sort.res \
 	test_sound.res \

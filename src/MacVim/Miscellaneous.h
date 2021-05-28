@@ -32,7 +32,8 @@ extern NSString *MMBaselineOffsetKey;
 extern NSString *MMTranslateCtrlClickKey;
 extern NSString *MMTopLeftPointKey;
 extern NSString *MMOpenInCurrentWindowKey;
-extern NSString *MMNoFontSubstitutionKey;
+extern NSString *MMNoFontSubstitutionKey; // Deprecated: Non-CoreText renderer
+extern NSString *MMFontPreserveLineSpacingKey;
 extern NSString *MMAppearanceModeSelectionKey;
 extern NSString *MMNoTitleBarWindowKey;
 extern NSString *MMTitlebarAppearsTransparentKey;
@@ -55,8 +56,7 @@ extern NSString *MMSuppressTerminationAlertKey;
 extern NSString *MMNativeFullScreenKey;
 extern NSString *MMUseMouseTimeKey;
 extern NSString *MMFullScreenFadeTimeKey;
-extern NSString *MMUseCGLayerAlwaysKey;
-extern NSString *MMBufferedDrawingKey;
+extern NSString *MMNonNativeFullScreenShowMenuKey;
 
 
 // Enum for MMUntitledWindowKey
@@ -168,6 +168,5 @@ NSArray *normalizeFilenames(NSArray *filenames);
 
 BOOL shouldUseYosemiteTabBarStyle();
 BOOL shouldUseMojaveTabBarStyle();
-BOOL shouldUseBufferedDrawing();
 
 int getCurrentAppearance(NSAppearance *appearance);

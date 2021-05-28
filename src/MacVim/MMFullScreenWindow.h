@@ -25,8 +25,8 @@
     // These are only valid in full-screen mode and store pre-fu vim size 
     int         nonFuRows, nonFuColumns;
 
-    // These store the size vim had right after entering fu mode
-    int         startFuRows, startFuColumns;
+    /// The non-full-screen size of the Vim view. Used for non-maxvert/maxhorz options.
+    NSSize      nonFuVimViewSize;
 
     // This stores the contents of fuoptions_flags at fu start time
     int         startFuFlags;
@@ -34,9 +34,6 @@
     // Controls the speed of the fade in and out.
     double      fadeTime;
     double      fadeReservationTime;
-    
-    // For pre-10.14 we manually sets CGLayer mode, so need to remember the original state
-    BOOL        origCGLayerEnabled;
 }
 
 - (MMFullScreenWindow *)initWithWindow:(NSWindow *)t view:(MMVimView *)v
@@ -44,7 +41,7 @@
 - (void)setOptions:(int)opt;
 - (void)enterFullScreen;
 - (void)leaveFullScreen;
-- (void)centerView;
+- (NSRect)getDesiredFrame;
 
 - (BOOL)canBecomeKeyWindow;
 - (BOOL)canBecomeMainWindow;

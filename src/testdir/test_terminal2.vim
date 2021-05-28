@@ -246,6 +246,10 @@ func Test_terminal_resize()
   set statusline=x
   terminal
   call assert_equal(2, winnr('$'))
+  let buf = bufnr()
+
+  " Wait for the shell to display a prompt
+  call WaitForAssert({-> assert_notequal('', term_getline(buf, 1))})
 
   " Fill the terminal with text.
   if has('win32')
@@ -253,6 +257,9 @@ func Test_terminal_resize()
   else
     call feedkeys("ls\<CR>", 'xt')
   endif
+  " Wait for some output
+  call WaitForAssert({-> assert_notequal('', term_getline(buf, 3))})
+
   " Go to Terminal-Normal mode for a moment.
   call feedkeys("\<C-W>N", 'xt')
   " Open a new window
@@ -263,6 +270,7 @@ func Test_terminal_resize()
   close
   call assert_equal(2, winnr('$'))
   call feedkeys("exit\<CR>", 'xt')
+  call TermWait(buf)
   set statusline&
 endfunc
 
@@ -287,7 +295,7 @@ func Test_zz1_terminal_in_gui()
   unlet g:job
 endfunc
 
-" TODO: reenable when this no longer hangs on Travis
+" TODO: re-enable when this no longer hangs on Travis
 "func Test_zz2_terminal_guioptions_bang()
 "  CheckGui
 "  set guioptions+=!
@@ -338,7 +346,7 @@ func Test_terminal_switch_mode()
   let bnr = bufnr('$')
   call WaitForAssert({-> assert_equal('running', term_getstatus(bnr))})
   " In the GUI the first switch sometimes doesn't work.  Switch twice to avoid
-  " flakyness.
+  " flakiness.
   call feedkeys("\<C-W>N", 'xt')
   call feedkeys("A", 'xt')
   call WaitForAssert({-> assert_equal('running', term_getstatus(bnr))})

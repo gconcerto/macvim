@@ -299,7 +299,7 @@ func Test_let_errors()
   call assert_fails('let l[:][0] = [5]', 'E708:')
   let d = {'k' : 4}
   call assert_fails('let d.# = 5', 'E488:')
-  call assert_fails('let d.m += 5', 'E734:')
+  call assert_fails('let d.m += 5', 'E716:')
   call assert_fails('let m = d[{]', 'E15:')
   let l = [1, 2]
   call assert_fails('let l[2] = 0', 'E684:')
@@ -338,7 +338,7 @@ func Test_let_heredoc_fails()
   endfunc
   END
   call writefile(text, 'XheredocFail')
-  call assert_fails('source XheredocFail', 'E126:')
+  call assert_fails('source XheredocFail', 'E1145:')
   call delete('XheredocFail')
 
   let text =<< trim CodeEnd
@@ -347,7 +347,7 @@ func Test_let_heredoc_fails()
   endfunc
   CodeEnd
   call writefile(text, 'XheredocWrong')
-  call assert_fails('source XheredocWrong', 'E126:')
+  call assert_fails('source XheredocWrong', 'E1145:')
   call delete('XheredocWrong')
 
   let text =<< trim TEXTend

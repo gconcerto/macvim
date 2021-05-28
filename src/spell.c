@@ -3813,7 +3813,7 @@ ex_spelldump(exarg_T *eap)
 
     if (no_spell_checking(curwin))
 	return;
-    get_option_value((char_u*)"spl", &dummy, &spl, OPT_LOCAL);
+    (void)get_option_value((char_u*)"spl", &dummy, &spl, OPT_LOCAL);
 
     // Create a new empty buffer in a new window.
     do_cmdline_cmd((char_u *)"new");
@@ -4340,7 +4340,7 @@ valid_spellfile(char_u *val)
     char_u *s;
 
     for (s = val; *s != NUL; ++s)
-	if (!vim_isfilec(*s) && *s != ',')
+	if (!vim_isfilec(*s) && *s != ',' && *s != ' ')
 	    return FALSE;
     return TRUE;
 }

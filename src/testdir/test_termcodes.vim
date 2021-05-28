@@ -367,6 +367,8 @@ endfunc
 
 " Test for using the mouse to increaes the height of the cmdline window
 func Test_mouse_cmdwin_resize()
+  CheckFeature cmdwin
+
   let save_mouse = &mouse
   let save_term = &term
   let save_ttymouse = &ttymouse
@@ -851,7 +853,10 @@ func Test_term_mouse_multiple_clicks_to_visually_select()
   let save_term = &term
   let save_ttymouse = &ttymouse
   call test_override('no_query_mouse', 1)
-  set mouse=a term=xterm mousetime=200
+  
+  " 'mousetime' must be sufficiently large, or else the test is flaky when
+  " using a ssh connection with X forwarding; i.e. ssh -X (issue #7563).
+  set mouse=a term=xterm mousetime=600
   new
 
   for ttymouse_val in g:Ttymouse_values + g:Ttymouse_dec
@@ -1863,6 +1868,34 @@ func Test_xx07_xterm_response()
   call test_override('term_props', 0)
 endfunc
 
+func Test_focus_events()
+  let save_term = &term
+  let save_ttymouse = &ttymouse
+  set term=xterm ttymouse=xterm2
+
+  au FocusGained * let g:focus_gained += 1
+  au FocusLost * let g:focus_lost += 1
+  let g:focus_gained = 0
+  let g:focus_lost = 0
+
+  call feedkeys("\<Esc>[O", "Lx!")
+  call assert_equal(1, g:focus_lost)
+  call feedkeys("\<Esc>[I", "Lx!")
+  call assert_equal(1, g:focus_gained)
+
+  " still works when 'ttymouse' is empty
+  set ttymouse=
+  call feedkeys("\<Esc>[O", "Lx!")
+  call assert_equal(2, g:focus_lost)
+  call feedkeys("\<Esc>[I", "Lx!")
+  call assert_equal(2, g:focus_gained)
+
+  au! FocusGained
+  au! FocusLost
+  let &term = save_term
+  let &ttymouse = save_ttymouse
+endfunc
+
 func Test_get_termcode()
   try
     let k1 = &t_k1
@@ -1896,14 +1929,14 @@ endfunc
 
 func Test_list_builtin_terminals()
   CheckRunVimInTerminal
-  let buf = RunVimInTerminal('', #{rows: 14})
-  call term_sendkeys(buf, ":set cmdheight=3\<CR>")
-  call TermWait(buf, 100)
-  call term_sendkeys(buf, ":set term=xxx\<CR>")
-  call TermWait(buf, 100)
-  call assert_match('builtin_dumb', term_getline(buf, 11))
-  call assert_match('Not found in termcap', term_getline(buf, 12))
-  call StopVimInTerminal(buf)
+  call RunVimInTerminal('', #{rows: 14})
+  call term_sendkeys('', ":set cmdheight=3\<CR>")
+  call TermWait('', 100)
+  call term_sendkeys('', ":set term=xxx\<CR>")
+  call TermWait('', 100)
+  call assert_match('builtin_dumb', term_getline('', 11))
+  call assert_match('Not found in termcap', term_getline('', 12))
+  call StopVimInTerminal('')
 endfunc
 
 func GetEscCodeCSI27(key, modifier)
@@ -1966,6 +1999,16 @@ func RunTest_modifyOtherKeys(func)
   bwipe aaa
   bwipe bbb
 
+  " Ctrl-V X 33 is 3
+  call setline(1, '')
+  call feedkeys("a\<C-V>" .. a:func('X', 2) .. "33\<Esc>", 'Lx!')
+  call assert_equal("3", getline(1))
+
+  " Ctrl-V U 12345 is Unicode 12345
+  call setline(1, '')
+  call feedkeys("a\<C-V>" .. a:func('U', 2) .. "12345\<Esc>", 'Lx!')
+  call assert_equal("\U12345", getline(1))
+
   bwipe!
   set timeoutlen&
 endfunc
@@ -2027,6 +2070,23 @@ func Test_modifyOtherKeys_mapped()
   iunmap '
   iunmap <C-W><C-A>
   set timeoutlen&
+endfunc
+
+" Whether Shift-Tab sends "ESC [ Z" or "ESC [ 27 ; 2 ; 9 ~" is unpredictable,
+" both should work.
+func Test_modifyOtherKeys_shift_tab()
+  set timeoutlen=10
+
+  call setline(1, '')
+  call feedkeys("a\<C-K>" .. GetEscCodeCSI27("\t", '2') .. "\<Esc>", 'Lx!')
+  eval getline(1)->assert_equal('<S-Tab>')
+
+  call setline(1, '')
+  call feedkeys("a\<C-K>\<Esc>[Z\<Esc>", 'Lx!')
+  eval getline(1)->assert_equal('<S-Tab>')
+
+  set timeoutlen&
+  bwipe!
 endfunc
 
 func RunTest_mapping_works_with_shift(func)
@@ -2103,11 +2163,47 @@ endfunc
 func Test_mapping_works_with_ctrl()
   call RunTest_mapping_works_with_mods(function('GetEscCodeCSI27'), 'C', 5)
   call RunTest_mapping_works_with_mods(function('GetEscCodeCSIu'), 'C', 5)
+
+  new
+  set timeoutlen=10
+
+  " CTRL-@ actually produces the code for CTRL-2, which is converted
+  call RunTest_mapping_mods('<C-@>', '2', function('GetEscCodeCSI27'), 5)
+  call RunTest_mapping_mods('<C-@>', '2', function('GetEscCodeCSIu'), 5)
+
+  " CTRL-^ actually produces the code for CTRL-6, which is converted
+  call RunTest_mapping_mods('<C-^>', '6', function('GetEscCodeCSI27'), 5)
+  call RunTest_mapping_mods('<C-^>', '6', function('GetEscCodeCSIu'), 5)
+
+  " CTRL-_ actually produces the code for CTRL--, which is converted
+  call RunTest_mapping_mods('<C-_>', '-', function('GetEscCodeCSI27'), 5)
+  call RunTest_mapping_mods('<C-_>', '-', function('GetEscCodeCSIu'), 5)
+
+  bwipe!
+  set timeoutlen&
 endfunc
 
 func Test_mapping_works_with_shift_ctrl()
   call RunTest_mapping_works_with_mods(function('GetEscCodeCSI27'), 'C-S', 6)
   call RunTest_mapping_works_with_mods(function('GetEscCodeCSIu'), 'C-S', 6)
+
+  new
+  set timeoutlen=10
+
+  " Ctrl-Shift-[ actually produces CTRL-Shift-{ which is mapped as <C-{>
+  call RunTest_mapping_mods('<C-{>', '{', function('GetEscCodeCSI27'), 6)
+  call RunTest_mapping_mods('<C-{>', '{', function('GetEscCodeCSIu'), 6)
+
+  " Ctrl-Shift-] actually produces CTRL-Shift-} which is mapped as <C-}>
+  call RunTest_mapping_mods('<C-{>', '{', function('GetEscCodeCSI27'), 6)
+  call RunTest_mapping_mods('<C-{>', '{', function('GetEscCodeCSIu'), 6)
+
+  " Ctrl-Shift-\ actually produces CTRL-Shift-| which is mapped as <C-|>
+  call RunTest_mapping_mods('<C-\|>', '|', function('GetEscCodeCSI27'), 6)
+  call RunTest_mapping_mods('<C-\|>', '|', function('GetEscCodeCSIu'), 6)
+
+  bwipe!
+  set timeoutlen&
 endfunc
 
 " Below we also test the "u" code with Alt, This works, but libvterm would not
@@ -2193,7 +2289,7 @@ func Test_cmdline_literal()
 endfunc
 
 " Test for translation of special key codes (<xF1>, <xF2>, etc.)
-func Test_Keycode_Tranlsation()
+func Test_Keycode_Translation()
   let keycodes = [
         \ ["<xUp>", "<Up>"],
         \ ["<xDown>", "<Down>"],
@@ -2216,6 +2312,40 @@ func Test_Keycode_Tranlsation()
     call assert_true(maparg(k1, 'n', 0, 1).lhs == k2)
     exe "nunmap " .. k1
   endfor
+endfunc
+
+" Test for terminal keycodes that doesn't have termcap entries
+func Test_special_term_keycodes()
+  new
+  " Test for <xHome>, <S-xHome> and <C-xHome>
+  " send <K_SPECIAL> <KS_EXTRA> keycode
+  call feedkeys("i\<C-K>\x80\xfd\x3f\n", 'xt')
+  " send <K_SPECIAL> <KS_MODIFIER> bitmap <K_SPECIAL> <KS_EXTRA> keycode
+  call feedkeys("i\<C-K>\x80\xfc\x2\x80\xfd\x3f\n", 'xt')
+  call feedkeys("i\<C-K>\x80\xfc\x4\x80\xfd\x3f\n", 'xt')
+  " Test for <xEnd>, <S-xEnd> and <C-xEnd>
+  call feedkeys("i\<C-K>\x80\xfd\x3d\n", 'xt')
+  call feedkeys("i\<C-K>\x80\xfc\x2\x80\xfd\x3d\n", 'xt')
+  call feedkeys("i\<C-K>\x80\xfc\x4\x80\xfd\x3d\n", 'xt')
+  " Test for <zHome>, <S-zHome> and <C-zHome>
+  call feedkeys("i\<C-K>\x80\xfd\x40\n", 'xt')
+  call feedkeys("i\<C-K>\x80\xfc\x2\x80\xfd\x40\n", 'xt')
+  call feedkeys("i\<C-K>\x80\xfc\x4\x80\xfd\x40\n", 'xt')
+  " Test for <zEnd>, <S-zEnd> and <C-zEnd>
+  call feedkeys("i\<C-K>\x80\xfd\x3e\n", 'xt')
+  call feedkeys("i\<C-K>\x80\xfc\x2\x80\xfd\x3e\n", 'xt')
+  call feedkeys("i\<C-K>\x80\xfc\x4\x80\xfd\x3e\n", 'xt')
+  " Test for <xUp>, <xDown>, <xLeft> and <xRight>
+  call feedkeys("i\<C-K>\x80\xfd\x41\n", 'xt')
+  call feedkeys("i\<C-K>\x80\xfd\x42\n", 'xt')
+  call feedkeys("i\<C-K>\x80\xfd\x43\n", 'xt')
+  call feedkeys("i\<C-K>\x80\xfd\x44\n", 'xt')
+  call assert_equal(['<Home>', '<S-Home>', '<C-Home>',
+        \ '<End>', '<S-End>', '<C-End>',
+        \ '<Home>', '<S-Home>', '<C-Home>',
+        \ '<End>', '<S-End>', '<C-End>',
+        \ '<Up>', '<Down>', '<Left>', '<Right>', ''], getline(1, '$'))
+  bw!
 endfunc
 
 " vim: shiftwidth=2 sts=2 expandtab

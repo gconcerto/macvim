@@ -75,13 +75,13 @@
 - (void)setScrollbarThumbValue:(float)val proportion:(float)prop
                     identifier:(int32_t)ident;
 
-- (unsigned int)calculateStyleMask;
 - (void)setBackgroundOption:(int)dark;
 - (void)refreshApperanceMode;
 
 - (void)setDefaultColorsBackground:(NSColor *)back foreground:(NSColor *)fore;
 - (void)setFont:(NSFont *)font;
 - (void)setWideFont:(NSFont *)font;
+- (void)refreshFonts;
 - (void)processInputQueueDidFinish;
 - (void)showTabBar:(BOOL)on;
 - (void)showToolbar:(BOOL)on size:(int)size mode:(int)mode;

@@ -27,6 +27,26 @@ func GetSyntaxItem(pat)
   return c
 endfunc
 
+func AssertHighlightGroups(lnum, startcol, expected, trans = 1, msg = "")
+  " Assert that the characters starting at a given (line, col)
+  " sequentially match the expected highlight groups.
+  " If groups are provided as a string, each character is assumed to be a
+  " group and spaces represent no group, useful for visually describing tests.
+  let l:expectedGroups = type(a:expected) == v:t_string
+        \ ? a:expected->split('\zs')->map({_, v -> trim(v)})
+        \ : a:expected
+  let l:errors = 0
+  let l:msg = (a:msg->empty() ? "" : a:msg .. ": ")
+        \ .. "Wrong highlight group at " .. a:lnum .. ","
+
+  for l:i in range(a:startcol, a:startcol + l:expectedGroups->len() - 1)
+    let l:errors += synID(a:lnum, l:i, a:trans)
+          \ ->synIDattr("name")
+          \ ->assert_equal(l:expectedGroups[l:i - 1],
+          \    l:msg .. l:i)
+  endfor
+endfunc
+
 func Test_syn_iskeyword()
   new
   call setline(1, [
@@ -89,6 +109,9 @@ func Test_syntime()
   syntax on
   syntime on
   let a = execute('syntime report')
+  call assert_equal("\nNo Syntax items defined for this buffer", a)
+
+  let a = execute('syntime clear')
   call assert_equal("\nNo Syntax items defined for this buffer", a)
 
   view ../memfile_test.c
@@ -316,6 +339,8 @@ func Test_syntax_arg_skipped()
     syn sync ccomment
   endif
   call assert_notmatch('on C-style comments', execute('syntax sync'))
+  syn sync fromstart
+  call assert_match('syncing starts at the first line', execute('syntax sync'))
 
   syn clear
 endfunc
@@ -735,6 +760,7 @@ func Test_syntax_foldlevel()
   redir END
   call assert_equal("\nsyntax foldlevel start", @c)
   syn sync fromstart
+  call assert_match('from the first line$', execute('syn sync'))
   let a = map(range(3,9), 'foldclosed(v:val)')
   call assert_equal([3,3,3,3,3,3,3], a) " attached cascade folds together
   let a = map(range(10,15), 'foldclosed(v:val)')
@@ -820,5 +846,98 @@ func Test_search_syntax_skip()
   delfunc InString
   bwipe!
 endfunc
+
+func Test_syn_contained_transparent()
+  " Comments starting with "Regression:" show the result when the highlighting
+  " span of the containing item is assigned to the contained region.
+  syntax on
+
+  let l:case = "Transparent region contained in region"
+  new
+  syntax region X start=/\[/ end=/\]/ contained transparent
+  syntax region Y start=/(/ end=/)/ contains=X
+
+  call setline(1,  "==(--[~~]--)==")
+  let l:expected = "  YYYYYYYYYY  "
+  eval AssertHighlightGroups(1, 1, l:expected, 1, l:case)
+  syntax clear Y X
+  bw!
+
+  let l:case = "Transparent region extends region"
+  new
+  syntax region X start=/\[/ end=/\]/ contained transparent
+  syntax region Y start=/(/ end=/)/ end=/e/ contains=X
+
+  call setline(1,  "==(--[~~e~~]--)==")
+  let l:expected = "  YYYYYYYYYYYYY  "
+  " Regression:    "  YYYYYYY   YYY  "
+  eval AssertHighlightGroups(1, 1, l:expected, 1, l:case)
+  syntax clear Y X
+  bw!
+
+  let l:case = "Nested transparent regions extend region"
+  new
+  syntax region X start=/\[/ end=/\]/ contained transparent
+  syntax region Y start=/(/ end=/)/ end=/e/ contains=X
+
+  call setline(1,  "==(--[~~e~~[~~e~~]~~e~~]--)==")
+  let l:expected = "  YYYYYYYYYYYYYYYYYYYYYYYYY  "
+  " Regression:    "  YYYYYYY         YYYYYYYYY  "
+  eval AssertHighlightGroups(1, 1, l:expected, 1, l:case)
+  syntax clear Y X
+  bw!
+
+  let l:case = "Transparent region contained in match"
+  new
+  syntax region X start=/\[/ end=/\]/ contained transparent
+  syntax match Y /(.\{-})/ contains=X
+
+  call setline(1,  "==(--[~~]--)==")
+  let l:expected = "  YYYYYYYYYY  "
+  eval AssertHighlightGroups(1, 1, l:expected, 1, l:case)
+  syntax clear Y X
+  bw!
+
+  let l:case = "Transparent region extends match"
+  new
+  syntax region X start=/\[/ end=/\]/ contained transparent
+  syntax match Y /(.\{-}[e)]/ contains=X
+
+  call setline(1,  "==(--[~~e~~]--)==")
+  let l:expected = "  YYYYYYYYYY     "
+  " Regression:    "  YYYYYYY        "
+  eval AssertHighlightGroups(1, 1, l:expected, 1, l:case)
+  syntax clear Y X
+  bw!
+
+  let l:case = "Nested transparent regions extend match"
+  new
+  syntax region X start=/\[/ end=/\]/ contained transparent
+  syntax match Y /(.\{-}[e)]/ contains=X
+
+  call setline(1,  "==(--[~~e~~[~~e~~]~~e~~]--)==")
+  let l:expected = "  YYYYYYYYYYYYYYYYYYYYYY     "
+  " Regression:    "  YYYYYYY         YYYYYY     "
+  eval AssertHighlightGroups(1, 1, l:expected, 1, l:case)
+  syntax clear Y X
+  bw!
+endfunc
+
+func Test_syn_include_contains_TOP()
+  let l:case = "TOP in included syntax means its group list name"
+  new
+  syntax include @INCLUDED syntax/c.vim
+  syntax region FencedCodeBlockC start=/```c/ end=/```/ contains=@INCLUDED
+
+  call setline(1,  ['```c', '#if 0', 'int', '#else', 'int', '#endif', '```' ])
+  let l:expected = ["cCppOutIf2"]
+  eval AssertHighlightGroups(3, 1, l:expected, 1)
+  " cCppOutElse has contains=TOP
+  let l:expected = ["cType"]
+  eval AssertHighlightGroups(5, 1, l:expected, 1, l:case)
+  syntax clear
+  bw!
+endfunc
+
 
 " vim: shiftwidth=2 sts=2 expandtab

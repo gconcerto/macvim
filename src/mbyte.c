@@ -1545,6 +1545,15 @@ utf_char2cells(int c)
 	{0x1f6e9, 0x1f6e9},
 	{0x1f6f0, 0x1f6f0},
 	{0x1f6f3, 0x1f6f3}
+
+#ifdef MACOS_X
+	// Include SF Symbols characters, which should be rendered as
+	// double-width. All of them are in the Supplementary Private Use
+	// Area-B range. The exact range was determined by downloading the "SF
+	// Symbols" app from Apple, and then selecting all symbols, copying
+	// them out, and inspecting the unicode values of them.
+	, {0x100000, 0x100d7f}
+#endif
     };
 
 #ifdef USE_AMBIWIDTH_AUTO
@@ -4312,7 +4321,7 @@ mb_charlen(char_u *str)
     return count;
 }
 
-#if defined(FEAT_SPELL) || defined(PROTO)
+#if (defined(FEAT_SPELL) || defined(FEAT_EVAL)) || defined(PROTO)
 /*
  * Like mb_charlen() but for a string with specified length.
  */
@@ -5564,13 +5573,8 @@ f_setcellwidths(typval_T *argvars, typval_T *rettv UNUSED)
     void
 f_charclass(typval_T *argvars, typval_T *rettv UNUSED)
 {
-    if (argvars[0].v_type != VAR_STRING
-	    || argvars[0].vval.v_string == NULL
-	    || *argvars[0].vval.v_string == NUL)
-    {
-	emsg(_(e_stringreq));
+    if (check_for_string_arg(argvars, 0) == FAIL)
 	return;
-    }
     rettv->vval.v_number = mb_get_class(argvars[0].vval.v_string);
 }
 #endif

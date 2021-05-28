@@ -640,7 +640,10 @@ foldCreate(linenr_T start, linenr_T end)
 		break;
 	    }
 	}
-	i = (int)(fp - (fold_T *)gap->ga_data);
+	if (gap->ga_len == 0)
+	    i = 0;
+	else
+	    i = (int)(fp - (fold_T *)gap->ga_data);
     }
 
     if (ga_grow(gap, 1) == OK)
@@ -902,6 +905,8 @@ foldMoveTo(
 	// that moves the cursor is used.
 	lnum_off = 0;
 	gap = &curwin->w_folds;
+	if (gap->ga_len == 0)
+	    break;
 	use_level = FALSE;
 	maybe_small = FALSE;
 	lnum_found = curwin->w_cursor.lnum;
@@ -911,7 +916,7 @@ foldMoveTo(
 	{
 	    if (!foldFind(gap, curwin->w_cursor.lnum - lnum_off, &fp))
 	    {
-		if (!updown)
+		if (!updown || gap->ga_len == 0)
 		    break;
 
 		// When moving up, consider a fold above the cursor; when
@@ -3304,7 +3309,7 @@ foldlevelExpr(fline_T *flp)
     // KeyTyped may be reset to 0 when calling a function which invokes
     // do_cmdline().  To make 'foldopen' work correctly restore KeyTyped.
     save_keytyped = KeyTyped;
-    n = (int)eval_foldexpr(flp->wp->w_p_fde, &c);
+    n = eval_foldexpr(flp->wp->w_p_fde, &c);
     KeyTyped = save_keytyped;
 
     switch (c)
@@ -3521,7 +3526,8 @@ put_folds(FILE *fd, win_T *wp)
     if (foldmethodIsManual(wp))
     {
 	if (put_line(fd, "silent! normal! zE") == FAIL
-		|| put_folds_recurse(fd, &wp->w_folds, (linenr_T)0) == FAIL)
+		|| put_folds_recurse(fd, &wp->w_folds, (linenr_T)0) == FAIL
+		|| put_line(fd, "let &fdl = &fdl") == FAIL)
 	    return FAIL;
     }
 

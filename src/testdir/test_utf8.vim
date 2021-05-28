@@ -11,7 +11,7 @@ func Test_visual_block_insert()
   bwipeout!
 endfunc
 
-" Test for built-in function strchars()
+" Test for built-in functions strchars() and strcharlen()
 func Test_strchars()
   let inp = ["a", "あいa", "A\u20dd", "A\u20dd\u20dd", "\u20dd"]
   let exp = [[1, 1, 1], [3, 3, 3], [2, 2, 1], [3, 3, 1], [1, 1, 1]]
@@ -20,6 +20,13 @@ func Test_strchars()
     call assert_equal(exp[i][1], inp[i]->strchars(0))
     call assert_equal(exp[i][2], strchars(inp[i], 1))
   endfor
+
+  let exp = [1, 3, 1, 1, 1]
+  for i in range(len(inp))
+    call assert_equal(exp[i], inp[i]->strcharlen())
+    call assert_equal(exp[i], strcharlen(inp[i]))
+  endfor
+
   call assert_fails("let v=strchars('abc', [])", 'E745:')
   call assert_fails("let v=strchars('abc', 2)", 'E1023:')
 endfunc
@@ -178,6 +185,15 @@ func Test_setcellwidths()
   call assert_fails('call setcellwidths([[0x111, 0x122, 1], [0x122, 0x123, 2]])', 'E1113:')
 
   call assert_fails('call setcellwidths([[0x33, 0x44, 2]])', 'E1114:')
+endfunc
+
+func Test_print_overlong()
+  " Text with more composing characters than MB_MAXBYTES.
+  new
+  call setline(1, 'axxxxxxxxxxxxxxxxxxxxxxxxxxxxxx')
+  s/x/\=nr2char(1629)/g
+  print
+  bwipe!
 endfunc
 
 " vim: shiftwidth=2 sts=2 expandtab

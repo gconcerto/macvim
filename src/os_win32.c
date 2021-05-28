@@ -33,6 +33,7 @@
 // cproto fails on missing include files
 #ifndef PROTO
 # include <process.h>
+# include <winternl.h>
 #endif
 
 #undef chdir
@@ -528,6 +529,10 @@ vimLoadLib(char *name)
 {
     HINSTANCE	dll = NULL;
 
+    // No need to load any library when registering OLE.
+    if (found_register_arg)
+	return dll;
+
     // NOTE: Do not use mch_dirname() and mch_chdir() here, they may call
     // vimLoadLib() recursively, which causes a stack overflow.
     if (exe_path == NULL)
@@ -860,6 +865,12 @@ win32_enable_privilege(LPTSTR lpszPrivilege, BOOL bEnable)
 }
 #endif
 
+#ifdef _MSC_VER
+// Suppress the deprecation warning for using GetVersionEx().
+// It is needed for implementing "windowsversion()".
+# pragma warning(push)
+# pragma warning(disable: 4996)
+#endif
 /*
  * Set "win8_or_later" and fill in "windowsVersion" if possible.
  */
@@ -890,6 +901,9 @@ PlatformId(void)
 	done = TRUE;
     }
 }
+#ifdef _MSC_VER
+# pragma warning(pop)
+#endif
 
 #if !defined(FEAT_GUI_MSWIN) || defined(VIMDLL)
 
@@ -1588,26 +1602,14 @@ WaitForChar(long msec, int ignore_input)
 	{
 	    DWORD dwWaitTime = dwEndTime - dwNow;
 
-# ifdef FEAT_JOB_CHANNEL
-	    // Check channel while waiting for input.
-	    if (dwWaitTime > 100)
-	    {
-		dwWaitTime = 100;
-		// If there is readahead then parse_queued_messages() timed out
-		// and we should call it again soon.
-		if (channel_any_readahead())
-		    dwWaitTime = 10;
-	    }
-# endif
-# ifdef FEAT_BEVAL_GUI
-	    if (p_beval && dwWaitTime > 100)
-		// The 'balloonexpr' may indirectly invoke a callback while
-		// waiting for a character, need to check often.
-		dwWaitTime = 100;
-# endif
+	    // Don't wait for more than 11 msec to avoid dropping characters,
+	    // check channel while waiting for input and handle a callback from
+	    // 'balloonexpr'.
+	    if (dwWaitTime > 11)
+		dwWaitTime = 11;
+
 # ifdef FEAT_MZSCHEME
-	    if (mzthreads_allowed() && p_mzq > 0
-				    && (msec < 0 || (long)dwWaitTime > p_mzq))
+	    if (mzthreads_allowed() && p_mzq > 0 && (long)dwWaitTime > p_mzq)
 		dwWaitTime = p_mzq; // don't wait longer than 'mzquantum'
 # endif
 # ifdef FEAT_TIMERS
@@ -1646,7 +1648,9 @@ WaitForChar(long msec, int ignore_input)
 	peek_console_input(g_hConIn, &ir, 1, &cRecords);
 
 # ifdef FEAT_MBYTE_IME
-	if (State & CMDLINE && msg_row == Rows - 1)
+	// May have to redraw if the cursor ends up in the wrong place.
+	// Only when not peeking.
+	if (State & CMDLINE && msg_row == Rows - 1 && msec != 0)
 	{
 	    CONSOLE_SCREEN_BUFFER_INFO csbi;
 
@@ -1654,10 +1658,10 @@ WaitForChar(long msec, int ignore_input)
 	    {
 		if (csbi.dwCursorPosition.Y != msg_row)
 		{
-		    // The screen is now messed up, must redraw the
-		    // command line and later all the windows.
+		    // The screen is now messed up, must redraw the command
+		    // line and later all the windows.
 		    redraw_all_later(CLEAR);
-		    cmdline_row -= (msg_row - csbi.dwCursorPosition.Y);
+		    compute_cmdrow();
 		    redrawcmd();
 		}
 	    }
@@ -3532,7 +3536,10 @@ mch_get_acl(char_u *fname)
 
 	wn = enc_to_utf16(fname, NULL);
 	if (wn == NULL)
+	{
+	    vim_free(p);
 	    return NULL;
+	}
 
 	// Try to retrieve the entire security descriptor.
 	err = GetNamedSecurityInfoW(
@@ -6405,12 +6412,12 @@ mch_write(
     char_u  *s,
     int	    len)
 {
+    char_u  *end = s + len;
+
 # ifdef VIMDLL
     if (gui.in_use)
 	return;
 # endif
-
-    s[len] = NUL;
 
     if (!term_console)
     {
@@ -6432,10 +6439,13 @@ mch_write(
 	    return;
 	}
 
-	while((ch = s[++prefix]))
+	while (s + ++prefix < end)
+	{
+	    ch = s[prefix];
 	    if (ch <= 0x1e && !(ch != '\n' && ch != '\r' && ch != '\b'
 						&& ch != '\a' && ch != '\033'))
 		break;
+	}
 
 	if (p_wd)
 	{
@@ -7113,13 +7123,12 @@ mch_fopen(const char *name, const char *mode)
 /*
  * SUB STREAM (aka info stream) handling:
  *
- * NTFS can have sub streams for each file.  Normal contents of file is
- * stored in the main stream, and extra contents (author information and
- * title and so on) can be stored in sub stream.  After Windows 2000, user
- * can access and store those informations in sub streams via explorer's
- * property menuitem in right click menu.  Those informations in sub streams
- * were lost when copying only the main stream.  So we have to copy sub
- * streams.
+ * NTFS can have sub streams for each file.  The normal contents of a file is
+ * stored in the main stream, and extra contents (author information, title and
+ * so on) can be stored in a sub stream.  After Windows 2000, the user can
+ * access and store this information in sub streams via an explorer's property
+ * menu item in the right click menu.  This information in sub streams was lost
+ * when copying only the main stream.  Therefore we have to copy sub streams.
  *
  * Incomplete explanation:
  *	http://msdn.microsoft.com/library/en-us/dnw2k/html/ntfs5.asp
@@ -7255,6 +7264,184 @@ copy_infostreams(char_u *from, char_u *to)
 }
 
 /*
+ * ntdll.dll definitions
+ */
+#define FileEaInformation   7
+#ifndef STATUS_SUCCESS
+# define STATUS_SUCCESS	    ((NTSTATUS) 0x00000000L)
+#endif
+
+typedef struct _FILE_FULL_EA_INFORMATION_ {
+    ULONG  NextEntryOffset;
+    UCHAR  Flags;
+    UCHAR  EaNameLength;
+    USHORT EaValueLength;
+    CHAR   EaName[1];
+} FILE_FULL_EA_INFORMATION_, *PFILE_FULL_EA_INFORMATION_;
+
+typedef struct _FILE_EA_INFORMATION_ {
+    ULONG EaSize;
+} FILE_EA_INFORMATION_, *PFILE_EA_INFORMATION_;
+
+typedef NTSTATUS (NTAPI *PfnNtOpenFile)(
+	PHANDLE FileHandle,
+	ACCESS_MASK DesiredAccess,
+	POBJECT_ATTRIBUTES ObjectAttributes,
+	PIO_STATUS_BLOCK IoStatusBlock,
+	ULONG ShareAccess,
+	ULONG OpenOptions);
+typedef NTSTATUS (NTAPI *PfnNtClose)(
+	HANDLE Handle);
+typedef NTSTATUS (NTAPI *PfnNtSetEaFile)(
+	HANDLE           FileHandle,
+	PIO_STATUS_BLOCK IoStatusBlock,
+	PVOID            Buffer,
+	ULONG            Length);
+typedef NTSTATUS (NTAPI *PfnNtQueryEaFile)(
+	HANDLE FileHandle,
+	PIO_STATUS_BLOCK IoStatusBlock,
+	PVOID Buffer,
+	ULONG Length,
+	BOOLEAN ReturnSingleEntry,
+	PVOID EaList,
+	ULONG EaListLength,
+	PULONG EaIndex,
+	BOOLEAN RestartScan);
+typedef NTSTATUS (NTAPI *PfnNtQueryInformationFile)(
+	HANDLE                 FileHandle,
+	PIO_STATUS_BLOCK       IoStatusBlock,
+	PVOID                  FileInformation,
+	ULONG                  Length,
+	FILE_INFORMATION_CLASS FileInformationClass);
+typedef VOID (NTAPI *PfnRtlInitUnicodeString)(
+	PUNICODE_STRING DestinationString,
+	PCWSTR SourceString);
+
+PfnNtOpenFile pNtOpenFile = NULL;
+PfnNtClose pNtClose = NULL;
+PfnNtSetEaFile pNtSetEaFile = NULL;
+PfnNtQueryEaFile pNtQueryEaFile = NULL;
+PfnNtQueryInformationFile pNtQueryInformationFile = NULL;
+PfnRtlInitUnicodeString pRtlInitUnicodeString = NULL;
+
+/*
+ * Load ntdll.dll functions.
+ */
+    static BOOL
+load_ntdll(void)
+{
+    static int	loaded = -1;
+
+    if (loaded == -1)
+    {
+	HMODULE hNtdll = GetModuleHandle("ntdll.dll");
+	if (hNtdll != NULL)
+	{
+	    pNtOpenFile = (PfnNtOpenFile) GetProcAddress(hNtdll, "NtOpenFile");
+	    pNtClose = (PfnNtClose) GetProcAddress(hNtdll, "NtClose");
+	    pNtSetEaFile = (PfnNtSetEaFile)
+		GetProcAddress(hNtdll, "NtSetEaFile");
+	    pNtQueryEaFile = (PfnNtQueryEaFile)
+		GetProcAddress(hNtdll, "NtQueryEaFile");
+	    pNtQueryInformationFile = (PfnNtQueryInformationFile)
+		GetProcAddress(hNtdll, "NtQueryInformationFile");
+	    pRtlInitUnicodeString = (PfnRtlInitUnicodeString)
+		GetProcAddress(hNtdll, "RtlInitUnicodeString");
+	}
+	if (pNtOpenFile == NULL
+		|| pNtClose == NULL
+		|| pNtSetEaFile == NULL
+		|| pNtQueryEaFile == NULL
+		|| pNtQueryInformationFile == NULL
+		|| pRtlInitUnicodeString == NULL)
+	    loaded = FALSE;
+	else
+	    loaded = TRUE;
+    }
+    return (BOOL) loaded;
+}
+
+/*
+ * Copy extended attributes (EA) from file "from" to file "to".
+ */
+    static void
+copy_extattr(char_u *from, char_u *to)
+{
+    char_u		    *fromf = NULL;
+    char_u		    *tof = NULL;
+    WCHAR		    *fromw = NULL;
+    WCHAR		    *tow = NULL;
+    UNICODE_STRING	    u;
+    HANDLE		    h;
+    OBJECT_ATTRIBUTES	    oa;
+    IO_STATUS_BLOCK	    iosb;
+    FILE_EA_INFORMATION_    eainfo = {0};
+    void		    *ea = NULL;
+
+    if (!load_ntdll())
+	return;
+
+    // Convert the file names to the fully qualified object names.
+    fromf = alloc(STRLEN(from) + 5);
+    tof = alloc(STRLEN(to) + 5);
+    if (fromf == NULL || tof == NULL)
+	goto theend;
+    STRCPY(fromf, "\\??\\");
+    STRCAT(fromf, from);
+    STRCPY(tof, "\\??\\");
+    STRCAT(tof, to);
+
+    // Convert the names to wide characters.
+    fromw = enc_to_utf16(fromf, NULL);
+    tow = enc_to_utf16(tof, NULL);
+    if (fromw == NULL || tow == NULL)
+	goto theend;
+
+    // Get the EA.
+    pRtlInitUnicodeString(&u, fromw);
+    InitializeObjectAttributes(&oa, &u, 0, NULL, NULL);
+    if (pNtOpenFile(&h, FILE_READ_EA, &oa, &iosb, 0,
+		FILE_NON_DIRECTORY_FILE) != STATUS_SUCCESS)
+	goto theend;
+    pNtQueryInformationFile(h, &iosb, &eainfo, sizeof(eainfo),
+	    FileEaInformation);
+    if (eainfo.EaSize != 0)
+    {
+	ea = alloc(eainfo.EaSize);
+	if (ea != NULL)
+	{
+	    if (pNtQueryEaFile(h, &iosb, ea, eainfo.EaSize, FALSE,
+			NULL, 0, NULL, TRUE) != STATUS_SUCCESS)
+	    {
+		vim_free(ea);
+		ea = NULL;
+	    }
+	}
+    }
+    pNtClose(h);
+
+    // Set the EA.
+    if (ea != NULL)
+    {
+	pRtlInitUnicodeString(&u, tow);
+	InitializeObjectAttributes(&oa, &u, 0, NULL, NULL);
+	if (pNtOpenFile(&h, FILE_WRITE_EA, &oa, &iosb, 0,
+		    FILE_NON_DIRECTORY_FILE) != STATUS_SUCCESS)
+	    goto theend;
+
+	pNtSetEaFile(h, &iosb, ea, eainfo.EaSize);
+	pNtClose(h);
+    }
+
+theend:
+    vim_free(fromf);
+    vim_free(tof);
+    vim_free(fromw);
+    vim_free(tow);
+    vim_free(ea);
+}
+
+/*
  * Copy file attributes from file "from" to file "to".
  * For Windows NT and later we copy info streams.
  * Always returns zero, errors are ignored.
@@ -7264,6 +7451,7 @@ mch_copy_file_attribute(char_u *from, char_u *to)
 {
     // File streams only work on Windows NT and later.
     copy_infostreams(from, to);
+    copy_extattr(from, to);
     return 0;
 }
 

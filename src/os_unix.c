@@ -783,7 +783,7 @@ mch_stackcheck(char *p)
  * completely full.
  */
 
-#ifndef SIGSTKSZ
+#if !defined SIGSTKSZ && !defined(HAVE_SYSCONF_SIGSTKSZ)
 # define SIGSTKSZ 8000    // just a guess of how much stack is needed...
 #endif
 
@@ -806,13 +806,21 @@ init_signal_stack(void)
 #  else
 	sigstk.ss_sp = signal_stack;
 #  endif
+#  ifdef HAVE_SYSCONF_SIGSTKSZ
+	sigstk.ss_size = sysconf(_SC_SIGSTKSZ);
+#  else
 	sigstk.ss_size = SIGSTKSZ;
+#  endif
 	sigstk.ss_flags = 0;
 	(void)sigaltstack(&sigstk, NULL);
 # else
 	sigstk.ss_sp = signal_stack;
 	if (stack_grows_downwards)
+#  ifdef HAVE_SYSCONF_SIGSTKSZ
+	    sigstk.ss_sp += sysconf(_SC_SIGSTKSZ) - 1;
+#  else
 	    sigstk.ss_sp += SIGSTKSZ - 1;
+#  endif
 	sigstk.ss_onstack = 0;
 	(void)sigstack(&sigstk, NULL);
 # endif
@@ -2834,8 +2842,10 @@ mch_copy_sec(char_u *from_file, char_u *to_file)
 
     if (selinux_enabled > 0)
     {
-	security_context_t from_context = NULL;
-	security_context_t to_context = NULL;
+	// Use "char *" instead of "security_context_t" to avoid a deprecation
+	// warning.
+	char *from_context = NULL;
+	char *to_context = NULL;
 
 	if (getfilecon((char *)from_file, &from_context) < 0)
 	{
@@ -3261,7 +3271,11 @@ mch_early_init(void)
      * Ignore any errors.
      */
 #if defined(HAVE_SIGALTSTACK) || defined(HAVE_SIGSTACK)
+# ifdef HAVE_SYSCONF_SIGSTKSZ
+    signal_stack = alloc(sysconf(_SC_SIGSTKSZ));
+# else
     signal_stack = alloc(SIGSTKSZ);
+# endif
     init_signal_stack();
 #endif
 
@@ -3335,7 +3349,7 @@ exit_scroll(void)
 	else
 	    out_char('\n');
     }
-    else
+    else if (!is_not_a_term())
     {
 	restore_cterm_colors();		// get original colors back
 	msg_clr_eos_force();		// clear the rest of the display
@@ -3362,9 +3376,12 @@ mch_exit(int r)
     {
 	settmode(TMODE_COOK);
 #ifdef FEAT_TITLE
-	// restore xterm title and icon name
-	mch_restore_title(SAVE_RESTORE_BOTH);
-	term_pop_title(SAVE_RESTORE_BOTH);
+	if (!is_not_a_term())
+	{
+	    // restore xterm title and icon name
+	    mch_restore_title(SAVE_RESTORE_BOTH);
+	    term_pop_title(SAVE_RESTORE_BOTH);
+	}
 #endif
 	/*
 	 * When t_ti is not empty but it doesn't cause swapping terminal
@@ -5293,8 +5310,10 @@ finished:
 	    {
 		long delay_msec = 1;
 
-		out_str(T_CTE);	// possibly disables modifyOtherKeys, so that
-				// the system can recognize CTRL-C
+		if (tmode == TMODE_RAW)
+		    // possibly disables modifyOtherKeys, so that the system
+		    // can recognize CTRL-C
+		    out_str(T_CTE);
 
 		/*
 		 * Similar to the loop above, but only handle X events, no
@@ -5336,7 +5355,9 @@ finished:
 			delay_msec = 10;
 		}
 
-		out_str(T_CTI);	// possibly enables modifyOtherKeys again
+		if (tmode == TMODE_RAW)
+		    // possibly enables modifyOtherKeys again
+		    out_str(T_CTI);
 	    }
 # endif
 
@@ -7888,15 +7909,15 @@ clip_xterm_set_selection(Clipboard_T *cbd)
     static void
 xsmp_handle_interaction(SmcConn smc_conn, SmPointer client_data UNUSED)
 {
-    cmdmod_T	save_cmdmod;
+    int		save_cmod_flags;
     int		cancel_shutdown = False;
 
-    save_cmdmod = cmdmod;
-    cmdmod.confirm = TRUE;
+    save_cmod_flags = cmdmod.cmod_flags;
+    cmdmod.cmod_flags |= CMOD_CONFIRM;
     if (check_changed_any(FALSE, FALSE))
 	// Mustn't logout
 	cancel_shutdown = True;
-    cmdmod = save_cmdmod;
+    cmdmod.cmod_flags = save_cmod_flags;
     setcursor();		// position cursor
     out_flush();
 
@@ -8088,10 +8109,13 @@ xsmp_init(void)
 	    errorstring);
     if (xsmp.smcconn == NULL)
     {
-	char errorreport[132];
-
 	if (p_verbose > 0)
 	{
+	    char errorreport[132];
+
+	    // If the message is too long it might not be NUL terminated.  Add
+	    // a NUL at the end to make sure we don't go over the end.
+	    errorstring[sizeof(errorstring) - 1] = NUL;
 	    vim_snprintf(errorreport, sizeof(errorreport),
 			 _("XSMP SmcOpenConnection failed: %s"), errorstring);
 	    verb_msg(errorreport);

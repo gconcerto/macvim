@@ -19,9 +19,6 @@
 
 #include "vim.h"
 
-#ifdef FEAT_GUI_MACVIM
-static void redraw_for_ligatures(win_T *wp);
-#endif
 static int scrolljump_value(void);
 static int check_top_offset(void);
 static void curs_rows(win_T *wp);
@@ -162,29 +159,6 @@ redraw_for_cursorline(win_T *wp)
     }
 }
 
-#ifdef FEAT_GUI_MACVIM
-/*
- * Redraw when 'macligatures' is set.
- * This is basically the same as when 'cursorline'
- * or 'relativenumber' is set but unconditional.
- */
-static void
-redraw_for_ligatures(wp)
-     win_T *wp;
-{
-	/* Only if ligatures are on but neither
-	 * 'cursorline' nor 'relativenumber'.
-	 */
-	if (p_macligatures
-	    && (wp->w_p_rnu == 0
-#ifdef FEAT_SYN_HL
-	        && wp->w_p_cul == 0
-#endif
-	    ))
-	redraw_win_later(wp, CLEAR);
-}
-#endif
-
 /*
  * Update curwin->w_topline and redraw if necessary.
  * Used to update the screen before printing a message.
@@ -222,6 +196,7 @@ update_topline(void)
     // the cursor line.
     if (!screen_valid(TRUE) || curwin->w_height == 0)
     {
+	check_cursor_lnum();
 	curwin->w_topline = curwin->w_cursor.lnum;
 	curwin->w_botline = curwin->w_topline;
 	curwin->w_valid |= VALID_BOTLINE|VALID_BOTLINE_AP;
@@ -566,6 +541,8 @@ set_topline(win_T *wp, linenr_T lnum)
 #endif
     // Approximate the value of w_botline
     wp->w_botline += lnum - wp->w_topline;
+    if (wp->w_botline > wp->w_buffer->b_ml.ml_line_count + 1)
+	wp->w_botline = wp->w_buffer->b_ml.ml_line_count + 1;
     wp->w_topline = lnum;
     wp->w_topline_was_set = TRUE;
 #ifdef FEAT_DIFF
@@ -620,8 +597,17 @@ changed_line_abv_curs_win(win_T *wp)
     void
 validate_botline(void)
 {
-    if (!(curwin->w_valid & VALID_BOTLINE))
-	comp_botline(curwin);
+    validate_botline_win(curwin);
+}
+
+/*
+ * Make sure the value of wp->w_botline is valid.
+ */
+    void
+validate_botline_win(win_T *wp)
+{
+    if (!(wp->w_valid & VALID_BOTLINE))
+	comp_botline(wp);
 }
 
 /*
@@ -808,9 +794,6 @@ curs_rows(win_T *wp)
     }
 
     redraw_for_cursorline(curwin);
-#ifdef FEAT_GUI_MACVIM
-    redraw_for_ligatures(curwin);
-#endif
     wp->w_valid |= VALID_CROW|VALID_CHEIGHT;
 
 }
@@ -896,6 +879,9 @@ validate_cursor_col(void)
 	curwin->w_wcol = col;
 
 	curwin->w_valid |= VALID_WCOL;
+#ifdef FEAT_PROP_POPUP
+	curwin->w_flags &= ~WFLAG_WCOL_OFF_ADDED;
+#endif
     }
 }
 
@@ -1139,10 +1125,10 @@ curs_columns(
 	    n = curwin->w_wrow + so;
 	else
 	    n = p_lines;
-	if ((colnr_T)n >= curwin->w_height + curwin->w_skipcol / width)
+	if ((colnr_T)n >= curwin->w_height + curwin->w_skipcol / width - so)
 	    extra += 2;
 
-	if (extra == 3 || p_lines < so * 2)
+	if (extra == 3 || p_lines <= so * 2)
 	{
 	    // not enough room for 'scrolloff', put cursor in the middle
 	    n = curwin->w_virtcol / width;
@@ -1208,7 +1194,10 @@ curs_columns(
     {
 	curwin->w_wrow += popup_top_extra(curwin);
 	curwin->w_wcol += popup_left_extra(curwin);
+	curwin->w_flags |= WFLAG_WCOL_OFF_ADDED + WFLAG_WROW_OFF_ADDED;
     }
+    else
+	curwin->w_flags &= ~(WFLAG_WCOL_OFF_ADDED + WFLAG_WROW_OFF_ADDED);
 #endif
 
     // now w_leftcol is valid, avoid check_cursor_moved() thinking otherwise
@@ -1269,7 +1258,7 @@ textpos2screenpos(
 	    // character is left or right of the window
 	    row = scol = ccol = ecol = 0;
     }
-    *rowp = wp->w_winrow + row + rowoff;
+    *rowp = W_WINROW(wp) + row + rowoff;
     *scolp = scol + coloff;
     *ccolp = ccol + coloff;
     *ecolp = ecol + coloff;

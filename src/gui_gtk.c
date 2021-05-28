@@ -684,6 +684,34 @@ menu_item_activate(GtkWidget *widget UNUSED, gpointer data)
     gui_menu_cb((vimmenu_T *)data);
 }
 
+    static void
+menu_item_select(GtkWidget *widget UNUSED, gpointer data)
+{
+    vimmenu_T	*menu;
+    char_u	*tooltip;
+    static int	did_msg = FALSE;
+
+    if (State & CMDLINE)
+	return;
+    menu = (vimmenu_T *)data;
+    tooltip = CONVERT_TO_UTF8(menu->strings[MENU_INDEX_TIP]);
+    if (tooltip != NULL && utf_valid_string(tooltip, NULL))
+    {
+	msg((char *)tooltip);
+	did_msg = TRUE;
+	setcursor();
+	out_flush_cursor(TRUE, FALSE);
+    }
+    else if (did_msg)
+    {
+	msg("");
+	did_msg = FALSE;
+	setcursor();
+	out_flush_cursor(TRUE, FALSE);
+    }
+    CONVERT_TO_UTF8_FREE(tooltip);
+}
+
     void
 gui_mch_add_menu_item(vimmenu_T *menu, int idx)
 {
@@ -800,8 +828,12 @@ gui_mch_add_menu_item(vimmenu_T *menu, int idx)
 		menu->id, idx);
 
 	if (menu->id != NULL)
+	{
 	    g_signal_connect(G_OBJECT(menu->id), "activate",
 			     G_CALLBACK(menu_item_activate), menu);
+	    g_signal_connect(G_OBJECT(menu->id), "select",
+			     G_CALLBACK(menu_item_select), menu);
+	}
     }
 }
 #endif // FEAT_MENU
@@ -810,7 +842,7 @@ gui_mch_add_menu_item(vimmenu_T *menu, int idx)
     void
 gui_mch_set_text_area_pos(int x, int y, int w, int h)
 {
-    gtk_form_move_resize(GTK_FORM(gui.formwin), gui.drawarea, x, y, w, h);
+    gui_gtk_form_move_resize(GTK_FORM(gui.formwin), gui.drawarea, x, y, w, h);
 }
 
 
@@ -892,8 +924,7 @@ get_menu_position(vimmenu_T *menu)
     void
 gui_mch_menu_set_tip(vimmenu_T *menu)
 {
-    if (menu->id != NULL && menu->parent != NULL
-	    && gui.toolbar != NULL && menu_is_toolbar(menu->parent->name))
+    if (menu->id != NULL && menu->parent != NULL && gui.toolbar != NULL)
     {
 	char_u *tooltip;
 
@@ -1005,23 +1036,35 @@ gui_mch_set_scrollbar_thumb(scrollbar_T *sb, long val, long size, long max)
 gui_mch_set_scrollbar_pos(scrollbar_T *sb, int x, int y, int w, int h)
 {
     if (sb->id != NULL)
-	gtk_form_move_resize(GTK_FORM(gui.formwin), sb->id, x, y, w, h);
+	gui_gtk_form_move_resize(GTK_FORM(gui.formwin), sb->id, x, y, w, h);
 }
 
     int
 gui_mch_get_scrollbar_xpadding(void)
 {
-    // TODO: Calculate the padding for adjust scrollbar position when the
-    // Window is maximized.
-    return 0;
+    int xpad;
+#if GTK_CHECK_VERSION(3,0,0)
+    xpad = gtk_widget_get_allocated_width(gui.formwin)
+	  - gtk_widget_get_allocated_width(gui.drawarea) - gui.scrollbar_width;
+#else
+    xpad = gui.formwin->allocation.width - gui.drawarea->allocation.width
+							 - gui.scrollbar_width;
+#endif
+    return (xpad < 0) ? 0 : xpad;
 }
 
     int
 gui_mch_get_scrollbar_ypadding(void)
 {
-    // TODO: Calculate the padding for adjust scrollbar position when the
-    // Window is maximized.
-    return 0;
+    int ypad;
+#if GTK_CHECK_VERSION(3,0,0)
+    ypad = gtk_widget_get_allocated_height(gui.formwin)
+	- gtk_widget_get_allocated_height(gui.drawarea) - gui.scrollbar_height;
+#else
+    ypad = gui.formwin->allocation.height - gui.drawarea->allocation.height
+							- gui.scrollbar_height;
+#endif
+    return (ypad < 0) ? 0 : ypad;
 }
 
 /*
@@ -1111,7 +1154,7 @@ gui_mch_create_scrollbar(scrollbar_T *sb, int orient)
 	GtkAdjustment *adjustment;
 
 	gtk_widget_set_can_focus(sb->id, FALSE);
-	gtk_form_put(GTK_FORM(gui.formwin), sb->id, 0, 0);
+	gui_gtk_form_put(GTK_FORM(gui.formwin), sb->id, 0, 0);
 
 	adjustment = gtk_range_get_adjustment(GTK_RANGE(sb->id));
 

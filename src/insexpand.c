@@ -118,10 +118,10 @@ struct compl_S
 # define CP_CONT_S_IPOS	    4	// use CONT_S_IPOS for compl_cont_status
 # define CP_EQUAL	    8	// ins_compl_equal() always returns TRUE
 # define CP_ICASE	    16	// ins_compl_equal() ignores case
+# define CP_FAST	    32	// use fast_breakcheck instead of ui_breakcheck
 
 static char e_hitend[] = N_("Hit end of paragraph");
 # ifdef FEAT_COMPL_FUNC
-static char e_complwin[] = N_("E839: Completion function changed window");
 static char e_compldel[] = N_("E840: Completion function deleted text");
 # endif
 
@@ -298,7 +298,7 @@ has_compl_option(int dict_opt)
 	msg_attr(dict_opt ? _("'dictionary' option is empty")
 			  : _("'thesaurus' option is empty"),
 							      HL_ATTR(HLF_E));
-	if (emsg_silent == 0)
+	if (emsg_silent == 0 && !in_assert_fails)
 	{
 	    vim_beep(BO_COMPL);
 	    setcursor();
@@ -586,7 +586,10 @@ ins_compl_add(
     int		dir = (cdir == 0 ? compl_direction : cdir);
     int		flags = flags_arg;
 
-    ui_breakcheck();
+    if (flags & CP_FAST)
+	fast_breakcheck();
+    else
+	ui_breakcheck();
     if (got_int)
 	return FAIL;
     if (len < 0)
@@ -791,7 +794,7 @@ ins_compl_add_matches(
 
     for (i = 0; i < num_matches && add_r != FAIL; i++)
 	if ((add_r = ins_compl_add(matches[i], -1, NULL, NULL, NULL, dir,
-					   icase ? CP_ICASE : 0, FALSE)) == OK)
+			       CP_FAST | (icase ? CP_ICASE : 0), FALSE)) == OK)
 	    // if dir was BACKWARD then honor it just once
 	    dir = FORWARD;
     FreeWild(num_matches, matches);
@@ -1020,7 +1023,7 @@ ins_compl_show_pum(void)
 
 #if defined(FEAT_EVAL)
     // Dirty hard-coded hack: remove any matchparen highlighting.
-    do_cmdline_cmd((char_u *)"if exists('g:loaded_matchparen')|3match none|endif");
+    do_cmdline_cmd((char_u *)"if exists('g:loaded_matchparen')|:3match none|endif");
 #endif
 
     // Update the screen later, before drawing the popup menu over it.
@@ -1216,7 +1219,7 @@ ins_compl_dictionaries(
     }
     else
     {
-	regmatch.regprog = vim_regcomp(pat, p_magic ? RE_MAGIC : 0);
+	regmatch.regprog = vim_regcomp(pat, magic_isset() ? RE_MAGIC : 0);
 	if (regmatch.regprog == NULL)
 	    goto theend;
     }
@@ -1298,6 +1301,7 @@ ins_compl_files(
 	fp = mch_fopen((char *)files[i], "r");  // open dictionary file
 	if (flags != DICT_EXACT)
 	{
+	    msg_hist_off = TRUE;	// reset in msg_trunc_attr()
 	    vim_snprintf((char *)IObuff, IOSIZE,
 			      _("Scanning dictionary: %s"), (char *)files[i]);
 	    (void)msg_trunc_attr((char *)IObuff, TRUE, HL_ATTR(HLF_R));
@@ -1567,7 +1571,8 @@ ins_compl_bs(void)
     // Respect the 'backspace' option.
     if ((int)(p - line) - (int)compl_col < 0
 	    || ((int)(p - line) - (int)compl_col == 0
-		&& ctrl_x_mode != CTRL_X_OMNI) || ctrl_x_mode == CTRL_X_EVAL
+						 && ctrl_x_mode != CTRL_X_OMNI)
+	    || ctrl_x_mode == CTRL_X_EVAL
 	    || (!can_bs(BS_START) && (int)(p - line) - (int)compl_col
 							- compl_length < 0))
 	return K_BS;
@@ -1822,7 +1827,7 @@ ins_compl_prep(int c)
 
     // Ignore end of Select mode mapping and mouse scroll buttons.
     if (c == K_SELECT || c == K_MOUSEDOWN || c == K_MOUSEUP
-	    || c == K_MOUSELEFT || c == K_MOUSERIGHT
+	    || c == K_MOUSELEFT || c == K_MOUSERIGHT || c == K_COMMAND
 # ifdef FEAT_GUI_MACVIM
 	    || c == K_SWIPELEFT || c == K_SWIPERIGHT || c == K_SWIPEUP
 	    || c == K_SWIPEDOWN || c == K_FORCECLICK
@@ -2203,8 +2208,6 @@ expand_by_function(
     typval_T	args[3];
     char_u	*funcname;
     pos_T	pos;
-    win_T	*curwin_save;
-    buf_T	*curbuf_save;
     typval_T	rettv;
     int		save_State = State;
 
@@ -2220,11 +2223,10 @@ expand_by_function(
     args[2].v_type = VAR_UNKNOWN;
 
     pos = curwin->w_cursor;
-    curwin_save = curwin;
-    curbuf_save = curbuf;
-    // Lock the text to avoid weird things from happening.  Do allow switching
-    // to another window temporarily.
-    ++textlock;
+    // Lock the text to avoid weird things from happening.  Also disallow
+    // switching to another window, it should not be needed and may end up in
+    // Insert mode in another buffer.
+    ++textwinlock;
 
     // Call a function, which returns a list or dict.
     if (call_vim_function(funcname, 2, args, &rettv) == OK)
@@ -2247,13 +2249,8 @@ expand_by_function(
 		break;
 	}
     }
-    --textlock;
+    --textwinlock;
 
-    if (curwin_save != curwin || curbuf_save != curbuf)
-    {
-	emsg(_(e_complwin));
-	goto theend;
-    }
     curwin->w_cursor = pos;	// restore the cursor position
     validate_cursor();
     if (!EQUAL_POS(curwin->w_cursor, pos))
@@ -2284,14 +2281,15 @@ theend:
  * If the given string is already in the list of completions, then return
  * NOTDONE, otherwise add it to the list and return OK.  If there is an error,
  * maybe because alloc() returns NULL, then FAIL is returned.
+ * When "fast" is TRUE use fast_breakcheck() instead of ui_breakcheck().
  */
     static int
-ins_compl_add_tv(typval_T *tv, int dir)
+ins_compl_add_tv(typval_T *tv, int dir, int fast)
 {
     char_u	*word;
     int		dup = FALSE;
     int		empty = FALSE;
-    int		flags = 0;
+    int		flags = fast ? CP_FAST : 0;
     char_u	*(cptext[CPT_COUNT]);
     typval_T	user_data;
 
@@ -2342,7 +2340,7 @@ ins_compl_add_list(list_T *list)
     CHECK_LIST_MATERIALIZE(list);
     FOR_ALL_LIST_ITEMS(list, li)
     {
-	if (ins_compl_add_tv(&li->li_tv, dir) == OK)
+	if (ins_compl_add_tv(&li->li_tv, dir, TRUE) == OK)
 	    // if dir was BACKWARD then honor it just once
 	    dir = FORWARD;
 	else if (did_emsg)
@@ -2404,7 +2402,8 @@ set_completion(colnr_T startcol, list_T *list)
     if (p_ic)
 	flags |= CP_ICASE;
     if (compl_orig_text == NULL || ins_compl_add(compl_orig_text,
-				  -1, NULL, NULL, NULL, 0, flags, FALSE) != OK)
+					      -1, NULL, NULL, NULL, 0,
+					      flags | CP_FAST, FALSE) != OK)
 	return;
 
     ctrl_x_mode = CTRL_X_EVAL;
@@ -2474,7 +2473,7 @@ f_complete(typval_T *argvars, typval_T *rettv UNUSED)
     void
 f_complete_add(typval_T *argvars, typval_T *rettv)
 {
-    rettv->vval.v_number = ins_compl_add_tv(&argvars[0], 0);
+    rettv->vval.v_number = ins_compl_add_tv(&argvars[0], 0, FALSE);
 }
 
 /*
@@ -2501,6 +2500,56 @@ ins_compl_mode(void)
 	return (char_u *)ctrl_x_mode_names[ctrl_x_mode & ~CTRL_X_WANT_IDENT];
 
     return (char_u *)"";
+}
+
+    static void
+ins_compl_update_sequence_numbers()
+{
+    int		number = 0;
+    compl_T	*match;
+
+    if (compl_direction == FORWARD)
+    {
+	// search backwards for the first valid (!= -1) number.
+	// This should normally succeed already at the first loop
+	// cycle, so it's fast!
+	for (match = compl_curr_match->cp_prev; match != NULL
+		&& match != compl_first_match;
+					   match = match->cp_prev)
+	    if (match->cp_number != -1)
+	    {
+		number = match->cp_number;
+		break;
+	    }
+	if (match != NULL)
+	    // go up and assign all numbers which are not assigned
+	    // yet
+	    for (match = match->cp_next;
+		    match != NULL && match->cp_number == -1;
+					   match = match->cp_next)
+		match->cp_number = ++number;
+    }
+    else // BACKWARD
+    {
+	// search forwards (upwards) for the first valid (!= -1)
+	// number.  This should normally succeed already at the
+	// first loop cycle, so it's fast!
+	for (match = compl_curr_match->cp_next; match != NULL
+		&& match != compl_first_match;
+					   match = match->cp_next)
+	    if (match->cp_number != -1)
+	    {
+		number = match->cp_number;
+		break;
+	    }
+	if (match != NULL)
+	    // go down and assign all numbers which are not
+	    // assigned yet
+	    for (match = match->cp_prev; match
+		    && match->cp_number == -1;
+					   match = match->cp_prev)
+		match->cp_number = ++number;
+    }
 }
 
 /*
@@ -2589,8 +2638,12 @@ get_complete_info(list_T *what_list, dict_T *retdict)
     }
 
     if (ret == OK && (what_flag & CI_WHAT_SELECTED))
-	ret = dict_add_number(retdict, "selected", (compl_curr_match != NULL) ?
-			compl_curr_match->cp_number - 1 : -1);
+    {
+	if (compl_curr_match != NULL && compl_curr_match->cp_number == -1)
+	    ins_compl_update_sequence_numbers();
+	ret = dict_add_number(retdict, "selected", compl_curr_match != NULL
+				      ? compl_curr_match->cp_number - 1 : -1);
+    }
 
     // TODO
     // if (ret == OK && (what_flag & CI_WHAT_INSERTED))
@@ -2729,6 +2782,7 @@ ins_compl_get_exp(pos_T *ini)
 		    dict = ins_buf->b_fname;
 		    dict_f = DICT_EXACT;
 		}
+		msg_hist_off = TRUE;	// reset in msg_trunc_attr()
 		vim_snprintf((char *)IObuff, IOSIZE, _("Scanning: %s"),
 			ins_buf->b_fname == NULL
 			    ? buf_spname(ins_buf)
@@ -2763,6 +2817,7 @@ ins_compl_get_exp(pos_T *ini)
 #endif
 		else if (*e_cpt == ']' || *e_cpt == 't')
 		{
+		    msg_hist_off = TRUE;	// reset in msg_trunc_attr()
 		    type = CTRL_X_TAGS;
 		    vim_snprintf((char *)IObuff, IOSIZE, _("Scanning tags."));
 		    (void)msg_trunc_attr((char *)IObuff, TRUE, HL_ATTR(HLF_R));
@@ -3174,7 +3229,7 @@ ins_compl_next(
 	return -1;
 
     if (compl_leader != NULL
-			&& (compl_shown_match->cp_flags & CP_ORIGINAL_TEXT) == 0)
+		      && (compl_shown_match->cp_flags & CP_ORIGINAL_TEXT) == 0)
     {
 	// Set "compl_shown_match" to the actually shown match, it may differ
 	// when "compl_leader" is used to omit some of the matches.
@@ -3374,9 +3429,11 @@ ins_compl_next(
 		    MB_PTR_ADV(s);
 		}
 	    }
+	    msg_hist_off = TRUE;
 	    vim_snprintf((char *)IObuff, IOSIZE, "%s %s%s", lead,
 				s > compl_shown_match->cp_fname ? "<" : "", s);
 	    msg((char *)IObuff);
+	    msg_hist_off = FALSE;
 	    redraw_cmdline = FALSE;	    // don't overwrite!
 	}
     }
@@ -3574,7 +3631,7 @@ ins_complete(int c, int enable_pum)
 		    // line (probably) wrapped, set compl_startpos to the
 		    // first non_blank in the line, if it is not a wordchar
 		    // include it to get a better pattern, but then we don't
-		    // want the "\\<" prefix, check it bellow
+		    // want the "\\<" prefix, check it below
 		    compl_col = (colnr_T)getwhitecols(line);
 		    compl_startpos.col = compl_col;
 		    compl_startpos.lnum = curwin->w_cursor.lnum;
@@ -3788,8 +3845,6 @@ ins_complete(int c, int enable_pum)
 	    int		col;
 	    char_u	*funcname;
 	    pos_T	pos;
-	    win_T	*curwin_save;
-	    buf_T	*curbuf_save;
 	    int		save_State = State;
 
 	    // Call 'completefunc' or 'omnifunc' and get pattern length as a
@@ -3811,16 +3866,11 @@ ins_complete(int c, int enable_pum)
 	    args[1].vval.v_string = (char_u *)"";
 	    args[2].v_type = VAR_UNKNOWN;
 	    pos = curwin->w_cursor;
-	    curwin_save = curwin;
-	    curbuf_save = curbuf;
+	    ++textwinlock;
 	    col = call_func_retnr(funcname, 2, args);
+	    --textwinlock;
 
 	    State = save_State;
-	    if (curwin_save != curwin || curbuf_save != curbuf)
-	    {
-		emsg(_(e_complwin));
-		return FAIL;
-	    }
 	    curwin->w_cursor = pos;	// restore the cursor position
 	    validate_cursor();
 	    if (!EQUAL_POS(curwin->w_cursor, pos))
@@ -4014,60 +4064,15 @@ ins_complete(int c, int enable_pum)
 	{
 	    edit_submode_extra = (char_u *)_("The only match");
 	    edit_submode_highl = HLF_COUNT;
-	    compl_curr_match->cp_number = 0;
+	    compl_curr_match->cp_number = 1;
 	}
 	else
 	{
+#if defined(FEAT_COMPL_FUNC) || defined(FEAT_EVAL)
 	    // Update completion sequence number when needed.
 	    if (compl_curr_match->cp_number == -1)
-	    {
-		int		number = 0;
-		compl_T		*match;
-
-		if (compl_direction == FORWARD)
-		{
-		    // search backwards for the first valid (!= -1) number.
-		    // This should normally succeed already at the first loop
-		    // cycle, so it's fast!
-		    for (match = compl_curr_match->cp_prev; match != NULL
-			    && match != compl_first_match;
-						       match = match->cp_prev)
-			if (match->cp_number != -1)
-			{
-			    number = match->cp_number;
-			    break;
-			}
-		    if (match != NULL)
-			// go up and assign all numbers which are not assigned
-			// yet
-			for (match = match->cp_next;
-				match != NULL && match->cp_number == -1;
-						       match = match->cp_next)
-			    match->cp_number = ++number;
-		}
-		else // BACKWARD
-		{
-		    // search forwards (upwards) for the first valid (!= -1)
-		    // number.  This should normally succeed already at the
-		    // first loop cycle, so it's fast!
-		    for (match = compl_curr_match->cp_next; match != NULL
-			    && match != compl_first_match;
-						       match = match->cp_next)
-			if (match->cp_number != -1)
-			{
-			    number = match->cp_number;
-			    break;
-			}
-		    if (match != NULL)
-			// go down and assign all numbers which are not
-			// assigned yet
-			for (match = match->cp_prev; match
-				&& match->cp_number == -1;
-						       match = match->cp_prev)
-			    match->cp_number = ++number;
-		}
-	    }
-
+		ins_compl_update_sequence_numbers();
+#endif
 	    // The match should always have a sequence number now, this is
 	    // just a safety check.
 	    if (compl_curr_match->cp_number != -1)
@@ -4101,9 +4106,13 @@ ins_complete(int c, int enable_pum)
 	    if (edit_submode_extra != NULL)
 	    {
 		if (!p_smd)
+		{
+		    msg_hist_off = TRUE;
 		    msg_attr((char *)edit_submode_extra,
 			    edit_submode_highl < HLF_COUNT
 			    ? HL_ATTR(edit_submode_highl) : 0);
+		    msg_hist_off = FALSE;
+		}
 	    }
 	    else
 		msg_clr_cmdline();	// necessary for "noshowmode"
@@ -4162,7 +4171,7 @@ quote_meta(char_u *dest, char_u *src, int len)
 		    break;
 		// FALLTHROUGH
 	    case '~':
-		if (!p_magic)	// quote these only if magic is set
+		if (!magic_isset())	// quote these only if magic is set
 		    break;
 		// FALLTHROUGH
 	    case '\\':

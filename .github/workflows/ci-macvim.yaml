@@ -1,0 +1,289 @@
+name: MacVim GitHub CI
+
+on:
+  push:
+  pull_request:
+
+env:
+  MACOSX_DEPLOYMENT_TARGET: 10.9
+
+  CC: clang
+
+  VERSIONER_PERL_VERSION: 5.18
+  VERSIONER_PYTHON_VERSION: 2.7
+  vi_cv_path_python: /usr/bin/python
+  vi_cv_path_python3: /usr/local/bin/python3
+  vi_cv_path_plain_lua: /usr/local/bin/lua
+  vi_cv_path_ruby: /usr/local/opt/ruby/bin/ruby
+  vi_cv_dll_name_perl: /System/Library/Perl/5.18/darwin-thread-multi-2level/CORE/libperl.dylib
+  vi_cv_dll_name_python: /System/Library/Frameworks/Python.framework/Versions/2.7/Python
+  vi_cv_dll_name_python3: /usr/local/Frameworks/Python.framework/Versions/3.9/Python
+  vi_cv_dll_name_python3_arm64: /opt/homebrew/Frameworks/Python.framework/Versions/3.9/Python
+  vi_cv_dll_name_ruby: /usr/local/opt/ruby/lib/libruby.dylib
+  vi_cv_dll_name_ruby_arm64: /opt/homebrew/opt/ruby/lib/libruby.dylib
+  vi_cv_dll_name_lua_arm64: /opt/homebrew/lib/liblua.dylib
+
+  VIM_BIN: src/MacVim/build/Release/MacVim.app/Contents/MacOS/Vim
+  MACVIM_BIN: src/MacVim/build/Release/MacVim.app/Contents/MacOS/MacVim
+
+  TERM: xterm
+  BASH_SILENCE_DEPRECATION_WARNING: 1
+
+jobs:
+  # Builds and test MacVim
+  build-and-test:
+
+    # Test on macOS 10.15 / 11.0, and also older version of Xcode for compatibility testing.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-10.15
+            xcode: 11.7
+          - os: macos-10.15
+          - os: macos-11.0
+            publish: true
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v2
+
+      # Set up, install, and cache gettext library for localization.
+      #
+      # Instead of using the default binary installed by Homebrew, need to build our own because gettext is statically
+      # linked in MacVim, and need to be built against MACOSX_DEPLOYMENT_TARGET to ensure the built binary will work on
+      # supported macOS versions.
+      #
+      # In addition, to support building a universal MacVim, we need an arm64 version of gettext as well in order to
+      # create a universal gettext binary to link against (Homebrew only distributes thin binaries and therefore this
+      # has to be done manually). To do that, we will just pull the bottle directly from Homebrew and patch it in using
+      # lipo. We can't use normal brew commands to get the bottle because brew doesn't natively support cross-compiling
+      # and we are running CI on x86_64 Macs. We also don't need to worry about the min deployment target fix on arm64
+      # because all Apple Silicon Macs have to run on macOS 11+.
+
+      - name: Set up gettext
+        if: matrix.publish
+        run: |
+          # Patch the official Homebrew gettext formula to explicitly build for min deployment target
+          cp /usr/local/Homebrew/Library/Taps/homebrew/homebrew-core/Formula/gettext.rb gettext.rb
+
+          cat << EOF > gettext_diff.patch
+          --- gettext_orig.rb
+          +++ gettext.rb
+          @@ -24,2 +24,3 @@
+             def install
+          +    ENV["MACOSX_DEPLOYMENT_TARGET"] = "${MACOSX_DEPLOYMENT_TARGET}"
+               args = [
+          EOF
+
+          patch gettext.rb gettext_diff.patch
+
+          # Uninstall the already installed gettext because we want to build our own
+          brew uninstall --ignore-dependencies gettext
+
+      - name: Cache gettext
+        id: cache-gettext
+        if: matrix.publish
+        uses: actions/cache@v2
+        with:
+          path: /usr/local/Cellar/gettext
+          key: gettext-homebrew-cache-patched-unified-${{ hashFiles('gettext.rb') }}
+
+      - name: Install gettext
+        if: matrix.publish
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: 1
+        run: |
+          # This will be a no-op if gettext was cached
+          brew install --formula -s ./gettext.rb
+          # If gettext was cached, this step is necessary to relink it to /usr/local/
+          brew link gettext
+
+      - name: Create universal gettext with arm64 bottle
+        if: matrix.publish && steps.cache-gettext.outputs.cache-hit != 'true'
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: 1
+        run: |
+          set -o verbose
+
+          # Manually download and extract gettext bottle for arm64
+          source /dev/stdin <<<"$(brew info --json gettext | jq -r '"gettext_url=\(.[0].bottle.stable.files.arm64_big_sur.url)", "gettext_ver=\(.[0].versions.stable)"')"
+
+          mkdir gettext_download
+          cd gettext_download
+          wget --no-verbose --header 'Authorization: Bearer QQ==' -O gettext.tar.gz ${gettext_url}
+          tar xf gettext.tar.gz
+
+          # Just for diagnostics, print out the old archs. This should be a thin binary (x86_64)
+          lipo -info /usr/local/lib/libintl.a
+          lipo -info /usr/local/lib/libintl.dylib
+
+          # Create a universal binary by patching the custom built x86_64 one with the downloaded arm64 one.
+          # Modify the actual binaries in /usr/local/Cellar instead of the symlinks to allow caching to work.
+          lipo -create -output /usr/local/Cellar/gettext/${gettext_ver}/lib/libintl.a /usr/local/Cellar/gettext/${gettext_ver}/lib/libintl.a ./gettext/${gettext_ver}/lib/libintl.a
+          lipo -create -output /usr/local/Cellar/gettext/${gettext_ver}/lib/libintl.dylib /usr/local/Cellar/gettext/${gettext_ver}/lib/libintl.dylib ./gettext/${gettext_ver}/lib/libintl.dylib
+
+          # Print out the new archs and verify they are universal with 2 archs.
+          lipo -info /usr/local/lib/libintl.a | grep 'x86_64 arm64'
+          lipo -info /usr/local/lib/libintl.dylib | grep 'x86_64 arm64'
+
+      # Set up remaining packages and tools
+
+      - name: Install packages
+        if: matrix.publish
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: 1
+        run: |
+          brew install python
+          brew install ruby
+          brew install lua
+          if [[ -d /usr/local/Cellar/perl ]]; then
+            # We just use system perl to reduce dependencies
+            brew unlink perl
+          fi
+
+      - name: Set up Xcode
+        if: matrix.xcode != ''
+        run: |
+          sudo xcode-select -s /Applications/Xcode_${{ matrix.xcode }}.app/Contents/Developer
+          xcode-select -p
+
+      # All set up steps are done. Build and test MacVim below.
+
+      - name: Configure
+        run: |
+          set -o verbose
+
+          CONFOPT=(
+            --with-features=huge
+            --enable-netbeans
+            --with-tlib=ncurses
+            --enable-cscope
+            --enable-gui=macvim
+            --with-compiledby="GitHub Actions"
+          )
+          if ${{ matrix.publish == true }}; then
+            CONFOPT+=(
+              --enable-perlinterp=dynamic
+              --enable-pythoninterp=dynamic
+              --enable-python3interp=dynamic
+              --enable-rubyinterp=dynamic
+              --enable-luainterp=dynamic
+              --with-lua-prefix=/usr/local
+              --with-macarchs="x86_64 arm64"
+            )
+          else
+            CONFOPT+=(
+              --with-macarchs=x86_64
+            )
+          fi
+          echo "CONFOPT: ${CONFOPT[@]}"
+
+          ./configure "${CONFOPT[@]}" --enable-fail-if-missing
+
+          sed -i.bak -f ci/config.mk.sed -f ci/config.mk.clang.sed src/auto/config.mk
+
+      - name: Modify configure result
+        if: matrix.publish
+        run: |
+          # Ruby is keg-only in Homebrew, so need to manually link in the path so Vim will know where to look for the binaries.
+          perl -p -i -e "s#(?<=-DDYNAMIC_RUBY_DLL=\\\\\").*?(?=\\\\\")#${vi_cv_dll_name_ruby}#" src/auto/config.mk
+          grep -q -- "-DDYNAMIC_PERL_DLL=\\\\\"${vi_cv_dll_name_perl}\\\\\"" src/auto/config.mk
+          grep -q -- "-DDYNAMIC_PYTHON_DLL=\\\\\"${vi_cv_dll_name_python}\\\\\"" src/auto/config.mk
+          grep -q -- "-DDYNAMIC_PYTHON3_DLL=\\\\\"${vi_cv_dll_name_python3}\\\\\"" src/auto/config.mk
+          grep -q -- "-DDYNAMIC_RUBY_DLL=\\\\\"${vi_cv_dll_name_ruby}\\\\\"" src/auto/config.mk
+
+          # Also search for the arm64 overrides for the default library locations, which are different from x86_64
+          # because Homebrew puts them at a different place.
+          grep -q -- "-DDYNAMIC_PYTHON3_DLL_ARM64=\\\\\"${vi_cv_dll_name_python3_arm64}\\\\\"" src/auto/config.mk
+          grep -q -- "-DDYNAMIC_RUBY_DLL_ARM64=\\\\\"${vi_cv_dll_name_ruby_arm64}\\\\\"" src/auto/config.mk
+          grep -q -- "-DDYNAMIC_LUA_DLL_ARM64=\\\\\"${vi_cv_dll_name_lua_arm64}\\\\\"" src/auto/config.mk
+
+      - name: Show configure output
+        run: |
+          cat src/auto/config.mk
+          cat src/auto/config.h
+
+      - name: Build
+        env:
+          LC_ALL: C
+        run: |
+          set -o verbose
+
+          NPROC=$(getconf _NPROCESSORS_ONLN)
+          echo "Building MacVim with ${NPROC} cores"
+
+          make -j${NPROC}
+
+      - name: Check version
+        run: |
+          ${VIM_BIN} --version
+          ${VIM_BIN} -u NONE -i NONE --not-a-term -esNX -V1 -S ci/if_ver-1.vim -c quit
+          ${VIM_BIN} -u NONE -i NONE --not-a-term -esNX -V1 -S ci/if_ver-2.vim -c quit
+
+      - name: Smoketest
+        if: matrix.publish
+        run: |
+          set -o verbose
+
+          macvim_excmd() {
+            ${VIM_BIN} -u NONE -i NONE -g -f -X -V1 -es "$@" -c 'echo ""' -c 'qall!' 2>&1
+          }
+
+          # Smoketest scripting languages
+          macvim_excmd -c 'lua print("Test")'
+          macvim_excmd -c 'perl VIM::Msg("Test")'
+          macvim_excmd -c 'py import sys; print("Test")'
+          macvim_excmd -c 'py3 import sys; print("Test")'
+          macvim_excmd -c 'ruby puts("Test")'
+
+          # Check that localized messages work by printing ':version' and checking against localized word
+          macvim_excmd -c 'lang es_ES' -c 'version' | grep Enlazado
+
+          # Make sure there isn't any dynamic linkage to third-party dependencies in the built binary, as we should only use
+          # static linkage to avoid dependency hell. Test that all those dylib's are in /usr/lib which is bundled with macOS and not third-party.
+          if otool -L ${VIM_BIN} | grep '\.dylib\s' | grep -v '^\s*/usr/lib/'; then
+            echo 'Found external dynamic linkage!'; false
+          fi
+
+          # Make sure we are building universal x86_64 / arm64 builds and didn't accidentally create a thin app.
+          check_arch() {
+            local archs=($(lipo -archs "$1"))
+            if [[ ${archs[@]} != "x86_64 arm64" ]]; then
+              echo "Wrong arch(s) in $1: ${archs[@]}"; false
+            fi
+          }
+          check_arch "${VIM_BIN}"
+          check_arch "${MACVIM_BIN}"
+
+      - name: Update Vim help tags
+        if: matrix.publish
+        run: make -C runtime/doc vimtags VIMEXE=../../${VIM_BIN}
+
+      - name: Test
+        timeout-minutes: 20
+        run: make test
+
+      - name: Test GUI
+        timeout-minutes: 20
+        run: |
+          make -C src/testdir clean
+          make -C src testgui
+
+      # Creates a DMG package of MacVim. Note that this doesn't create a GitHub release for us, because we would prefer to
+      # do it manually, for two reasons: 1) signing / notarization are currently done out of CI, 2) we want to manually
+      # format our release notes and add pictures to make them look nice.
+      - name: Build MacVim dmg image
+        if: startsWith(github.ref, 'refs/tags/') && matrix.publish
+        run: |
+          # Use the --skip-jenkins flag to skip the prettify osascript calls which could fail due to permission issues in
+          # CI environment.
+          make -C src macvim-dmg CREATEDMG_FLAGS=--skip-jenkins
+
+      - name: Upload MacVim image
+        if: startsWith(github.ref, 'refs/tags/') && matrix.publish
+        uses: actions/upload-artifact@v2
+        with:
+          name: MacVim.dmg
+          path: src/MacVim/build/Release/MacVim.dmg

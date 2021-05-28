@@ -1932,7 +1932,9 @@ plain_vgetc(void)
 
     do
 	c = safe_vgetc();
-    while (c == K_IGNORE || c == K_VER_SCROLLBAR || c == K_HOR_SCROLLBAR);
+    while (c == K_IGNORE
+	    || c == K_VER_SCROLLBAR || c == K_HOR_SCROLLBAR
+	    || c == K_MOUSEMOVE);
 
     if (c == K_PS)
 	// Only handle the first pasted character.  Drop the rest, since we
@@ -2163,7 +2165,8 @@ parse_queued_messages(void)
 
     // Do not handle messages while redrawing, because it may cause buffers to
     // change or be wiped while they are being redrawn.
-    if (updating_screen)
+    // Also bail out when parsing messages was explicitly disabled.
+    if (updating_screen || dont_parse_messages)
 	return;
 
     // If memory allocation fails during startup we'll exit but curbuf or
@@ -2276,7 +2279,7 @@ at_ctrl_x_key(void)
 }
 
 /*
- * Check if typebuf.tb_buf[] contains a modifer plus key that can be changed
+ * Check if typebuf.tb_buf[] contains a modifier plus key that can be changed
  * into just a key, apply that.
  * Check from typebuf.tb_buf[typebuf.tb_off] to typebuf.tb_buf[typebuf.tb_off
  * + "max_offset"].
@@ -2592,11 +2595,10 @@ handle_mapping(
 						    typebuf.tb_off] == RM_YES))
 		&& !*timedout)
 	{
-	    keylen = check_termcode(max_mlen + 1,
-					       NULL, 0, NULL);
+	    keylen = check_termcode(max_mlen + 1, NULL, 0, NULL);
 
-	    // If no termcode matched but 'pastetoggle' matched partially it's
-	    // like an incomplete key sequence.
+	    // If no termcode matched but 'pastetoggle' matched partially
+	    // it's like an incomplete key sequence.
 	    if (keylen == 0 && save_keylen == KEYLEN_PART_KEY)
 		keylen = KEYLEN_PART_KEY;
 
@@ -3631,3 +3633,104 @@ input_available(void)
 	    );
 }
 #endif
+
+/*
+ * Function passed to do_cmdline() to get the command after a <Cmd> key from
+ * typeahead.
+ */
+    char_u *
+getcmdkeycmd(
+	int		promptc UNUSED,
+	void		*cookie UNUSED,
+	int		indent UNUSED,
+	getline_opt_T	do_concat UNUSED)
+{
+    garray_T	line_ga;
+    int		c1 = -1;
+    int		c2;
+    int		cmod = 0;
+    int		aborted = FALSE;
+
+    ga_init2(&line_ga, 1, 32);
+
+    // no mapping for these characters
+    no_mapping++;
+
+    got_int = FALSE;
+    while (c1 != NUL && !aborted)
+    {
+	if (ga_grow(&line_ga, 32) != OK)
+	{
+	    aborted = TRUE;
+	    break;
+	}
+
+	if (vgetorpeek(FALSE) == NUL)
+	{
+	    // incomplete <Cmd> is an error, because there is not much the user
+	    // could do in this state.
+	    emsg(_(e_cmd_mapping_must_end_with_cr));
+	    aborted = TRUE;
+	    break;
+	}
+
+	// Get one character at a time.
+	c1 = vgetorpeek(TRUE);
+
+	// Get two extra bytes for special keys
+	if (c1 == K_SPECIAL)
+	{
+	    c1 = vgetorpeek(TRUE);
+	    c2 = vgetorpeek(TRUE);
+	    if (c1 == KS_MODIFIER)
+	    {
+		cmod = c2;
+		continue;
+	    }
+	    c1 = TO_SPECIAL(c1, c2);
+	}
+	if (c1 == Ctrl_V)
+	{
+	    // CTRL-V is followed by octal, hex or other characters, reverses
+	    // what AppendToRedobuffLit() does.
+	    no_reduce_keys = TRUE;  //  don't merge modifyOtherKeys
+	    c1 = get_literal(TRUE);
+	    no_reduce_keys = FALSE;
+	}
+
+	if (got_int)
+	    aborted = TRUE;
+	else if (c1 == '\r' || c1 == '\n')
+	    c1 = NUL;  // end the line
+	else if (c1 == ESC)
+	    aborted = TRUE;
+	else if (c1 == K_COMMAND)
+	{
+	    // give a nicer error message for this special case
+	    emsg(_(e_cmd_mapping_must_end_with_cr_before_second_cmd));
+	    aborted = TRUE;
+	}
+	else if (IS_SPECIAL(c1))
+	{
+	    if (c1 == K_SNR)
+		ga_concat(&line_ga, (char_u *)"<SNR>");
+	    else
+	    {
+		semsg(e_cmd_maping_must_not_include_str_key,
+					       get_special_key_name(c1, cmod));
+		aborted = TRUE;
+	    }
+	}
+	else
+	    ga_append(&line_ga, (char)c1);
+
+	cmod = 0;
+    }
+
+    no_mapping--;
+
+    if (aborted)
+	ga_clear(&line_ga);
+
+    return (char_u *)line_ga.ga_data;
+}

@@ -15,10 +15,11 @@ env:
       vi_cv_path_ruby=/usr/local/opt/ruby/bin/ruby
       vi_cv_dll_name_perl=/System/Library/Perl/5.18/darwin-thread-multi-2level/CORE/libperl.dylib
       vi_cv_dll_name_python=/System/Library/Frameworks/Python.framework/Versions/2.7/Python
-      vi_cv_dll_name_python3=/usr/local/Frameworks/Python.framework/Versions/3.8/Python
+      vi_cv_dll_name_python3=/usr/local/Frameworks/Python.framework/Versions/3.9/Python
       vi_cv_dll_name_ruby=/usr/local/opt/ruby/lib/libruby.dylib
       VIMCMD=src/MacVim/build/Release/MacVim.app/Contents/MacOS/Vim
-      CONFOPT="--with-features=huge --enable-netbeans --with-tlib=ncurses --enable-cscope --enable-gui=macvim"
+      MACVIM_BIN=src/MacVim/build/Release/MacVim.app/Contents/MacOS/MacVim
+      CONFOPT="--with-features=huge --enable-netbeans --with-tlib=ncurses --enable-cscope --enable-gui=macvim --with-macarchs=x86_64"
       BASH_SILENCE_DEPRECATION_WARNING=1
 
 _anchors:
@@ -85,6 +86,10 @@ script:
   # Make sure there isn't any dynamic linkage to third-party dependencies in the built binary, as we should only use
   # static linkage to avoid dependency hell. Test that all those dylib's are in /usr/lib which is bundled with macOS and not third-party.
   - (! otool -L ${VIMCMD} | grep '\.dylib\s' | grep -v '^\s*/usr/lib/')
+  # Make sure we are building x86_64 only. arm64 builds don't work properly now, so we don't want to accidentally build
+  # it as it will get prioritized by Apple Silicon Macs.
+  - (lipo -archs ${VIMCMD} | grep '^x86_64$')
+  - (lipo -archs ${MACVIM_BIN} | grep '^x86_64$')
   - echo -en "travis_fold:end:smoketest\\r\\033[0K"
 
   # Run standard test suites.
@@ -99,15 +104,16 @@ script:
 
 jobs:
   include:
-    - osx_image: xcode12
-    - osx_image: xcode11.3
+    - osx_image: xcode12.2
       <<: *lang_env
       <<: *homebrew
       <<: *caches
-    - osx_image: xcode9.4
-    - osx_image: xcode7.3
+    # Disable unnecessary builds to cut down on Travis usage due to billing changes for open-source projects.
+    #- osx_image: xcode11.6
+    #- osx_image: xcode9.4
+    #- osx_image: xcode7.3
     - stage: deploy
-      osx_image: xcode11.3
+      osx_image: xcode12.2
       <<: *lang_env
       <<: *caches
       script: skip

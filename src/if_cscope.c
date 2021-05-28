@@ -212,8 +212,8 @@ do_cscope_general(
 	    return;
 	}
 	postponed_split = -1;
-	postponed_split_flags = cmdmod.split;
-	postponed_split_tab = cmdmod.tab;
+	postponed_split_flags = cmdmod.cmod_split;
+	postponed_split_tab = cmdmod.cmod_tab;
     }
 
     cmdp->func(eap);
@@ -1813,7 +1813,10 @@ cs_file_results(FILE *f, int *nummatches_a)
 
 	   context = alloc(strlen(cntx)+5);
 	   if (context == NULL)
+	   {
+	       vim_free(fullname);
 	       continue;
+	   }
 
 	   if (strcmp(cntx, "<global>")==0)
 	       strcpy(context, "<<global>>");

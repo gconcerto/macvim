@@ -1131,7 +1131,7 @@ free_all_mem(void)
     free_signs();
 # endif
 # ifdef FEAT_EVAL
-    set_expr_line(NULL);
+    set_expr_line(NULL, NULL);
 # endif
 # ifdef FEAT_DIFF
     if (curtab != NULL)
@@ -1872,9 +1872,10 @@ vim_strnicmp(char *s1, char *s2, size_t len)
 #endif
 
 /*
- * Version of strchr() and strrchr() that handle unsigned char strings
- * with characters from 128 to 255 correctly.  It also doesn't return a
- * pointer to the NUL at the end of the string.
+ * Search for first occurrence of "c" in "string".
+ * Version of strchr() that handles unsigned char strings with characters from
+ * 128 to 255 correctly.  It also doesn't return a pointer to the NUL at the
+ * end of the string.
  */
     char_u  *
 vim_strchr(char_u *string, int c)
@@ -1949,6 +1950,9 @@ vim_strbyte(char_u *string, int c)
 
 /*
  * Search for last occurrence of "c" in "string".
+ * Version of strrchr() that handles unsigned char strings with characters from
+ * 128 to 255 correctly.  It also doesn't return a pointer to the NUL at the
+ * end of the string.
  * Return NULL if not found.
  * Does not handle multi-byte char for "c"!
  */
@@ -2022,8 +2026,9 @@ ga_clear_strings(garray_T *gap)
 {
     int		i;
 
-    for (i = 0; i < gap->ga_len; ++i)
-	vim_free(((char_u **)(gap->ga_data))[i]);
+    if (gap->ga_data != NULL)
+	for (i = 0; i < gap->ga_len; ++i)
+	    vim_free(((char_u **)(gap->ga_data))[i]);
     ga_clear(gap);
 }
 
@@ -2497,7 +2502,7 @@ static struct key_name_entry
     {K_URXVT_MOUSE,	(char_u *)"UrxvtMouse"},
 #endif
     {K_SGR_MOUSE,	(char_u *)"SgrMouse"},
-    {K_SGR_MOUSERELEASE, (char_u *)"SgrMouseRelelase"},
+    {K_SGR_MOUSERELEASE, (char_u *)"SgrMouseRelease"},
     {K_LEFTMOUSE,	(char_u *)"LeftMouse"},
     {K_LEFTMOUSE_NM,	(char_u *)"LeftMouseNM"},
     {K_LEFTDRAG,	(char_u *)"LeftDrag"},
@@ -2537,6 +2542,9 @@ static struct key_name_entry
     {K_FORCECLICK,	(char_u *)"ForceClick"},
 #endif
     {K_IGNORE,		(char_u *)"Ignore"},
+    {K_COMMAND,		(char_u *)"Cmd"},
+    {K_FOCUSGAINED,	(char_u *)"FocusGained"},
+    {K_FOCUSLOST,	(char_u *)"FocusLost"},
     {0,			NULL}
     // NOTE: When adding a long name update MAX_KEY_NAME_LEN.
 };
@@ -2825,7 +2833,7 @@ find_special_key(
 
     // Find end of modifier list
     last_dash = src;
-    for (bp = src + 1; *bp == '-' || vim_isIDc(*bp); bp++)
+    for (bp = src + 1; *bp == '-' || vim_isNormalIDc(*bp); bp++)
     {
 	if (*bp == '-')
 	{
@@ -2954,8 +2962,35 @@ find_special_key(
 
 
 /*
+ * Some keys are used with Ctrl without Shift and are still expected to be
+ * mapped as if Shift was pressed:
+ * CTRL-2 is CTRL-@
+ * CTRL-6 is CTRL-^
+ * CTRL-- is CTRL-_
+ * Also, <C-H> and <C-h> mean the same thing, always use "H".
+ * Returns the possibly adjusted key.
+ */
+    int
+may_adjust_key_for_ctrl(int modifiers, int key)
+{
+    if (modifiers & MOD_MASK_CTRL)
+    {
+	if (ASCII_ISALPHA(key))
+	    return TOUPPER_ASC(key);
+	if (key == '2')
+	    return '@';
+	if (key == '6')
+	    return '^';
+	if (key == '-')
+	    return '_';
+    }
+    return key;
+}
+
+/*
  * Some keys already have Shift included, pass them as normal keys.
- * Not when Ctrl is also used, because <C-H> and <C-S-H> are different.
+ * When Ctrl is also used <C-H> and <C-S-H> are different, but <C-S-{> should
+ * be <C-{>.  Same for <C-S-}> and <C-S-|>.
  * Also for <A-S-a> and <M-S-a>.
  * This includes all printable ASCII characters except numbers and a-z.
  */
@@ -2970,6 +3005,11 @@ may_remove_shift_modifier(int modifiers, int key)
 		|| (key >= '[' && key <= '`')
 		|| (key >= '{' && key <= '~')))
 	return modifiers & ~MOD_MASK_SHIFT;
+
+    if (modifiers == (MOD_MASK_SHIFT | MOD_MASK_CTRL)
+		&& (key == '{' || key == '}' || key == '|'))
+	return modifiers & ~MOD_MASK_SHIFT;
+
     return modifiers;
 }
 
@@ -3088,10 +3128,10 @@ get_special_key_code(char_u *name)
 	for (i = 0; key_names_table[i].name != NULL; i++)
 	{
 	    table_name = key_names_table[i].name;
-	    for (j = 0; vim_isIDc(name[j]) && table_name[j] != NUL; j++)
+	    for (j = 0; vim_isNormalIDc(name[j]) && table_name[j] != NUL; j++)
 		if (TOLOWER_ASC(table_name[j]) != TOLOWER_ASC(name[j]))
 		    break;
-	    if (!vim_isIDc(name[j]) && table_name[j] == NUL)
+	    if (!vim_isNormalIDc(name[j]) && table_name[j] == NUL)
 		return key_names_table[i].key;
 	}
     return 0;

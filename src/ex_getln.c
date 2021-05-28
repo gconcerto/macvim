@@ -52,6 +52,9 @@ static void	restore_cmdline(cmdline_info_T *ccp);
 static int	cmdline_paste(int regname, int literally, int remcr);
 static void	redrawcmdprompt(void);
 static int	ccheck_abbr(int);
+#ifdef FEAT_SEARCH_EXTRA
+static int	empty_pattern_magic(char_u *pat, size_t len, magic_T magic_val);
+#endif
 
 #ifdef FEAT_CMDWIN
 static int	open_cmdwin(void);
@@ -89,15 +92,34 @@ abandon_cmdline(void)
  * as a trailing \|, which can happen while typing a pattern.
  */
     static int
-empty_pattern(char_u *p)
+empty_pattern(char_u *p, int delim)
 {
-    size_t n = STRLEN(p);
+    size_t	n = STRLEN(p);
+    magic_T	magic_val = MAGIC_ON;
 
+    if (n > 0)
+	(void) skip_regexp_ex(p, delim, magic_isset(), NULL, NULL, &magic_val);
+    else
+	return TRUE;
+
+    return empty_pattern_magic(p, n, magic_val);
+}
+
+    static int
+empty_pattern_magic(char_u *p, size_t len, magic_T magic_val)
+{
     // remove trailing \v and the like
-    while (n >= 2 && p[n - 2] == '\\'
-			  && vim_strchr((char_u *)"mMvVcCZ", p[n - 1]) != NULL)
-	n -= 2;
-    return n == 0 || (n >= 2 && p[n - 2] == '\\' && p[n - 1] == '|');
+    while (len >= 2 && p[len - 2] == '\\'
+                        && vim_strchr((char_u *)"mMvVcCZ", p[len - 1]) != NULL)
+       len -= 2;
+
+    // true, if the pattern is empty, or the pattern ends with \| and magic is
+    // set (or it ends with '|' and very magic is set)
+    return len == 0 || (len > 1
+	    && ((p[len - 2] == '\\'
+				 && p[len - 1] == '|' && magic_val == MAGIC_ON)
+		|| (p[len - 2] != '\\'
+			     && p[len - 1] == '|' && magic_val == MAGIC_ALL)));
 }
 
 // Struct to store the viewstate during 'incsearch' highlighting.
@@ -142,22 +164,24 @@ restore_viewstate(viewstate_T *vs)
 typedef struct {
     pos_T	search_start;	// where 'incsearch' starts searching
     pos_T	save_cursor;
+    int		winid;		// window where this state is valid
     viewstate_T	init_viewstate;
     viewstate_T	old_viewstate;
     pos_T	match_start;
     pos_T	match_end;
     int		did_incsearch;
     int		incsearch_postponed;
-    int		magic_save;
+    optmagic_T	magic_overruled_save;
 } incsearch_state_T;
 
     static void
 init_incsearch_state(incsearch_state_T *is_state)
 {
+    is_state->winid = curwin->w_id;
     is_state->match_start = curwin->w_cursor;
     is_state->did_incsearch = FALSE;
     is_state->incsearch_postponed = FALSE;
-    is_state->magic_save = p_magic;
+    is_state->magic_overruled_save = magic_overruled;
     CLEAR_POS(&is_state->match_end);
     is_state->save_cursor = curwin->w_cursor;  // may be restored later
     is_state->search_start = curwin->w_cursor;
@@ -195,7 +219,7 @@ do_incsearch_highlighting(
 	int		    *patlen)
 {
     char_u	*cmd;
-    cmdmod_T	save_cmdmod = cmdmod;
+    cmdmod_T	dummy_cmdmod;
     char_u	*p;
     int		delim_optional = FALSE;
     int		delim;
@@ -205,6 +229,7 @@ do_incsearch_highlighting(
     pos_T	save_cursor;
     int		use_last_pat;
     int		retval = FALSE;
+    magic_T     magic = 0;
 
     *skiplen = 0;
     *patlen = ccline.cmdlen;
@@ -231,8 +256,8 @@ do_incsearch_highlighting(
     ea.cmd = ccline.cmdbuff;
     ea.addr_type = ADDR_LINES;
 
-    parse_command_modifiers(&ea, &dummy, TRUE);
-    cmdmod = save_cmdmod;
+    CLEAR_FIELD(dummy_cmdmod);
+    parse_command_modifiers(&ea, &dummy, &dummy_cmdmod, TRUE);
 
     cmd = skip_range(ea.cmd, TRUE, NULL);
     if (vim_strchr((char_u *)"sgvl", *cmd) == NULL)
@@ -250,9 +275,9 @@ do_incsearch_highlighting(
 	    || STRNCMP(cmd, "vglobal", p - cmd) == 0)
     {
 	if (*cmd == 's' && cmd[1] == 'm')
-	    p_magic = TRUE;
+	    magic_overruled = OPTION_MAGIC_ON;
 	else if (*cmd == 's' && cmd[1] == 'n')
-	    p_magic = FALSE;
+	    magic_overruled = OPTION_MAGIC_OFF;
     }
     else if (STRNCMP(cmd, "sort", MAX(p - cmd, 3)) == 0)
     {
@@ -286,7 +311,7 @@ do_incsearch_highlighting(
     p = skipwhite(p);
     delim = (delim_optional && vim_isIDc(*p)) ? ' ' : *p++;
     *search_delim = delim;
-    end = skip_regexp(p, delim, p_magic);
+    end = skip_regexp_ex(p, delim, magic_isset(), NULL, NULL, &magic);
 
     use_last_pat = end == p && *end == delim;
 
@@ -300,7 +325,7 @@ do_incsearch_highlighting(
 	int  empty;
 
 	*end = NUL;
-	empty = empty_pattern(p);
+	empty = empty_pattern_magic(p, STRLEN(p), magic);
 	*end = c;
 	if (empty)
 	    goto theend;
@@ -370,7 +395,7 @@ finish_incsearch_highlighting(
 	search_first_line = 0;
 	search_last_line = MAXLNUM;
 
-	p_magic = is_state->magic_save;
+	magic_overruled = is_state->magic_overruled_save;
 
 	validate_cursor();	// needed for TAB
 	redraw_all_later(SOME_VALID);
@@ -533,7 +558,8 @@ may_do_incsearch_highlighting(
     {
 	next_char = ccline.cmdbuff[skiplen + patlen];
 	ccline.cmdbuff[skiplen + patlen] = NUL;
-	if (empty_pattern(ccline.cmdbuff) && !no_hlsearch)
+	if (empty_pattern(ccline.cmdbuff + skiplen, search_delim)
+							       && !no_hlsearch)
 	{
 	    redraw_all_later(SOME_VALID);
 	    set_no_hlsearch(TRUE);
@@ -711,7 +737,7 @@ may_add_char_to_search(int firstc, int *c, incsearch_state_T *is_state)
 	    if (p_ic && p_scs && !pat_has_uppercase(ccline.cmdbuff + skiplen))
 		*c = MB_TOLOWER(*c);
 	    if (*c == search_delim || vim_strchr((char_u *)(
-			       p_magic ? "\\~^$.*[" : "\\^$"), *c) != NULL)
+			     magic_isset() ? "\\~^$.*[" : "\\^$"), *c) != NULL)
 	    {
 		// put a backslash before special characters
 		stuffcharReadbuff(*c);
@@ -1227,8 +1253,11 @@ cmdline_insert_reg(int *gotesc UNUSED)
 	}
 #endif
     }
+    // remove the double quote
     redrawcmd();
-    return CMDLINE_CHANGED;
+
+    // The text has been stuffed, the command line didn't change yet.
+    return CMDLINE_NOT_CHANGED;
 }
 
 /*
@@ -1680,6 +1709,26 @@ getcmdline_int(
     // and execute commands. Display may be messed up a bit.
     if (did_emsg)
 	redrawcmd();
+
+#ifdef FEAT_STL_OPT
+    // Redraw the statusline in case it uses the current mode using the mode()
+    // function.
+    if (!cmd_silent && msg_scrolled == 0)
+    {
+	int	found_one = FALSE;
+	win_T	*wp;
+
+	FOR_ALL_WINDOWS(wp)
+	    if (*p_stl != NUL || *wp->w_p_stl != NUL)
+	    {
+		wp->w_redr_status = TRUE;
+		found_one = TRUE;
+	    }
+	if (found_one)
+	    redraw_statuslines();
+    }
+#endif
+
     did_emsg = FALSE;
     got_int = FALSE;
 
@@ -1688,6 +1737,8 @@ getcmdline_int(
      */
     for (;;)
     {
+	int trigger_cmdlinechanged = TRUE;
+
 	redir_off = TRUE;	// Don't redirect the typed command.
 				// Repeated, because a ":redir" inside
 				// completion may switch it on.
@@ -1703,13 +1754,25 @@ getcmdline_int(
 	// Trigger SafeState if nothing is pending.
 	may_trigger_safestate(xpc.xp_numfiles <= 0);
 
-	cursorcmd();		// set the cursor on the right spot
-
 	// Get a character.  Ignore K_IGNORE and K_NOP, they should not do
 	// anything, such as stop completion.
 	do
+	{
+	    cursorcmd();		// set the cursor on the right spot
 	    c = safe_vgetc();
-	while (c == K_IGNORE || c == K_NOP);
+	} while (c == K_IGNORE || c == K_NOP);
+
+	if (c == K_COMMAND)
+	{
+	    int	    clen = ccline.cmdlen;
+
+	    if (do_cmdline(NULL, getcmdkeycmd, NULL, DOCMD_NOWAIT) == OK)
+	    {
+		if (clen == ccline.cmdlen)
+		    trigger_cmdlinechanged = FALSE;
+		goto cmdline_changed;
+	    }
+	}
 
 	if (KeyTyped)
 	{
@@ -2209,13 +2272,14 @@ getcmdline_int(
 	case Ctrl_V:
 	case Ctrl_Q:
 		{
-		    int	 prev_mod_mask = mod_mask;
-
 		    ignore_drag_release = TRUE;
 		    putcmdline('^', TRUE);
-		    no_reduce_keys = TRUE;  //  don't merge modifyOtherKeys
-		    c = get_literal();	    // get next (two) character(s)
-		    no_reduce_keys = FALSE;
+
+		    // Get next (two) character(s).  Do not change any
+		    // modifyOtherKeys ESC sequence to a normal key for
+		    // CTRL-SHIFT-V.
+		    c = get_literal(mod_mask & MOD_MASK_SHIFT);
+
 		    do_abbr = FALSE;	    // don't do abbreviation now
 		    extra_char = NUL;
 		    // may need to remove ^ when composing char was typed
@@ -2226,13 +2290,6 @@ getcmdline_int(
 			msg_putchar(' ');
 			cursorcmd();
 		    }
-
-		    if ((c == ESC || c == CSI)
-					  && !(prev_mod_mask & MOD_MASK_SHIFT))
-			// Using CTRL-V: Change any modifyOtherKeys ESC
-			// sequence to a normal key.  Don't do this for
-			// CTRL-SHIFT-V.
-			c = decodeModifyOtherKeys(c);
 		}
 
 		break;
@@ -2332,8 +2389,14 @@ cmdline_not_changed:
 #endif
 
 cmdline_changed:
-	// Trigger CmdlineChanged autocommands.
-	trigger_cmd_autocmd(cmdline_type, EVENT_CMDLINECHANGED);
+#ifdef FEAT_SEARCH_EXTRA
+	// If the window changed incremental search state is not valid.
+	if (is_state.winid != curwin->w_id)
+	    init_incsearch_state(&is_state);
+#endif
+	if (trigger_cmdlinechanged)
+	    // Trigger CmdlineChanged autocommands.
+	    trigger_cmd_autocmd(cmdline_type, EVENT_CMDLINECHANGED);
 
 #ifdef FEAT_SEARCH_EXTRA
 	if (xpc.xp_context == EXPAND_NOTHING)
@@ -4175,8 +4238,8 @@ open_cmdwin(void)
     pum_undisplay();
 
     // don't use a new tab page
-    cmdmod.tab = 0;
-    cmdmod.noswapfile = 1;
+    cmdmod.cmod_tab = 0;
+    cmdmod.cmod_flags |= CMOD_NOSWAPFILE;
 
     // Create a window for the command-line buffer.
     if (win_split((int)p_cwh, WSP_BOT) == FAIL)
@@ -4188,18 +4251,21 @@ open_cmdwin(void)
     // Don't let quitting the More prompt make this fail.
     got_int = FALSE;
 
+    // Set "cmdwin_type" before any autocommands may mess things up.
+    cmdwin_type = get_cmdline_type();
+
     // Create the command-line buffer empty.
     if (do_ecmd(0, NULL, NULL, NULL, ECMD_ONE, ECMD_HIDE, NULL) == FAIL)
     {
 	// Some autocommand messed it up?
 	win_close(curwin, TRUE);
 	ga_clear(&winsizes);
+	cmdwin_type = 0;
 	return Ctrl_C;
     }
-    cmdwin_type = get_cmdline_type();
 
     apply_autocmds(EVENT_BUFFILEPRE, NULL, NULL, FALSE, curbuf);
-    (void)setfname(curbuf, (char_u *)"[Command Line]", NULL, TRUE);
+    (void)setfname(curbuf, (char_u *)_("[Command Line]"), NULL, TRUE);
     apply_autocmds(EVENT_BUFFILEPOST, NULL, NULL, FALSE, curbuf);
     set_option_value((char_u *)"bt", 0L, (char_u *)"nofile", OPT_LOCAL);
     curbuf->b_p_ma = TRUE;
@@ -4376,14 +4442,19 @@ open_cmdwin(void)
 	// Avoid command-line window first character being concealed.
 	curwin->w_p_cole = 0;
 # endif
+	// First go back to the original window.
 	wp = curwin;
 	set_bufref(&bufref, curbuf);
 	win_goto(old_curwin);
-	win_close(wp, TRUE);
+
+	// win_goto() may trigger an autocommand that already closes the
+	// cmdline window.
+	if (win_valid(wp) && wp != curwin)
+	    win_close(wp, TRUE);
 
 	// win_close() may have already wiped the buffer when 'bh' is
-	// set to 'wipe'
-	if (bufref_valid(&bufref))
+	// set to 'wipe', autocommands may have closed other windows
+	if (bufref_valid(&bufref) && bufref.br_buf != curbuf)
 	    close_buffer(NULL, bufref.br_buf, DOBUF_WIPE, FALSE, FALSE);
 
 	// Restore window sizes.

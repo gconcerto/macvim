@@ -16,9 +16,12 @@
 #if defined(__TANDEM)
 # include <limits.h>		// for SSIZE_MAX
 #endif
-#if defined(UNIX) && defined(FEAT_EVAL)
+#if (defined(UNIX) || defined(VMS)) && defined(FEAT_EVAL)
 # include <pwd.h>
 # include <grp.h>
+#endif
+#if defined(VMS) && defined(HAVE_XOS_R_H)
+# include <x11/xos_r.h>
 #endif
 
 // Is there any system that doesn't have access()?
@@ -338,7 +341,7 @@ readfile(
 
     if (!read_stdin && !read_buffer && !read_fifo)
     {
-#ifdef UNIX
+#if defined(UNIX) || defined(VMS)
 	/*
 	 * On Unix it is possible to read a directory, so we have to
 	 * check for it before the mch_open().
@@ -2280,6 +2283,7 @@ failed:
     else
     {
 	int fdflags = fcntl(fd, F_GETFD);
+
 	if (fdflags >= 0 && (fdflags & FD_CLOEXEC) == 0)
 	    (void)fcntl(fd, F_SETFD, fdflags | FD_CLOEXEC);
     }
@@ -2501,7 +2505,7 @@ failed:
 	check_cursor_lnum();
 	beginline(BL_WHITE | BL_FIX);	    // on first non-blank
 
-	if (!cmdmod.lockmarks)
+	if ((cmdmod.cmod_flags & CMOD_LOCKMARKS) == 0)
 	{
 	    // Set '[ and '] marks to the newly read lines.
 	    curbuf->b_op_start.lnum = from + 1;
@@ -3730,7 +3734,7 @@ vim_rename(char_u *from, char_u *to)
 			return 0;
 		    // Strange, the second step failed.  Try moving the
 		    // file back and return failure.
-		    mch_rename(tempname, (char *)from);
+		    (void)mch_rename(tempname, (char *)from);
 		    return -1;
 		}
 		// If it fails for one temp name it will most likely fail
@@ -4243,7 +4247,7 @@ buf_check_timestamp(
 			msg_puts_attr(mesg2, HL_ATTR(HLF_W) + MSG_HIST);
 		    msg_clr_eos();
 		    (void)msg_end();
-		    if (emsg_silent == 0)
+		    if (emsg_silent == 0 && !in_assert_fails)
 		    {
 			out_flush();
 #ifdef FEAT_GUI
@@ -4657,11 +4661,13 @@ create_readdirex_item(char_u *path, char_u *name)
 	    q = (char_u*)pw->pw_name;
 	if (dict_add_string(item, "user", q) == FAIL)
 	    goto theend;
+#  if !defined(VMS) || (defined(VMS) && defined(HAVE_XOS_R_H))
 	gr = getgrgid(st.st_gid);
 	if (gr == NULL)
 	    q = (char_u*)"";
 	else
 	    q = (char_u*)gr->gr_name;
+#  endif
 	if (dict_add_string(item, "group", q) == FAIL)
 	    goto theend;
     }
@@ -4778,7 +4784,7 @@ readdir_core(
     if (!ok)
     {
 	failed = TRUE;
-	smsg(_(e_notopen), path);
+	semsg(_(e_notopen), path);
     }
     else
     {
@@ -4848,7 +4854,7 @@ readdir_core(
     if (dirp == NULL)
     {
 	failed = TRUE;
-	smsg(_(e_notopen), path);
+	semsg(_(e_notopen), path);
     }
     else
     {
@@ -5202,17 +5208,24 @@ vim_tempname(
 # ifdef MSWIN
     WCHAR	wszTempFile[_MAX_PATH + 1];
     WCHAR	buf4[4];
+    WCHAR	*chartab = L"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
     char_u	*retval;
     char_u	*p;
+    long	i;
 
     wcscpy(itmp, L"");
     if (GetTempPathW(_MAX_PATH, wszTempFile) == 0)
     {
 	wszTempFile[0] = L'.';	// GetTempPathW() failed, use current dir
-	wszTempFile[1] = NUL;
+	wszTempFile[1] = L'\\';
+	wszTempFile[2] = NUL;
     }
     wcscpy(buf4, L"VIM");
-    buf4[2] = extra_char;   // make it "VIa", "VIb", etc.
+
+    // randomize the name to avoid collisions
+    i = mch_get_pid() + extra_char;
+    buf4[1] = chartab[i % 36];
+    buf4[2] = chartab[101 * i % 36];
     if (GetTempFileNameW(wszTempFile, buf4, 0, itmp) == 0)
 	return NULL;
     if (!keep)

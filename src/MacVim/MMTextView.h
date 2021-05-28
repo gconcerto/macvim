@@ -47,6 +47,7 @@
 - (void)setFont:(NSFont *)newFont;
 - (NSFont *)fontWide;
 - (void)setWideFont:(NSFont *)newFont;
+- (void)refreshFonts;
 - (NSSize)cellSize;
 - (void)setLinespace:(float)newLinespace;
 - (void)setColumnspace:(float)newColumnspace;
@@ -73,6 +74,4 @@
 // NOT IMPLEMENTED (only in Core Text renderer)
 - (void)deleteSign:(NSString *)signName;
 - (void)setToolTipAtMousePoint:(NSString *)string;
-- (void)setCGLayerEnabled:(BOOL)enabled;
-- (BOOL)getCGLayerEnabled;
 @end

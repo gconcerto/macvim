@@ -944,6 +944,7 @@ extern int (*dyn_libintl_wputenv)(const wchar_t *envstring);
 #define BLN_NOOPT	16	// don't copy options to existing buffer
 #define BLN_DUMMY_OK	32	// also find an existing dummy buffer
 #define BLN_REUSE	64	// may re-use number from buf_reuse
+#define BLN_NOCURWIN	128	// buffer is not associated with curwin
 
 // Values for in_cinkeys()
 #define KEY_OPEN_FORW	0x101
@@ -1041,6 +1042,7 @@ extern int (*dyn_libintl_wputenv)(const wchar_t *envstring);
 #define ECMD_OLDBUF	0x04	// use existing buffer if it exists
 #define ECMD_FORCEIT	0x08	// ! used in Ex command
 #define ECMD_ADDBUF	0x10	// don't edit, just add to buffer list
+#define ECMD_ALTBUF	0x20	// like ECMD_ADDBUF and set the alternate file
 
 // for lnum argument in do_ecmd()
 #define ECMD_LASTL	(linenr_T)0	// use last position in loaded file
@@ -1054,6 +1056,7 @@ extern int (*dyn_libintl_wputenv)(const wchar_t *envstring);
 #define DOCMD_KEYTYPED	0x08	// don't reset KeyTyped
 #define DOCMD_EXCRESET	0x10	// reset exception environment (for debugging)
 #define DOCMD_KEEPLINE  0x20	// keep typed line for repeating with "."
+#define DOCMD_RANGEOK	0240	// can use a range without ":" in Vim9 script
 
 // flags for beginline()
 #define BL_WHITE	1	// cursor on first non-white in the line
@@ -1210,6 +1213,8 @@ extern int (*dyn_libintl_wputenv)(const wchar_t *envstring);
 #define OPT_WINONLY	0x10	// only set window-local options
 #define OPT_NOWIN	0x20	// don't set window-local options
 #define OPT_ONECOLUMN	0x40	// list options one per line
+#define OPT_NO_REDRAW	0x80	// ignore redraw flags on option
+#define OPT_SKIPRTP	0x100	// "skiprtp" in 'sessionoptions'
 
 // Magic chars used in confirm dialog strings
 #define DLG_BUTTON_SEP	'\n'
@@ -1242,6 +1247,7 @@ extern int (*dyn_libintl_wputenv)(const wchar_t *envstring);
 #define SID_ENV		-4	// for sourcing environment variable
 #define SID_ERROR	-5	// option was reset because of an error
 #define SID_NONE	-6	// don't set scriptID
+#define SID_WINLAYOUT	-7	// changing window size
 
 /*
  * Events for autocommands.
@@ -1311,7 +1317,8 @@ enum auto_event
     EVENT_INSERTCHANGE,		// when changing Insert/Replace mode
     EVENT_INSERTCHARPRE,	// before inserting a char
     EVENT_INSERTENTER,		// when entering Insert mode
-    EVENT_INSERTLEAVE,		// when leaving Insert mode
+    EVENT_INSERTLEAVEPRE,	// just before leaving Insert mode
+    EVENT_INSERTLEAVE,		// just after leaving Insert mode
     EVENT_MENUPOPUP,		// just before popup menu is displayed
     EVENT_OPTIONSET,		// option was set
     EVENT_OSAPPCHANGED,   // after changing the OS appearance
@@ -1339,7 +1346,8 @@ enum auto_event
     EVENT_TABNEW,		// when entering a new tab page
     EVENT_TERMCHANGED,		// after changing 'term'
     EVENT_TERMINALOPEN,		// after a terminal buffer was created
-    EVENT_TERMINALWINOPEN,	// after a terminal buffer was created and entering its window
+    EVENT_TERMINALWINOPEN,	// after a terminal buffer was created and
+				// entering its window
     EVENT_TERMRESPONSE,		// after setting "v:termresponse"
     EVENT_TEXTCHANGED,		// text was modified not in Insert mode
     EVENT_TEXTCHANGEDI,         // text was modified in Insert mode
@@ -1353,6 +1361,8 @@ enum auto_event
     EVENT_WINENTER,		// after entering a window
     EVENT_WINLEAVE,		// before leaving a window
     EVENT_WINNEW,		// when entering a new window
+    EVENT_VIMSUSPEND,		// before Vim is suspended
+    EVENT_VIMRESUME,		// after Vim is resumed
 
     NUM_EVENTS			// MUST be the last one
 };
@@ -1710,7 +1720,6 @@ typedef unsigned short disptick_T;	// display tick type
 #endif
 
 #define SHOWCMD_COLS 10			// columns needed by shown command
-#define STL_MAX_ITEM 80			// max nr of %<flag> in statusline
 
 typedef void	    *vim_acl_T;		// dummy to pass an ACL to a function
 
@@ -1792,6 +1801,12 @@ typedef struct timeval proftime_T;
 # endif
 #else
 typedef int proftime_T;	    // dummy for function prototypes
+#endif
+
+#ifdef FEAT_PROFILE
+# define PROFILING(ufunc) (do_profiling == PROF_YES && (ufunc)->uf_profiling)
+#else
+# define PROFILING(ufunc) FALSE
 #endif
 
 /*
@@ -1982,34 +1997,36 @@ typedef int sock_T;
 #define VV_TRUE		69
 #define VV_NONE		70
 #define VV_NULL		71
-#define VV_NUMBERSIZE	72
-#define VV_VIM_DID_ENTER 73
-#define VV_TESTING	74
-#define VV_TYPE_NUMBER	75
-#define VV_TYPE_STRING	76
-#define VV_TYPE_FUNC	77
-#define VV_TYPE_LIST	78
-#define VV_TYPE_DICT	79
-#define VV_TYPE_FLOAT	80
-#define VV_TYPE_BOOL	81
-#define VV_TYPE_NONE	82
-#define VV_TYPE_JOB	83
-#define VV_TYPE_CHANNEL	84
-#define VV_TYPE_BLOB	85
-#define VV_TERMRFGRESP	86
-#define VV_TERMRBGRESP	87
-#define VV_TERMU7RESP	88
-#define VV_TERMSTYLERESP 89
-#define VV_TERMBLINKRESP 90
-#define VV_EVENT	91
-#define VV_VERSIONLONG	92
-#define VV_ECHOSPACE	93
-#define VV_ARGV		94
-#define VV_COLLATE      95
-#define VV_DISALLOW_LET 96	// TODO: remove again
+#define VV_NUMBERMAX	72
+#define VV_NUMBERMIN	73
+#define VV_NUMBERSIZE	74
+#define VV_VIM_DID_ENTER 75
+#define VV_TESTING	76
+#define VV_TYPE_NUMBER	77
+#define VV_TYPE_STRING	78
+#define VV_TYPE_FUNC	79
+#define VV_TYPE_LIST	80
+#define VV_TYPE_DICT	81
+#define VV_TYPE_FLOAT	82
+#define VV_TYPE_BOOL	83
+#define VV_TYPE_NONE	84
+#define VV_TYPE_JOB	85
+#define VV_TYPE_CHANNEL	86
+#define VV_TYPE_BLOB	87
+#define VV_TERMRFGRESP	88
+#define VV_TERMRBGRESP	89
+#define VV_TERMU7RESP	90
+#define VV_TERMSTYLERESP 91
+#define VV_TERMBLINKRESP 92
+#define VV_EVENT	93
+#define VV_VERSIONLONG	94
+#define VV_ECHOSPACE	95
+#define VV_ARGV		96
+#define VV_COLLATE      97
+#define VV_EXITING	98
 // MacVim-specific values go here
-#define VV_OS_APPEARANCE 97
-#define VV_LEN		98	// number of v: vars
+#define VV_OS_APPEARANCE 99
+#define VV_LEN		100	// number of v: vars
 
 // used for v_number in VAR_BOOL and VAR_SPECIAL
 #define VVAL_FALSE	0L	// VAR_BOOL
@@ -2029,6 +2046,7 @@ typedef int sock_T;
 #define VAR_TYPE_JOB	    8
 #define VAR_TYPE_CHANNEL    9
 #define VAR_TYPE_BLOB	    10
+#define VAR_TYPE_INSTR	    11
 
 #define DICT_MAXNEST 100	// maximum nesting of lists and dicts
 
@@ -2152,9 +2170,13 @@ typedef enum {
 } estack_arg_T;
 
 // Flags for assignment functions.
-#define ASSIGN_FINAL	1   // ":final"
-#define ASSIGN_CONST	2   // ":const"
-#define ASSIGN_NO_DECL	4   // "name = expr" without ":let" or ":const"
+#define ASSIGN_FINAL	0x01  // ":final"
+#define ASSIGN_CONST	0x02  // ":const"
+#define ASSIGN_NO_DECL	0x04  // "name = expr" without ":let"/":const"/":final"
+#define ASSIGN_DECL	0x08  // may declare variable if it does not exist
+#define ASSIGN_UNPACK	0x10  // using [a, b] = list
+#define ASSIGN_NO_MEMBER_TYPE 0x20 // use "any" for list and dict member type
+#define ASSIGN_FOR_LOOP 0x40 // assigning to loop variable
 
 #include "ex_cmds.h"	    // Ex command defines
 #include "spell.h"	    // spell checking stuff
@@ -2452,6 +2474,7 @@ typedef enum {
 // flags for skip_vimgrep_pat()
 #define VGR_GLOBAL	1
 #define VGR_NOJUMP	2
+#define VGR_FUZZY	4
 
 // behavior for bad character, "++bad=" argument
 #define BAD_REPLACE	'?'	// replace it with '?' (default)
@@ -2464,10 +2487,11 @@ typedef enum {
 #define DOSO_GVIMRC	2	// loading gvimrc file
 
 // flags for read_viminfo() and children
-#define VIF_WANT_INFO		1	// load non-mark info
-#define VIF_WANT_MARKS		2	// load file marks
-#define VIF_FORCEIT		4	// overwrite info already read
-#define VIF_GET_OLDFILES	8	// load v:oldfiles
+#define VIF_WANT_INFO	    1	// load non-mark info
+#define VIF_WANT_MARKS	    2	// load file marks
+#define VIF_ONLY_CURBUF	    4	// bail out after loading marks for curbuf
+#define VIF_FORCEIT	    8	// overwrite info already read
+#define VIF_GET_OLDFILES    16	// load v:oldfiles
 
 // flags for buf_freeall()
 #define BFA_DEL		 1	// buffer is going to be deleted
@@ -2546,16 +2570,20 @@ typedef enum {
 #define COPYID_MASK (~0x1)
 
 // Values for trans_function_name() argument:
-#define TFN_INT		1	// internal function name OK
-#define TFN_QUIET	2	// no error messages
-#define TFN_NO_AUTOLOAD	4	// do not use script autoloading
-#define TFN_NO_DEREF	8	// do not dereference a Funcref
-#define TFN_READ_ONLY	16	// will not change the var
+#define TFN_INT		0x01	// internal function name OK
+#define TFN_QUIET	0x02	// no error messages
+#define TFN_NO_AUTOLOAD	0x04	// do not use script autoloading
+#define TFN_NO_DEREF	0x08	// do not dereference a Funcref
+#define TFN_READ_ONLY	0x10	// will not change the var
+#define TFN_NO_DECL	0x20	// only used for GLV_NO_DECL
+#define TFN_COMPILING	0x40	// only used for GLV_COMPILING
 
 // Values for get_lval() flags argument:
 #define GLV_QUIET	TFN_QUIET	// no error messages
 #define GLV_NO_AUTOLOAD	TFN_NO_AUTOLOAD	// do not use script autoloading
 #define GLV_READ_ONLY	TFN_READ_ONLY	// will not change the var
+#define GLV_NO_DECL	TFN_NO_DECL	// assignment without :var or :let
+#define GLV_COMPILING	TFN_COMPILING	// variable may be defined later
 
 #define DO_NOT_FREE_CNT 99999	// refcount for dict or list that should not
 				// be freed.
@@ -2695,5 +2723,13 @@ long elapsed(DWORD start_tick);
 // Flags for mch_delay.
 #define MCH_DELAY_IGNOREINPUT	1
 #define MCH_DELAY_SETTMODE	2
+
+// Flags for eval_variable().
+#define EVAL_VAR_VERBOSE	1   // may give error message
+#define EVAL_VAR_NOAUTOLOAD	2   // do not use script autoloading
+#define EVAL_VAR_IMPORT		4   // may return special variable for import
+
+// Maximum number of characters that can be fuzzy matched
+#define MAX_FUZZY_MATCHES	256
 
 #endif // VIM__H

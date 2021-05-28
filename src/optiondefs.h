@@ -108,7 +108,7 @@
 #define PV_MOD		OPT_BUF(BV_MOD)
 #define PV_MPS		OPT_BUF(BV_MPS)
 #ifdef FEAT_GUI_MACVIM
-#define PV_MMTA		OPT_BUF(BV_MMTA)
+# define PV_MMTA	OPT_BUF(BV_MMTA)
 #endif
 #define PV_NF		OPT_BUF(BV_NF)
 #ifdef FEAT_COMPL_FUNC
@@ -188,6 +188,7 @@
 #ifdef FEAT_LINEBREAK
 # define PV_LBR		OPT_WIN(WV_LBR)
 #endif
+#define PV_LCS		OPT_BOTH(OPT_WIN(WV_LCS))
 #define PV_NU		OPT_WIN(WV_NU)
 #define PV_RNU		OPT_WIN(WV_RNU)
 #ifdef FEAT_LINEBREAK
@@ -309,6 +310,36 @@ struct vimoption
 # define DEFAULT_PYTHON_VER	0
 #endif
 
+// Support targeting different dynamic linkages for scripting languages based on
+// arch on macOS. This is necessary because package managers such as Homebrew
+// distributes thin binaries, and therefore the x86_64 and arm64 libraries are
+// located in different places.
+#ifdef MACOS_X
+# if defined(DYNAMIC_PYTHON3_DLL_X86_64) && defined(__x86_64__)
+#  undef DYNAMIC_PYTHON3_DLL
+#  define DYNAMIC_PYTHON3_DLL DYNAMIC_PYTHON3_DLL_X86_64
+# elif defined(DYNAMIC_PYTHON3_DLL_ARM64) && defined(__arm64__)
+#  undef DYNAMIC_PYTHON3_DLL
+#  define DYNAMIC_PYTHON3_DLL DYNAMIC_PYTHON3_DLL_ARM64
+# endif
+
+# if defined(DYNAMIC_RUBY_DLL_X86_64) && defined(__x86_64__)
+#  undef DYNAMIC_RUBY_DLL
+#  define DYNAMIC_RUBY_DLL DYNAMIC_RUBY_DLL_X86_64
+# elif defined(DYNAMIC_RUBY_DLL_ARM64) && defined(__arm64__)
+#  undef DYNAMIC_RUBY_DLL
+#  define DYNAMIC_RUBY_DLL DYNAMIC_RUBY_DLL_ARM64
+# endif
+
+# if defined(DYNAMIC_LUA_DLL_X86_64) && defined(__x86_64__)
+#  undef DYNAMIC_LUA_DLL
+#  define DYNAMIC_LUA_DLL DYNAMIC_LUA_DLL_X86_64
+# elif defined(DYNAMIC_LUA_DLL_ARM64) && defined(__arm64__)
+#  undef DYNAMIC_LUA_DLL
+#  define DYNAMIC_LUA_DLL DYNAMIC_LUA_DLL_ARM64
+# endif
+#endif
+
 // used for 'cinkeys' and 'indentkeys'
 #define INDENTKEYS_DEFAULT (char_u *)"0{,0},0),0],:,0#,!^F,o,O,e"
 
@@ -376,6 +407,15 @@ static struct vimoption options[] =
     {"autochdir",  "acd",   P_BOOL|P_VI_DEF,
 #ifdef FEAT_AUTOCHDIR
 			    (char_u *)&p_acd, PV_NONE,
+			    {(char_u *)FALSE, (char_u *)0L}
+#else
+			    (char_u *)NULL, PV_NONE,
+			    {(char_u *)0L, (char_u *)0L}
+#endif
+			    SCTX_INIT},
+    {"autoshelldir",  "asd",   P_BOOL|P_VI_DEF,
+#ifdef FEAT_AUTOSHELLDIR
+			    (char_u *)&p_asd, PV_NONE,
 			    {(char_u *)FALSE, (char_u *)0L}
 #else
 			    (char_u *)NULL, PV_NONE,
@@ -971,13 +1011,13 @@ static struct vimoption options[] =
 				    (char_u *)FALSE,
 #endif
 					(char_u *)0L} SCTX_INIT},
-    {"filetype",    "ft",   P_STRING|P_ALLOCED|P_VI_DEF|P_NOGLOB|P_NFNAME,
+    {"filetype",    "ft",   P_STRING|P_EXPAND|P_ALLOCED|P_VI_DEF|P_NOGLOB|P_NFNAME,
 			    (char_u *)&p_ft, PV_FT,
 			    {(char_u *)"", (char_u *)0L}
 			    SCTX_INIT},
     {"fillchars",   "fcs",  P_STRING|P_VI_DEF|P_RALL|P_ONECOMMA|P_NODUP,
 			    (char_u *)&p_fcs, PV_NONE,
-			    {(char_u *)"vert:|,fold:-", (char_u *)0L}
+			    {(char_u *)"vert:|,fold:-,eob:~", (char_u *)0L}
 			    SCTX_INIT},
     {"fixendofline",  "fixeol", P_BOOL|P_VI_DEF|P_RSTAT,
 			    (char_u *)&p_fixeol, PV_FIXEOL,
@@ -1653,7 +1693,7 @@ static struct vimoption options[] =
 			    (char_u *)VAR_WIN, PV_LIST,
 			    {(char_u *)FALSE, (char_u *)0L} SCTX_INIT},
     {"listchars",   "lcs",  P_STRING|P_VI_DEF|P_RALL|P_ONECOMMA|P_NODUP,
-			    (char_u *)&p_lcs, PV_NONE,
+			    (char_u *)&p_lcs, PV_LCS,
 			    {(char_u *)"eol:$", (char_u *)0L} SCTX_INIT},
     {"loadplugins", "lpl",  P_BOOL|P_VI_DEF,
 			    (char_u *)&p_lpl, PV_NONE,
@@ -1685,7 +1725,7 @@ static struct vimoption options[] =
 			    (char_u *)&p_mmta, PV_MMTA,
 			    {(char_u *)FALSE, (char_u *)0L}
 #else
-			    (char_u *)NULL, PV_MMTA,
+			    (char_u *)NULL, PV_NONE,
 			    {(char_u *)NULL, (char_u *)0L}
 #endif
 			    SCTX_INIT},
@@ -3046,6 +3086,8 @@ static struct vimoption options[] =
     p_term("t_EC", T_CEC)
     p_term("t_EI", T_CEI)
     p_term("t_fs", T_FS)
+    p_term("t_fd", T_FD)
+    p_term("t_fe", T_FE)
     p_term("t_GP", T_CGP)
     p_term("t_IE", T_CIE)
     p_term("t_IS", T_CIS)

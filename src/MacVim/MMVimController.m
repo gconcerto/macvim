@@ -42,6 +42,7 @@ static int MMAlertTextFieldHeight = 22;
 
 static NSString * const MMToolbarMenuName = @"ToolBar";
 static NSString * const MMTouchbarMenuName = @"TouchBar";
+static NSString * const MMWinBarMenuName = @"WinBar";
 static NSString * const MMPopUpMenuPrefix = @"PopUp";
 static NSString * const MMUserPopUpMenuPrefix = @"]";
 
@@ -86,8 +87,6 @@ static BOOL isUnsafeMessage(int msgid);
 @property (readonly) NSTouchBar *touchbar;
 @property (readonly) NSMutableDictionary *itemDict;
 @property (readonly) NSMutableArray *itemOrder;
-
-- (id)initWithVimController:(MMVimController *)controller;
 
 @end
 
@@ -162,7 +161,7 @@ static BOOL isUnsafeMessage(int msgid);
 - (void)handleBrowseForFile:(NSDictionary *)attr;
 - (void)handleShowDialog:(NSDictionary *)attr;
 - (void)handleDeleteSign:(NSDictionary *)attr;
-- (void)setToolTipDelay:(NSTimeInterval)seconds;
+- (void)setToolTipDelay;
 @end
 
 
@@ -219,6 +218,8 @@ static BOOL isUnsafeMessage(int msgid);
     [appMenuItem setTitle:appName];
 
     [mainMenu addItem:appMenuItem];
+
+    [self setToolTipDelay];
 
     isInitialized = YES;
 
@@ -827,6 +828,7 @@ static BOOL isUnsafeMessage(int msgid);
             // This should only happen if the system default font has changed
             // name since MacVim was compiled in which case we fall back on
             // using the user fixed width font.
+            ASLogInfo(@"Failed to load font '%@' / %f", name, size);
             font = [NSFont userFixedPitchFontOfSize:size];
         }
 
@@ -1006,11 +1008,6 @@ static BOOL isUnsafeMessage(int msgid);
             [textView setToolTipAtMousePoint:toolTip];
         else
             [textView setToolTipAtMousePoint:nil];
-    } else if (SetTooltipDelayMsgID == msgid) {
-        NSDictionary *dict = [NSDictionary dictionaryWithData:data];
-        NSNumber *delay = dict ? [dict objectForKey:@"delay"] : nil;
-        if (delay)
-            [self setToolTipDelay:[delay floatValue]];
     } else if (AddToMRUMsgID == msgid) {
         NSDictionary *dict = [NSDictionary dictionaryWithData:data];
         NSArray *filenames = dict ? [dict objectForKey:@"filenames"] : nil;
@@ -1242,6 +1239,11 @@ static BOOL isUnsafeMessage(int msgid);
         return;
     }
 
+    if ([rootName isEqual:MMWinBarMenuName]) {
+        // WinBar menus are completed handled within Vim windows. No need for GUI to do anything.
+        return;
+    }
+
     // This is either a main menu item or a popup menu item.
     NSString *title = [desc lastObject];
     NSMenuItem *item = [[NSMenuItem alloc] init];
@@ -1261,7 +1263,10 @@ static BOOL isUnsafeMessage(int msgid);
     } else {
         // If descriptor has no parent and its not a popup (or toolbar) menu,
         // then it must belong to main menu.
-        if (!parent) parent = mainMenu;
+        if (!parent) {
+            parent = mainMenu;
+            idx += 1; // Main menu already has the application menu as the first item, so everything else must be shifted by one.
+        }
 
         if ([parent numberOfItems] <= idx) {
             [parent addItem:item];
@@ -1311,6 +1316,11 @@ static BOOL isUnsafeMessage(int msgid);
 #endif
         return;
     }
+    if ([rootName isEqual:MMWinBarMenuName]) {
+        // WinBar menus are completed handled within Vim windows. No need for GUI to do anything.
+        return;
+    }
+
     NSMenu *parent = [self parentMenuForDescriptor:desc];
     if (!parent) {
         ASLogWarn(@"Menu item '%@' has no parent",
@@ -1620,7 +1630,7 @@ static BOOL isUnsafeMessage(int msgid);
         touchbarItem = item;
     }
     
-    MMTouchBarItemInfo *touchbarItemInfo = [[MMTouchBarItemInfo alloc] initWithItem:touchbarItem label:touchbarLabel];
+    MMTouchBarItemInfo *touchbarItemInfo = [[[MMTouchBarItemInfo alloc] initWithItem:touchbarItem label:touchbarLabel] autorelease];
     if (submenu) {
         [touchbarItemInfo makeChildTouchBar];
     }
@@ -1893,18 +1903,15 @@ static BOOL isUnsafeMessage(int msgid);
     [view deleteSign:[attr objectForKey:@"imgName"]];
 }
 
-- (void)setToolTipDelay:(NSTimeInterval)seconds
+- (void)setToolTipDelay
 {
     // HACK! NSToolTipManager is an AppKit private class.
     static Class TTM = nil;
     if (!TTM)
         TTM = NSClassFromString(@"NSToolTipManager");
 
-    if (seconds < 0)
-        seconds = 0;
-
     if (TTM) {
-        [[TTM sharedToolTipManager] setInitialToolTipDelay:seconds];
+        [[TTM sharedToolTipManager] setInitialToolTipDelay:1e-6];
     } else {
         ASLogNotice(@"Failed to get NSToolTipManager");
     }
@@ -1995,6 +2002,10 @@ static BOOL isUnsafeMessage(int msgid);
     
 - (id)init
 {
+    if (!(self = [super init])) {
+        return nil;
+    }
+
     _touchbar = [[NSTouchBar alloc] init];
     
     _itemDict = [[NSMutableDictionary alloc] init];

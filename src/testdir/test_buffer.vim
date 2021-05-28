@@ -362,4 +362,43 @@ func Test_sball_with_count()
   %bw!
 endfunc
 
+func Test_badd_options()
+  new SomeNewBuffer
+  setlocal numberwidth=3
+  wincmd p
+  badd +1 SomeNewBuffer
+  new SomeNewBuffer
+  call assert_equal(3, &numberwidth)
+  close
+  close
+  bwipe! SomeNewBuffer
+endfunc
+
+func Test_balt()
+  new SomeNewBuffer
+  balt +3 OtherBuffer
+  e #
+  call assert_equal('OtherBuffer', bufname())
+endfunc
+
+" Test for the 'maxmem' and 'maxmemtot' options
+func Test_buffer_maxmem()
+  " use 1KB per buffer and 2KB for all the buffers
+  set maxmem=1 maxmemtot=2
+  new
+  let v:errmsg = ''
+  " try opening some files
+  edit test_arglist.vim
+  call assert_equal('test_arglist.vim', bufname())
+  edit test_eval_stuff.vim
+  call assert_equal('test_eval_stuff.vim', bufname())
+  b test_arglist.vim
+  call assert_equal('test_arglist.vim', bufname())
+  b test_eval_stuff.vim
+  call assert_equal('test_eval_stuff.vim', bufname())
+  close
+  call assert_equal('', v:errmsg)
+  set maxmem& maxmemtot&
+endfunc
+
 " vim: shiftwidth=2 sts=2 expandtab

@@ -229,6 +229,7 @@ fsEventCallback(ConstFSEventStreamRef streamRef,
         [NSNumber numberWithBool:YES],    MMTranslateCtrlClickKey,
         [NSNumber numberWithInt:0],       MMOpenInCurrentWindowKey,
         [NSNumber numberWithBool:NO],     MMNoFontSubstitutionKey,
+        [NSNumber numberWithBool:YES],    MMFontPreserveLineSpacingKey,
         [NSNumber numberWithBool:YES],    MMLoginShellKey,
         [NSNumber numberWithInt:MMRendererCoreText],
                                           MMRendererKey,
@@ -247,9 +248,8 @@ fsEventCallback(ConstFSEventStreamRef streamRef,
 #endif // INCLUDE_OLD_IM_CODE
         [NSNumber numberWithBool:NO],     MMSuppressTerminationAlertKey,
         [NSNumber numberWithBool:YES],    MMNativeFullScreenKey,
-        [NSNumber numberWithDouble:0.25], MMFullScreenFadeTimeKey,
-        [NSNumber numberWithBool:NO],     MMUseCGLayerAlwaysKey,
-        @(shouldUseBufferedDrawing()),    MMBufferedDrawingKey,
+        [NSNumber numberWithDouble:0.0],  MMFullScreenFadeTimeKey,
+        [NSNumber numberWithBool:NO],     MMNonNativeFullScreenShowMenuKey,
         [NSNumber numberWithBool:YES],    MMShareFindPboardKey,
         nil];
 
@@ -1111,6 +1111,15 @@ fsEventCallback(ConstFSEventStreamRef streamRef,
     }
 }
 
+- (void)refreshAllFonts
+{
+    unsigned count = [vimControllers count];
+    for (unsigned i = 0; i < count; ++i) {
+        MMVimController *vc = [vimControllers objectAtIndex:i];
+        [vc.windowController refreshFonts];
+    }
+}
+
 - (IBAction)newWindow:(id)sender
 {
     ASLogDebug(@"Open new window");
@@ -1766,9 +1775,9 @@ fsEventCallback(ConstFSEventStreamRef streamRef,
             [alert setMessageText:NSLocalizedString(@"Multiple files not found",
                     @"File not found dialog, title")];
             text = [NSString stringWithFormat:NSLocalizedString(
-                    @"Could not open file with name %@, and %d other files.",
+                    @"Could not open file with name %@, and %u other files.",
                     @"File not found dialog, text"),
-                firstMissingFile, count-[files count]-1];
+                firstMissingFile, (unsigned int)(count-[files count]-1)];
         }
 
         [alert setInformativeText:text];

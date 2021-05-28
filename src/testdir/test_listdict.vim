@@ -241,9 +241,9 @@ func Test_dict_big()
   try
     let n = d[1500]
   catch
-    let str=substitute(v:exception, '\v(.{14}).*( \d{4}).*', '\1\2', '')
+    let str = substitute(v:exception, '\v(.{14}).*( "\d{4}").*', '\1\2', '')
   endtry
-  call assert_equal('Vim(let):E716: 1500', str)
+  call assert_equal('Vim(let):E716: "1500"', str)
 
   " lookup each items
   for i in range(1500)
@@ -740,6 +740,10 @@ func Test_reduce()
 
   call assert_equal(42, reduce(test_null_list(), function('add'), 42))
   call assert_equal(42, reduce(test_null_blob(), function('add'), 42))
+
+  " should not crash
+  call assert_fails('echo reduce([1], test_null_function())', 'E1132:')
+  call assert_fails('echo reduce([1], test_null_partial())', 'E1132:')
 endfunc
 
 " splitting a string to a List using split()
@@ -859,6 +863,32 @@ func Test_listdict_extend()
 
   " Extend g: dictionary with an invalid variable name
   call assert_fails("call extend(g:, {'-!' : 10})", 'E461:')
+
+  " Extend a list with itself.
+  let l = [1, 5, 7]
+  call extend(l, l, 0)
+  call assert_equal([1, 5, 7, 1, 5, 7], l)
+  let l = [1, 5, 7]
+  call extend(l, l, 1)
+  call assert_equal([1, 1, 5, 7, 5, 7], l)
+  let l = [1, 5, 7]
+  call extend(l, l, 2)
+  call assert_equal([1, 5, 1, 5, 7, 7], l)
+  let l = [1, 5, 7]
+  call extend(l, l, 3)
+  call assert_equal([1, 5, 7, 1, 5, 7], l)
+endfunc
+
+func Test_listdict_extendnew()
+  " Test extendnew() with lists
+  let l = [1, 2, 3]
+  call assert_equal([1, 2, 3, 4, 5], extendnew(l, [4, 5]))
+  call assert_equal([1, 2, 3], l)
+
+  " Test extend() with dictionaries.
+  let d = {'a': {'b': 'B'}}
+  call assert_equal({'a': {'b': 'B'}, 'c': 'cc'}, extendnew(d, {'c': 'cc'}))
+  call assert_equal({'a': {'b': 'B'}}, d)
 endfunc
 
 func s:check_scope_dict(x, fixed)
@@ -997,7 +1027,8 @@ endfunc
 " Test for a null list
 func Test_null_list()
   let l = test_null_list()
-  call assert_equal(0, join(l))
+  call assert_equal(0, join(test_null_list()))
+  call assert_equal('', join(l))
   call assert_equal(0, len(l))
   call assert_equal(1, empty(l))
   call assert_fails('let s = join([1, 2], [])', 'E730:')
@@ -1005,24 +1036,33 @@ func Test_null_list()
   call assert_equal([], l[:2])
   call assert_true([] == l)
   call assert_equal('[]', string(l))
-  call assert_equal(0, sort(l))
-  call assert_equal(0, uniq(l))
-  call assert_fails("let k = [] + l", 'E15:')
-  call assert_fails("let k = l + []", 'E15:')
+  call assert_equal(0, sort(test_null_list()))
+  call assert_equal([], sort(l))
+  call assert_equal(0, uniq(test_null_list()))
+  call assert_equal([], uniq(l))
+  let k = [] + l
+  call assert_equal([], k)
+  let k = l + []
+  call assert_equal([], k)
   call assert_equal(0, len(copy(l)))
   call assert_equal(0, count(l, 5))
   call assert_equal([], deepcopy(l))
   call assert_equal(5, get(l, 2, 5))
   call assert_equal(-1, index(l, 2, 5))
-  call assert_equal(0, insert(l, 2, -1))
+  call assert_equal(0, insert(test_null_list(), 2, -1))
+  call assert_fails('call insert(l, 2, -1)', 'E684:')
   call assert_equal(0, min(l))
   call assert_equal(0, max(l))
-  call assert_equal(0, remove(l, 0, 2))
+  call assert_equal(0, remove(test_null_list(), 0, 2))
+  call assert_fails('call remove(l, 0, 2)', 'E684:')
   call assert_equal([], repeat(l, 2))
-  call assert_equal(0, reverse(l))
-  call assert_equal(0, sort(l))
+  call assert_equal(0, reverse(test_null_list()))
+  call assert_equal([], reverse(l))
+  call assert_equal(0, sort(test_null_list()))
+  call assert_equal([], sort(l))
   call assert_equal('[]', string(l))
-  call assert_equal(0, extend(l, l, 0))
+  call assert_fails('call extend(test_null_list(), test_null_list())', 'E1134:')
+  call assert_equal([], extend(l, l, 0))
   lockvar l
   call assert_equal(1, islocked('l'))
   unlockvar l
@@ -1035,12 +1075,15 @@ func Test_null_dict()
   call assert_equal({}, d)
   call assert_equal(0, len(d))
   call assert_equal(1, empty(d))
-  call assert_equal(0, items(d))
-  call assert_equal(0, keys(d))
-  call assert_equal(0, values(d))
+  call assert_equal(0, items(test_null_dict()))
+  call assert_equal([], items(d))
+  call assert_equal(0, keys(test_null_dict()))
+  call assert_equal([], keys(d))
+  call assert_equal(0, values(test_null_dict()))
+  call assert_equal([], values(d))
   call assert_false(has_key(d, 'k'))
   call assert_equal('{}', string(d))
-  call assert_fails('let x = d[10]')
+  call assert_fails('let x = d[10]', 'E716:')
   call assert_equal({}, {})
   call assert_equal(0, len(copy(d)))
   call assert_equal(0, count(d, 'k'))
@@ -1048,9 +1091,11 @@ func Test_null_dict()
   call assert_equal(20, get(d, 'k', 20))
   call assert_equal(0, min(d))
   call assert_equal(0, max(d))
-  call assert_equal(0, remove(d, 'k'))
+  call assert_equal(0, remove(test_null_dict(), 'k'))
+  call assert_fails("call remove(d, 'k')", 'E716:')
   call assert_equal('{}', string(d))
-  call assert_equal(0, extend(d, d, 0))
+  call assert_fails('call extend(test_null_dict(), test_null_dict())', 'E1133:')
+  call assert_equal({}, extend(d, d, 'keep'))
   lockvar d
   call assert_equal(1, islocked('d'))
   unlockvar d

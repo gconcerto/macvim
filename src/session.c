@@ -397,6 +397,21 @@ put_view(
 	}
     }
 
+    if (wp->w_alt_fnum)
+    {
+	buf_T *alt = buflist_findnr(wp->w_alt_fnum);
+
+	// Set the alternate file if the buffer is listed.
+	if ((flagp == &ssop_flags)
+		&& alt != NULL
+		&& alt->b_fname != NULL
+		&& *alt->b_fname != NUL
+		&& alt->b_p_bl
+		&& (fputs("balt ", fd) < 0
+		|| ses_fname(fd, alt, flagp, TRUE) == FAIL))
+	    return FAIL;
+    }
+
     // Local mappings and abbreviations.
     if ((*flagp & (SSOP_OPTIONS | SSOP_LOCALOPTIONS))
 					 && makemap(fd, wp->w_buffer) == FAIL)
@@ -441,15 +456,23 @@ put_view(
 
 	// Restore the cursor line in the file and relatively in the
 	// window.  Don't use "G", it changes the jumplist.
-	if (fprintf(fd, "let s:l = %ld - ((%ld * winheight(0) + %ld) / %ld)",
+	if (wp->w_height <= 0)
+	{
+	    if (fprintf(fd, "let s:l = %ld", (long)wp->w_cursor.lnum) < 0)
+		return FAIL;
+	}
+	else if (fprintf(fd,
+		    "let s:l = %ld - ((%ld * winheight(0) + %ld) / %ld)",
 		    (long)wp->w_cursor.lnum,
 		    (long)(wp->w_cursor.lnum - wp->w_topline),
-		    (long)wp->w_height / 2, (long)wp->w_height) < 0
-		|| put_eol(fd) == FAIL
+		    (long)wp->w_height / 2, (long)wp->w_height) < 0)
+	    return FAIL;
+
+	if (put_eol(fd) == FAIL
 		|| put_line(fd, "if s:l < 1 | let s:l = 1 | endif") == FAIL
-		|| put_line(fd, "exe s:l") == FAIL
+		|| put_line(fd, "keepjumps exe s:l") == FAIL
 		|| put_line(fd, "normal! zt") == FAIL
-		|| fprintf(fd, "%ld", (long)wp->w_cursor.lnum) < 0
+		|| fprintf(fd, "keepjumps %ld", (long)wp->w_cursor.lnum) < 0
 		|| put_eol(fd) == FAIL)
 	    return FAIL;
 	// Restore the cursor column and left offset when not wrapping.
@@ -772,15 +795,22 @@ makeopens(
 	if (need_tabnext && put_line(fd, "tabnext") == FAIL)
 	    goto fail;
 
-	// Save current window layout.
-	if (put_line(fd, "set splitbelow splitright") == FAIL)
-	    goto fail;
-	if (ses_win_rec(fd, tab_topframe) == FAIL)
-	    goto fail;
-	if (!p_sb && put_line(fd, "set nosplitbelow") == FAIL)
-	    goto fail;
-	if (!p_spr && put_line(fd, "set nosplitright") == FAIL)
-	    goto fail;
+	if (tab_topframe->fr_layout != FR_LEAF)
+	{
+	    // Save current window layout.
+	    if (put_line(fd, "let s:save_splitbelow = &splitbelow") == FAIL
+		    || put_line(fd, "let s:save_splitright = &splitright")
+								       == FAIL)
+		goto fail;
+	    if (put_line(fd, "set splitbelow splitright") == FAIL)
+		goto fail;
+	    if (ses_win_rec(fd, tab_topframe) == FAIL)
+		goto fail;
+	    if (put_line(fd, "let &splitbelow = s:save_splitbelow") == FAIL
+		    || put_line(fd, "let &splitright = s:save_splitright")
+								       == FAIL)
+		goto fail;
+	}
 
 	// Check if window sizes can be restored (no windows omitted).
 	// Remember the window number of the current window after restoring.
@@ -795,22 +825,29 @@ makeopens(
 		cnr = nr;
 	}
 
-	// Go to the first window.
-	if (put_line(fd, "wincmd t") == FAIL)
-	    goto fail;
+	if (tab_firstwin->w_next != NULL)
+	{
+	    // Go to the first window.
+	    if (put_line(fd, "wincmd t") == FAIL)
+		goto fail;
 
-	// If more than one window, see if sizes can be restored.
-	// First set 'winheight' and 'winwidth' to 1 to avoid the windows being
-	// resized when moving between windows.
-	// Do this before restoring the view, so that the topline and the
-	// cursor can be set.  This is done again below.
-	// winminheight and winminwidth need to be set to avoid an error if the
-	// user has set winheight or winwidth.
-	if (put_line(fd, "set winminheight=0") == FAIL
-		|| put_line(fd, "set winheight=1") == FAIL
-		|| put_line(fd, "set winminwidth=0") == FAIL
-		|| put_line(fd, "set winwidth=1") == FAIL)
-	    goto fail;
+	    // If more than one window, see if sizes can be restored.
+	    // First set 'winheight' and 'winwidth' to 1 to avoid the windows
+	    // being resized when moving between windows.
+	    // Do this before restoring the view, so that the topline and the
+	    // cursor can be set.  This is done again below.
+	    // winminheight and winminwidth need to be set to avoid an error if
+	    // the user has set winheight or winwidth.
+	    if (put_line(fd, "let s:save_winminheight = &winminheight") == FAIL
+		    || put_line(fd, "let s:save_winminwidth = &winminwidth")
+								       == FAIL)
+		goto fail;
+	    if (put_line(fd, "set winminheight=0") == FAIL
+		    || put_line(fd, "set winheight=1") == FAIL
+		    || put_line(fd, "set winminwidth=0") == FAIL
+		    || put_line(fd, "set winwidth=1") == FAIL)
+		goto fail;
+	}
 	if (nr > 1 && ses_winsizes(fd, restore_size, tab_firstwin) == FAIL)
 	    goto fail;
 
@@ -912,10 +949,13 @@ makeopens(
     if (fprintf(fd, "set winheight=%ld winwidth=%ld shortmess=%s",
 			       p_wh, p_wiw, p_shm) < 0 || put_eol(fd) == FAIL)
 	goto fail;
-    // Re-apply 'winminheight' and 'winminwidth'.
-    if (fprintf(fd, "set winminheight=%ld winminwidth=%ld",
-				      p_wmh, p_wmw) < 0 || put_eol(fd) == FAIL)
-	goto fail;
+    if (tab_firstwin->w_next != NULL)
+    {
+	// Restore 'winminheight' and 'winminwidth'.
+	if (put_line(fd, "let &winminheight = s:save_winminheight") == FAIL
+	      || put_line(fd, "let &winminwidth = s:save_winminwidth") == FAIL)
+	    goto fail;
+    }
 
     // Lastly, execute the x.vim file if it exists.
     if (put_line(fd, "let s:sx = expand(\"<sfile>:p:r\").\"x.vim\"") == FAIL
@@ -1152,7 +1192,7 @@ ex_mkrc(exarg_T	*eap)
 	fname = (char_u *)EXRC_FILE;
 
 #ifdef FEAT_BROWSE
-    if (cmdmod.browse)
+    if (cmdmod.cmod_flags & CMOD_BROWSE)
     {
 	browseFile = do_browse(BROWSE_SAVE,
 # ifdef FEAT_SESSION
@@ -1218,13 +1258,21 @@ ex_mkrc(exarg_T	*eap)
 		|| (eap->cmdidx == CMD_mksession
 		    && (*flagp & SSOP_OPTIONS)))
 #endif
+	{
+	    int flags = OPT_GLOBAL;
+
+#ifdef FEAT_SESSION
+	    if (eap->cmdidx == CMD_mksession && (*flagp & SSOP_SKIP_RTP))
+		flags |= OPT_SKIPRTP;
+#endif
 	    failed |= (makemap(fd, NULL) == FAIL
-				   || makeset(fd, OPT_GLOBAL, FALSE) == FAIL);
+					 || makeset(fd, flags, FALSE) == FAIL);
+	}
 
 #ifdef FEAT_SESSION
 	if (!failed && view_session)
 	{
-	    if (put_line(fd, "let s:so_save = &so | let s:siso_save = &siso | set so=0 siso=0") == FAIL)
+	    if (put_line(fd, "let s:so_save = &g:so | let s:siso_save = &g:siso | setg so=0 siso=0 | setl so=-1 siso=-1") == FAIL)
 		failed = TRUE;
 	    if (eap->cmdidx == CMD_mksession)
 	    {
@@ -1269,7 +1317,7 @@ ex_mkrc(exarg_T	*eap)
 		failed |= (put_view(fd, curwin, !using_vdir, flagp, -1, NULL)
 								      == FAIL);
 	    }
-	    if (put_line(fd, "let &so = s:so_save | let &siso = s:siso_save")
+	    if (put_line(fd, "let &g:so = s:so_save | let &g:siso = s:siso_save")
 								      == FAIL)
 		failed = TRUE;
 #ifdef FEAT_SEARCH_EXTRA

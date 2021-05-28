@@ -22,6 +22,7 @@ static dict_T		*first_dict = NULL;
 
 /*
  * Allocate an empty header for a dictionary.
+ * Caller should take care of the reference count.
  */
     dict_T *
 dict_alloc(void)
@@ -106,10 +107,13 @@ rettv_dict_set(typval_T *rettv, dict_T *d)
 dict_free_contents(dict_T *d)
 {
     hashtab_free_contents(&d->dv_hashtab);
+    free_type(d->dv_type);
+    d->dv_type = NULL;
 }
 
 /*
  * Clear hashtab "ht" and dict items it contains.
+ * If "ht" is not freed then you should call hash_init() next!
  */
     void
 hashtab_free_contents(hashtab_T *ht)
@@ -781,24 +785,76 @@ dict2string(typval_T *tv, int copyID, int restore_copyID)
 }
 
 /*
+ * Advance over a literal key, including "-".  If the first character is not a
+ * literal key character then "key" is returned.
+ */
+    char_u *
+skip_literal_key(char_u *key)
+{
+    char_u *p;
+
+    for (p = key; ASCII_ISALNUM(*p) || *p == '_' || *p == '-'; ++p)
+	;
+    return p;
+}
+
+/*
  * Get the key for #{key: val} into "tv" and advance "arg".
  * Return FAIL when there is no valid key.
  */
     static int
-get_literal_key(char_u **arg, typval_T *tv)
+get_literal_key_tv(char_u **arg, typval_T *tv)
 {
-    char_u *p;
+    char_u *p = skip_literal_key(*arg);
 
-    if (!ASCII_ISALNUM(**arg) && **arg != '_' && **arg != '-')
+    if (p == *arg)
 	return FAIL;
-
-    for (p = *arg; ASCII_ISALNUM(*p) || *p == '_' || *p == '-'; ++p)
-	;
     tv->v_type = VAR_STRING;
     tv->vval.v_string = vim_strnsave(*arg, p - *arg);
 
     *arg = p;
     return OK;
+}
+
+/*
+ * Get a literal key for a Vim9 dict:
+ * {"name": value},
+ * {'name': value},
+ * {name: value} use "name" as a literal key
+ * Return the key in allocated memory or NULL in the case of an error.
+ * "arg" is advanced to just after the key.
+ */
+    char_u *
+get_literal_key(char_u **arg)
+{
+    char_u	*key;
+    char_u	*end;
+    typval_T	rettv;
+
+    if (**arg == '\'')
+    {
+	if (eval_lit_string(arg, &rettv, TRUE) == FAIL)
+	    return NULL;
+	key = rettv.vval.v_string;
+    }
+    else if (**arg == '"')
+    {
+	if (eval_string(arg, &rettv, TRUE) == FAIL)
+	    return NULL;
+	key = rettv.vval.v_string;
+    }
+    else
+    {
+	end = skip_literal_key(*arg);
+	if (end == *arg)
+	{
+	    semsg(_(e_invalid_key_str), *arg);
+	    return NULL;
+	}
+	key = vim_strnsave(*arg, end - *arg);
+	*arg = end;
+    }
+    return key;
 }
 
 /*
@@ -849,10 +905,38 @@ eval_dict(char_u **arg, typval_T *rettv, evalarg_T *evalarg, int literal)
     *arg = skipwhite_and_linebreak(*arg + 1, evalarg);
     while (**arg != '}' && **arg != NUL)
     {
-	if ((literal
-		? get_literal_key(arg, &tvkey)
-		: eval1(arg, &tvkey, evalarg)) == FAIL)	// recursive!
-	    goto failret;
+	int	has_bracket = vim9script && **arg == '[';
+
+	if (literal)
+	{
+	    if (get_literal_key_tv(arg, &tvkey) == FAIL)
+		goto failret;
+	}
+	else if (vim9script && !has_bracket)
+	{
+	    tvkey.vval.v_string = get_literal_key(arg);
+	    if (tvkey.vval.v_string == NULL)
+		goto failret;
+	    tvkey.v_type = VAR_STRING;
+	}
+	else
+	{
+	    if (has_bracket)
+		*arg = skipwhite(*arg + 1);
+	    if (eval1(arg, &tvkey, evalarg) == FAIL)	// recursive!
+		goto failret;
+	    if (has_bracket)
+	    {
+		*arg = skipwhite(*arg);
+		if (**arg != ']')
+		{
+		    emsg(_(e_missing_matching_bracket_after_dict_key));
+		    clear_tv(&tvkey);
+		    return FAIL;
+		}
+		++*arg;
+	    }
+	}
 
 	// the colon should come right after the key, but this wasn't checked
 	// previously, so only require it in Vim9 script.
@@ -860,18 +944,22 @@ eval_dict(char_u **arg, typval_T *rettv, evalarg_T *evalarg, int literal)
 	    *arg = skipwhite(*arg);
 	if (**arg != ':')
 	{
-	    if (evaluate)
-	    {
-		if (*skipwhite(*arg) == ':')
-		    semsg(_(e_no_white_space_allowed_before_str), ":");
-		else
-		    semsg(_(e_missing_dict_colon), *arg);
-	    }
+	    if (*skipwhite(*arg) == ':')
+		semsg(_(e_no_white_space_allowed_before_str_str), ":", *arg);
+	    else
+		semsg(_(e_missing_dict_colon), *arg);
 	    clear_tv(&tvkey);
 	    goto failret;
 	}
 	if (evaluate)
 	{
+#ifdef FEAT_FLOAT
+	    if (tvkey.v_type == VAR_FLOAT)
+	    {
+		tvkey.vval.v_string = typval_tostring(&tvkey, TRUE);
+		tvkey.v_type = VAR_STRING;
+	    }
+#endif
 	    key = tv_get_string_buf_chk(&tvkey, buf);
 	    if (key == NULL)
 	    {
@@ -882,7 +970,7 @@ eval_dict(char_u **arg, typval_T *rettv, evalarg_T *evalarg, int literal)
 	}
 	if (vim9script && (*arg)[1] != NUL && !VIM_ISWHITE((*arg)[1]))
 	{
-	    semsg(_(e_white_space_required_after_str), ":");
+	    semsg(_(e_white_space_required_after_str_str), ":", *arg);
 	    clear_tv(&tvkey);
 	    goto failret;
 	}
@@ -899,8 +987,7 @@ eval_dict(char_u **arg, typval_T *rettv, evalarg_T *evalarg, int literal)
 	    item = dict_find(d, key, -1);
 	    if (item != NULL)
 	    {
-		if (evaluate)
-		    semsg(_(e_duplicate_key), key);
+		semsg(_(e_duplicate_key), key);
 		clear_tv(&tvkey);
 		clear_tv(&tv);
 		goto failret;
@@ -925,7 +1012,7 @@ eval_dict(char_u **arg, typval_T *rettv, evalarg_T *evalarg, int literal)
 	{
 	    if (vim9script && (*arg)[1] != NUL && !VIM_ISWHITE((*arg)[1]))
 	    {
-		semsg(_(e_white_space_required_after_str), ",");
+		semsg(_(e_white_space_required_after_str_str), ",", *arg);
 		goto failret;
 	    }
 	    *arg = skipwhite(*arg + 1);
@@ -937,20 +1024,17 @@ eval_dict(char_u **arg, typval_T *rettv, evalarg_T *evalarg, int literal)
 	    break;
 	if (!had_comma)
 	{
-	    if (evaluate)
-	    {
-		if (**arg == ',')
-		    semsg(_(e_no_white_space_allowed_before_str), ",");
-		else
-		    semsg(_(e_missing_dict_comma), *arg);
-	    }
+	    if (**arg == ',')
+		semsg(_(e_no_white_space_allowed_before_str_str), ",", *arg);
+	    else
+		semsg(_(e_missing_dict_comma), *arg);
 	    goto failret;
 	}
     }
 
     if (**arg != '}')
     {
-	if (evaluate)
+	if (evalarg != NULL)
 	    semsg(_(e_missing_dict_end), *arg);
 failret:
 	if (d != NULL)
@@ -958,7 +1042,7 @@ failret:
 	return FAIL;
     }
 
-    *arg = skipwhite(*arg + 1);
+    *arg = *arg + 1;
     if (evaluate)
 	rettv_dict_set(rettv, d);
 
@@ -978,6 +1062,12 @@ dict_extend(dict_T *d1, dict_T *d2, char_u *action)
     hashitem_T	*hi2;
     int		todo;
     char_u	*arg_errmsg = (char_u *)N_("extend() argument");
+    type_T	*type;
+
+    if (d1->dv_type != NULL && d1->dv_type->tt_member != NULL)
+	type = d1->dv_type->tt_member;
+    else
+	type = NULL;
 
     todo = (int)d2->dv_hashtab.ht_used;
     for (hi2 = d2->dv_hashtab.ht_array; todo > 0; ++hi2)
@@ -994,9 +1084,15 @@ dict_extend(dict_T *d1, dict_T *d2, char_u *action)
 			&& HI2DI(hi2)->di_tv.v_type == VAR_FUNC
 			&& var_wrong_func_name(hi2->hi_key, di1 == NULL))
 		    break;
-		if (!valid_varname(hi2->hi_key))
+		if (!valid_varname(hi2->hi_key, TRUE))
 		    break;
 	    }
+
+	    if (type != NULL
+		     && check_typval_arg_type(type, &HI2DI(hi2)->di_tv, 0)
+								       == FAIL)
+		break;
+
 	    if (di1 == NULL)
 	    {
 		di1 = dictitem_copy(HI2DI(hi2));

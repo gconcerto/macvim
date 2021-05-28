@@ -352,6 +352,11 @@
     [(MMTextStorage*)[self textStorage] setWideFont:newFont];
 }
 
+- (void)refreshFonts
+{
+    // Doesn't do anything. CoreText renderer only.
+}
+
 - (NSSize)cellSize
 {
     return [(MMTextStorage*)[self textStorage] cellSize];
@@ -520,16 +525,6 @@
 - (void)setToolTipAtMousePoint:(NSString *)string
 {
     // ONLY in Core Text!
-}
-
-- (void)setCGLayerEnabled:(BOOL)enabled
-{
-    // ONLY in Core Text!
-}
-
-- (BOOL)getCGLayerEnabled
-{
-    return NO;
 }
 
 - (BOOL)isOpaque

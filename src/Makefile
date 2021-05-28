@@ -1400,7 +1400,7 @@ MACVIMGUI_OBJ	= objects/gui.o objects/gui_beval.o \
 MACVIMGUI_DEFS	= -DFEAT_GUI_MACVIM -Wall -Wno-unknown-pragmas -pipe
 MACVIMGUI_IPATH	=
 MACVIMGUI_LIBS_DIR =
-MACVIMGUI_LIBS1	= -framework Cocoa -framework Carbon
+MACVIMGUI_LIBS1	=
 MACVIMGUI_LIBS2	=
 MACVIMGUI_INSTALL = install_normal
 MACVIMGUI_TARGETS =
@@ -2310,11 +2310,13 @@ run_message_test: $(MESSAGE_TEST_TARGET)
 	$(VALGRIND) ./$(MESSAGE_TEST_TARGET) || exit 1; echo $* passed;
 
 # Run the libvterm tests.
-# This currently doesn't work on Mac, only run on Linux for now.
+# This works only on GNU make, not on BSD make.
+# Libtool requires "gcc".
 test_libvterm:
-	@if test `uname` = "Linux"; then \
-		cd libvterm; $(MAKE) -f Makefile test \
-			CC="$(CC)" CFLAGS="$(CFLAGS)" LDFLAGS="$(LDFLAGS)"; \
+	@if $(MAKE) --version 2>/dev/null | grep -qs "GNU Make"; then \
+	  if test -x "/usr/bin/gcc"; then \
+	    cd libvterm; $(MAKE) -f Makefile test CC="$(CC)" CFLAGS="$(CFLAGS)" LDFLAGS="$(LDFLAGS)"; \
+	  fi \
 	fi
 
 # Run individual OLD style test.

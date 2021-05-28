@@ -220,7 +220,11 @@ fill_assert_error(
 	vim_free(tofree);
     }
     else
+    {
+	ga_concat(gap, (char_u *)"'");
 	ga_concat_shorten_esc(gap, exp_str);
+	ga_concat(gap, (char_u *)"'");
+    }
     if (atype != ASSERT_NOTEQUAL)
     {
 	if (atype == ASSERT_MATCH)
@@ -334,7 +338,7 @@ assert_append_cmd_or_arg(garray_T *gap, typval_T *argvars, char_u *cmd)
 }
 
     static int
-assert_beeps(typval_T *argvars)
+assert_beeps(typval_T *argvars, int no_beep)
 {
     char_u	*cmd = tv_get_string_chk(&argvars[0]);
     garray_T	ga;
@@ -344,10 +348,13 @@ assert_beeps(typval_T *argvars)
     suppress_errthrow = TRUE;
     emsg_silent = FALSE;
     do_cmdline_cmd(cmd);
-    if (!called_vim_beep)
+    if (no_beep ? called_vim_beep : !called_vim_beep)
     {
 	prepare_assert_error(&ga);
-	ga_concat(&ga, (char_u *)"command did not beep: ");
+	if (no_beep)
+	    ga_concat(&ga, (char_u *)"command did beep: ");
+	else
+	    ga_concat(&ga, (char_u *)"command did not beep: ");
 	ga_concat(&ga, cmd);
 	assert_error(&ga);
 	ga_clear(&ga);
@@ -365,7 +372,16 @@ assert_beeps(typval_T *argvars)
     void
 f_assert_beeps(typval_T *argvars, typval_T *rettv)
 {
-    rettv->vval.v_number = assert_beeps(argvars);
+    rettv->vval.v_number = assert_beeps(argvars, FALSE);
+}
+
+/*
+ * "assert_nobeep(cmd [, error])" function
+ */
+    void
+f_assert_nobeep(typval_T *argvars, typval_T *rettv)
+{
+    rettv->vval.v_number = assert_beeps(argvars, TRUE);
 }
 
 /*
@@ -555,8 +571,7 @@ f_assert_fails(typval_T *argvars, typval_T *rettv)
     // trylevel must be zero for a ":throw" command to be considered failed
     trylevel = 0;
     suppress_errthrow = TRUE;
-    emsg_silent = TRUE;
-    emsg_assert_fails_used = TRUE;
+    in_assert_fails = TRUE;
 
     do_cmdline_cmd(cmd);
     if (called_emsg == called_emsg_before)
@@ -572,6 +587,7 @@ f_assert_fails(typval_T *argvars, typval_T *rettv)
     {
 	char_u	buf[NUMBUFLEN];
 	char_u	*expected;
+	char_u	*expected_str = NULL;
 	int	error_found = FALSE;
 	int	error_found_index = 1;
 	char_u	*actual = emsg_assert_fails_msg == NULL ? (char_u *)"[unknown]"
@@ -599,6 +615,7 @@ f_assert_fails(typval_T *argvars, typval_T *rettv)
 	    if (!pattern_match(expected, actual, FALSE))
 	    {
 		error_found = TRUE;
+		expected_str = expected;
 	    }
 	    else if (list->lv_len == 2)
 	    {
@@ -606,7 +623,10 @@ f_assert_fails(typval_T *argvars, typval_T *rettv)
 		actual = get_vim_var_str(VV_ERRMSG);
 		expected = tv_get_string_buf_chk(tv, buf);
 		if (!pattern_match(expected, actual, FALSE))
+		{
 		    error_found = TRUE;
+		    expected_str = expected;
+		}
 	    }
 	}
 	else
@@ -666,7 +686,7 @@ f_assert_fails(typval_T *argvars, typval_T *rettv)
 		actual_tv.v_type = VAR_STRING;
 		actual_tv.vval.v_string = actual;
 	    }
-	    fill_assert_error(&ga, &argvars[2], NULL,
+	    fill_assert_error(&ga, &argvars[2], expected_str,
 			&argvars[error_found_index], &actual_tv, ASSERT_OTHER);
 	    ga_concat(&ga, (char_u *)": ");
 	    assert_append_cmd_or_arg(&ga, argvars, cmd);
@@ -679,9 +699,13 @@ f_assert_fails(typval_T *argvars, typval_T *rettv)
 theend:
     trylevel = save_trylevel;
     suppress_errthrow = FALSE;
-    emsg_silent = FALSE;
+    in_assert_fails = FALSE;
+    did_emsg = FALSE;
+    msg_col = 0;
+    need_wait_return = FALSE;
     emsg_on_display = FALSE;
-    emsg_assert_fails_used = FALSE;
+    msg_scrolled = 0;
+    lines_left = Rows;
     VIM_CLEAR(emsg_assert_fails_msg);
     set_vim_var_string(VV_ERRMSG, NULL, 0);
     if (wrong_arg_msg != NULL)
@@ -958,6 +982,8 @@ f_test_override(typval_T *argvars, typval_T *rettv UNUSED)
 	    ui_delay_for_testing = val;
 	else if (STRCMP(name, (char_u *)"term_props") == 0)
 	    reset_term_props_on_termresponse = val;
+	else if (STRCMP(name, (char_u *)"uptime") == 0)
+	    override_sysinfo_uptime = val;
 	else if (STRCMP(name, (char_u *)"ALL") == 0)
 	{
 	    disable_char_avail_for_testing = FALSE;
@@ -967,6 +993,7 @@ f_test_override(typval_T *argvars, typval_T *rettv UNUSED)
 	    no_query_mouse_for_testing = FALSE;
 	    ui_delay_for_testing = 0;
 	    reset_term_props_on_termresponse = FALSE;
+	    override_sysinfo_uptime = -1;
 	    if (save_starting >= 0)
 	    {
 		starting = save_starting;
@@ -996,6 +1023,7 @@ f_test_refcount(typval_T *argvars, typval_T *rettv)
 	case VAR_FLOAT:
 	case VAR_SPECIAL:
 	case VAR_STRING:
+	case VAR_INSTR:
 	    break;
 	case VAR_JOB:
 #ifdef FEAT_JOB_CHANNEL
