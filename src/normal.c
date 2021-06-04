@@ -2976,6 +2976,10 @@ dozet:
 		}
 		break;
 
+		// "zp", "zP" in block mode put without addind trailing spaces
+    case 'P':
+    case 'p':  nv_put(cap);
+	       break;
 #ifdef FEAT_FOLDING
 		// "zF": create fold command
 		// "zf": create fold operator
@@ -6156,6 +6160,17 @@ nv_g_cmd(cmdarg_T *cap)
 		i = curwin->w_leftcol + curwin->w_width - col_off - 1;
 		coladvance((colnr_T)i);
 
+		// if the character doesn't fit move one back
+		if (curwin->w_cursor.col > 0
+				       && (*mb_ptr2cells)(ml_get_cursor()) > 1)
+		{
+		    colnr_T vcol;
+
+		    getvvcol(curwin, &curwin->w_cursor, NULL, NULL, &vcol);
+		    if (vcol >= curwin->w_leftcol + curwin->w_width - col_off)
+			--curwin->w_cursor.col;
+		}
+
 		// Make sure we stick in this column.
 		validate_virtcol();
 		curwin->w_curswant = curwin->w_virtcol;
@@ -7419,11 +7434,13 @@ nv_put_opt(cmdarg_T *cap, int fix_indent)
 	}
 	else
 	    dir = (cap->cmdchar == 'P'
-				 || (cap->cmdchar == 'g' && cap->nchar == 'P'))
-							 ? BACKWARD : FORWARD;
+		    || ((cap->cmdchar == 'g' || cap->cmdchar == 'z')
+			&& cap->nchar == 'P')) ? BACKWARD : FORWARD;
 	prep_redo_cmd(cap);
 	if (cap->cmdchar == 'g')
 	    flags |= PUT_CURSEND;
+	else if (cap->cmdchar == 'z')
+	    flags |= PUT_BLOCK_INNER;
 
 	if (VIsual_active)
 	{

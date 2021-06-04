@@ -475,6 +475,7 @@ func Test_fullcommand()
   for [in, want] in items(tests)
     call assert_equal(want, fullcommand(in))
   endfor
+  call assert_equal('', fullcommand(test_null_string()))
 
   call assert_equal('syntax', 'syn'->fullcommand())
 endfunc
@@ -1189,6 +1190,21 @@ func Test_cmdwin_restore()
   " clean up
   call StopVimInTerminal(buf)
   call delete('XTest_restore')
+endfunc
+
+func Test_cmdwin_no_terminal()
+  CheckFeature cmdwin
+  CheckFeature terminal
+  CheckNotMSWindows
+
+  let buf = RunVimInTerminal('', {'rows': 12})
+  call TermWait(buf, 50)
+  call term_sendkeys(buf, ":set cmdheight=2\<CR>")
+  call term_sendkeys(buf, "q:")
+  call term_sendkeys(buf, ":let buf = term_start(['/bin/echo'], #{hidden: 1})\<CR>")
+  call VerifyScreenDump(buf, 'Test_cmdwin_no_terminal', {})
+  call term_sendkeys(buf, ":q\<CR>")
+  call StopVimInTerminal(buf)
 endfunc
 
 func Test_buffers_lastused()
