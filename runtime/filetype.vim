@@ -1,7 +1,7 @@
 " Vim support file to detect file types
 "
 " Maintainer:	Bram Moolenaar <Bram@vim.org>
-" Last Change:	2021 Apr 17
+" Last Change:	2022 Feb 13
 
 " Listen very carefully, I will say this only once
 if exists("did_load_filetypes")
@@ -44,7 +44,7 @@ endif
 " file name matches ft_ignore_pat.
 " When using this, the entry should probably be further down below with the
 " other StarSetf() calls.
-func! s:StarSetf(ft)
+func s:StarSetf(ft)
   if expand("<amatch>") !~ g:ft_ignore_pat
     exe 'setf ' . a:ft
   endif
@@ -123,7 +123,7 @@ au BufNewFile,BufRead *.aml			setf aml
 " APT config file
 au BufNewFile,BufRead apt.conf		       setf aptconf
 au BufNewFile,BufRead */.aptitude/config       setf aptconf
-au BufNewFile,BufRead */etc/apt/apt.conf.d/{[-_[:alnum:]]\+,[-_.[:alnum:]]\+.conf} setf aptconf
+" more generic pattern far down
 
 " Arch Inventory file
 au BufNewFile,BufRead .arch-inventory,=tagging-method	setf arch
@@ -193,7 +193,8 @@ au BufNewFile,BufRead *.awk,*.gawk		setf awk
 au BufNewFile,BufRead *.mch,*.ref,*.imp		setf b
 
 " BASIC or Visual Basic
-au BufNewFile,BufRead *.bas			call dist#ft#FTVB("basic")
+au BufNewFile,BufRead *.bas			call dist#ft#FTbas()
+au BufNewFile,BufRead *.bi,*.bm			call dist#ft#FTbas()
 
 " Visual Basic Script (close to Visual Basic) or Visual Basic .NET
 au BufNewFile,BufRead *.vb,*.vbs,*.dsm,*.ctl	setf vb
@@ -202,7 +203,7 @@ au BufNewFile,BufRead *.vb,*.vbs,*.dsm,*.ctl	setf vb
 au BufNewFile,BufRead *.iba,*.ibi		setf ibasic
 
 " FreeBasic file (similar to QBasic)
-au BufNewFile,BufRead *.fb,*.bi			setf freebasic
+au BufNewFile,BufRead *.fb			setf freebasic
 
 " Batch file for MSDOS.
 au BufNewFile,BufRead *.bat,*.sys		setf dosbatch
@@ -227,6 +228,9 @@ au BufNewFile,BufRead *.bib			setf bib
 
 " BibTeX Bibliography Style
 au BufNewFile,BufRead *.bst			setf bst
+
+" Bicep
+au BufNewFile,BufRead *.bicep			setf bicep
 
 " BIND configuration
 " sudoedit uses namedXXXX.conf
@@ -260,7 +264,7 @@ au BufNewFile,BufRead *.lpc,*.ulpc		setf lpc
 au BufNewFile,BufRead calendar			setf calendar
 
 " C#
-au BufNewFile,BufRead *.cs			setf cs
+au BufNewFile,BufRead *.cs,*.csx		setf cs
 
 " CSDL
 au BufNewFile,BufRead *.csdl			setf csdl
@@ -393,10 +397,11 @@ au BufNewFile,BufRead *.cfm,*.cfi,*.cfc		setf cf
 " Configure scripts
 au BufNewFile,BufRead configure.in,configure.ac setf config
 
-" CUDA  Cumpute Unified Device Architecture
+" CUDA Compute Unified Device Architecture
 au BufNewFile,BufRead *.cu,*.cuh		setf cuda
 
 " Dockerfile; Podman uses the same syntax with name Containerfile
+" Also see Dockerfile.* below.
 au BufNewFile,BufRead Containerfile,Dockerfile,*.Dockerfile	setf dockerfile
 
 " WildPackets EtherPeek Decoder
@@ -408,8 +413,15 @@ au BufNewFile,BufRead *enlightenment/*.cfg	setf c
 " Eterm
 au BufNewFile,BufRead *Eterm/*.cfg		setf eterm
 
+" Elixir or Euphoria
+au BufNewFile,BufRead *.ex call dist#ft#ExCheck()
+
+" Elixir
+au BufRead,BufNewFile mix.lock,*.exs setf elixir
+au BufRead,BufNewFile *.eex,*.leex setf eelixir
+
 " Euphoria 3 or 4
-au BufNewFile,BufRead *.eu,*.ew,*.ex,*.exu,*.exw  call dist#ft#EuphoriaCheck()
+au BufNewFile,BufRead *.eu,*.ew,*.exu,*.exw  call dist#ft#EuphoriaCheck()
 if has("fname_case")
    au BufNewFile,BufRead *.EU,*.EW,*.EX,*.EXU,*.EXW  call dist#ft#EuphoriaCheck()
 endif
@@ -472,6 +484,7 @@ au BufNewFile,BufRead */etc/dnsmasq.conf	setf dnsmasq
 au BufNewFile,BufRead *.desc			setf desc
 
 " the D language or dtrace
+au BufNewFile,BufRead */dtrace/*.d		setf dtrace
 au BufNewFile,BufRead *.d			call dist#ft#DtraceCheck()
 
 " Desktop files
@@ -481,12 +494,15 @@ au BufNewFile,BufRead *.desktop,*.directory	setf desktop
 au BufNewFile,BufRead dict.conf,.dictrc		setf dictconf
 
 " Dictd config
-au BufNewFile,BufRead dictd.conf		setf dictdconf
+au BufNewFile,BufRead dictd*.conf		setf dictdconf
+
+" DEP3 formatted patch files
+au BufNewFile,BufRead */debian/patches/*	call dist#ft#Dep3patch()
 
 " Diff files
 au BufNewFile,BufRead *.diff,*.rej		setf diff
 au BufNewFile,BufRead *.patch
-	\ if getline(1) =~ '^From [0-9a-f]\{40\} Mon Sep 17 00:00:00 2001$' |
+	\ if getline(1) =~# '^From [0-9a-f]\{40,\} Mon Sep 17 00:00:00 2001$' |
 	\   setf gitsendemail |
 	\ else |
 	\   setf diff |
@@ -530,8 +546,13 @@ au BufNewFile,BufRead *.drac,*.drc,*lvs,*lpe	setf dracula
 " Datascript
 au BufNewFile,BufRead *.ds			setf datascript
 
-" dsl
-au BufNewFile,BufRead *.dsl			setf dsl
+" dsl: DSSSL or Structurizr
+au BufNewFile,BufRead *.dsl
+	\ if getline(1) =~ '^\s*<\!' |
+	\   setf dsl |
+	\ else |
+	\   setf structurizr |
+	\ endif
 
 " DTD (Document Type Definition for XML)
 au BufNewFile,BufRead *.dtd			setf dtd
@@ -605,6 +626,9 @@ autocmd BufRead,BufNewFile *.fnl		setf fennel
 " Fetchmail RC file
 au BufNewFile,BufRead .fetchmailrc		setf fetchmail
 
+" Fish shell
+au BufNewFile,BufRead *.fish			setf fish
+
 " FlexWiki - disabled, because it has side effects when a .wiki file
 " is not actually FlexWiki
 "au BufNewFile,BufRead *.wiki			setf flexwiki
@@ -617,7 +641,7 @@ au BufNewFile,BufRead auto.master		setf conf
 au BufNewFile,BufRead *.mas,*.master		setf master
 
 " Forth
-au BufNewFile,BufRead *.fs,*.ft,*.fth		setf forth
+au BufNewFile,BufRead *.ft,*.fth		setf forth
 
 " Reva Forth
 au BufNewFile,BufRead *.frt			setf reva
@@ -634,39 +658,59 @@ au BufNewFile,BufRead *.fsl			setf framescript
 " FStab
 au BufNewFile,BufRead fstab,mtab		setf fstab
 
+" Fusion
+au BufRead,BufNewFile *.fusion			setf fusion
+
+" F# or Forth
+au BufNewFile,BufRead *.fs			call dist#ft#FTfs()
+
+" F#
+au BufNewFile,BufRead *.fsi,*.fsx		setf fsharp
+
 " GDB command files
-au BufNewFile,BufRead .gdbinit			setf gdb
+au BufNewFile,BufRead .gdbinit,gdbinit,.gdbearlyinit,gdbearlyinit,*.gdb		setf gdb
 
 " GDMO
 au BufNewFile,BufRead *.mo,*.gdmo		setf gdmo
 
+" GDscript
+au BufNewFile,BufRead *.gd			setf gdscript
+
+" Godot resource
+au BufRead,BufNewFile *.tscn,*.tres			setf gdresource
+
 " Gedcom
 au BufNewFile,BufRead *.ged,lltxxxxx.txt	setf gedcom
+
+" Gemtext
+au BufNewFile,BufRead *.gmi,*.gemini		setf gemtext
 
 " Gift (Moodle)
 autocmd BufRead,BufNewFile *.gift		setf gift
 
 " Git
 au BufNewFile,BufRead COMMIT_EDITMSG,MERGE_MSG,TAG_EDITMSG	setf gitcommit
-au BufNewFile,BufRead *.git/config,.gitconfig,/etc/gitconfig	setf gitconfig
+au BufNewFile,BufRead NOTES_EDITMSG,EDIT_DESCRIPTION		setf gitcommit
+au BufNewFile,BufRead *.git/config,.gitconfig,*/etc/gitconfig	setf gitconfig
 au BufNewFile,BufRead */.config/git/config			setf gitconfig
+au BufNewFile,BufRead *.git/config.worktree			setf gitconfig
+au BufNewFile,BufRead *.git/worktrees/*/config.worktree		setf gitconfig
 au BufNewFile,BufRead .gitmodules,*.git/modules/*/config	setf gitconfig
 if !empty($XDG_CONFIG_HOME)
   au BufNewFile,BufRead $XDG_CONFIG_HOME/git/config		setf gitconfig
 endif
 au BufNewFile,BufRead git-rebase-todo		setf gitrebase
 au BufRead,BufNewFile .gitsendemail.msg.??????	setf gitsendemail
-au BufNewFile,BufRead .msg.[0-9]*
-      \ if getline(1) =~ '^From.*# This line is ignored.$' |
-      \   setf gitsendemail |
-      \ endif
 au BufNewFile,BufRead *.git/*
-      \ if getline(1) =~ '^\x\{40\}\>\|^ref: ' |
+      \ if getline(1) =~# '^\x\{40,\}\>\|^ref: ' |
       \   setf git |
       \ endif
 
 " Gkrellmrc
 au BufNewFile,BufRead gkrellmrc,gkrellmrc_?	setf gkrellmrc
+
+" GLSL
+au BufNewFile,BufRead *.glsl			setf glsl
 
 " GP scripts (2.0 and onward)
 au BufNewFile,BufRead *.gp,.gprc		setf gp
@@ -687,14 +731,23 @@ au BufNewFile,BufRead gnashrc,.gnashrc,gnashpluginrc,.gnashpluginrc setf gnash
 au BufNewFile,BufRead gitolite.conf		setf gitolite
 au BufNewFile,BufRead {,.}gitolite.rc,example.gitolite.rc	setf perl
 
+" Glimmer-flavored TypeScript and JavaScript
+au BufNewFile,BufRead *.gts	setf typescript.glimmer
+au BufNewFile,BufRead *.gjs	setf javascript.glimmer
+
 " Gnuplot scripts
-au BufNewFile,BufRead *.gpi			setf gnuplot
+au BufNewFile,BufRead *.gpi,.gnuplot		setf gnuplot
 
 " Go (Google)
 au BufNewFile,BufRead *.go			setf go
+au BufNewFile,BufRead Gopkg.lock		setf toml
+au BufRead,BufNewFile go.work			setf gowork
 
 " GrADS scripts
 au BufNewFile,BufRead *.gs			setf grads
+
+" GraphQL
+au BufNewFile,BufRead *.graphql,*.graphqls,*.gql			setf graphql
 
 " Gretl
 au BufNewFile,BufRead *.gretl			setf gretl
@@ -711,11 +764,17 @@ au BufNewFile,BufRead */etc/group,*/etc/group-,*/etc/group.edit,*/etc/gshadow,*/
 " GTK RC
 au BufNewFile,BufRead .gtkrc,gtkrc		setf gtkrc
 
+" Hack
+au BufRead,BufNewFile *.hack,*.hackpartial			setf hack
+
 " Haml
 au BufNewFile,BufRead *.haml			setf haml
 
 " Hamster Classic | Playground files
 au BufNewFile,BufRead *.hsm			setf hamster
+
+" Handlebars
+au BufNewFile,BufRead *.hbs			setf handlebars
 
 " Haskell
 au BufNewFile,BufRead *.hs,*.hsc,*.hs-boot,*.hsig setf haskell
@@ -729,11 +788,20 @@ au BufNewFile,BufRead cabal.config		setf cabalconfig
 au BufNewFile,BufRead *.ht			setf haste
 au BufNewFile,BufRead *.htpp			setf hastepreproc
 
+" HCL
+au BufRead,BufNewFile *.hcl			setf hcl
+
 " Hercules
 au BufNewFile,BufRead *.vc,*.ev,*.sum,*.errsum	setf hercules
 
+" HEEx
+au BufRead,BufNewFile *.heex			setf heex
+
 " HEX (Intel)
 au BufNewFile,BufRead *.hex,*.h32		setf hex
+
+" Hjson
+au BufNewFile,BufRead *.hjson			setf hjson
 
 " Hollywood
 au BufRead,BufNewFile *.hws			setf hollywood
@@ -764,6 +832,10 @@ au BufNewFile,BufRead *.hb			setf hb
 
 " Httest
 au BufNewFile,BufRead *.htt,*.htb		setf httest
+
+" i3 (and sway)
+au BufNewFile,BufRead */i3/config,*/sway/config		setf i3config
+au BufNewFile,BufRead */.i3/config,*/.sway/config	setf i3config
 
 " Icon
 au BufNewFile,BufRead *.icn			setf icon
@@ -855,6 +927,24 @@ au BufNewFile,BufRead *.jov,*.j73,*.jovial	setf jovial
 " JSON
 au BufNewFile,BufRead *.json,*.jsonp,*.webmanifest	setf json
 
+" JSON5
+au BufNewFile,BufRead *.json5			setf json5
+
+" JSON Patch (RFC 6902)
+au BufNewFile,BufRead *.json-patch			setf json
+
+" Jupyter Notebook is also json
+au BufNewFile,BufRead *.ipynb				setf json
+
+" Other files that look like json
+au BufNewFile,BufRead .babelrc,.eslintrc,.prettierrc,.firebaserc  setf json
+
+" JSONC
+au BufNewFile,BufRead *.jsonc			setf jsonc
+
+" Julia
+au BufNewFile,BufRead *.jl			setf julia
+
 " Kixtart
 au BufNewFile,BufRead *.kix			setf kix
 
@@ -891,6 +981,9 @@ au BufNewFile,BufRead *.ldif			setf ldif
 " Ld loader
 au BufNewFile,BufRead *.ld			setf ld
 
+" Ledger
+au BufRead,BufNewFile *.ldg,*.ledger,*.journal			setf ledger
+
 " Less
 au BufNewFile,BufRead *.less			setf less
 
@@ -915,9 +1008,9 @@ au BufNewFile,BufRead lilo.conf			setf lilo
 " Lisp (*.el = ELisp, *.cl = Common Lisp)
 " *.jl was removed, it's also used for Julia, better skip than guess wrong.
 if has("fname_case")
-  au BufNewFile,BufRead *.lsp,*.lisp,*.el,*.cl,*.L,.emacs,.sawfishrc setf lisp
+  au BufNewFile,BufRead *.lsp,*.lisp,*.asd,*.el,*.cl,*.L,.emacs,.sawfishrc setf lisp
 else
-  au BufNewFile,BufRead *.lsp,*.lisp,*.el,*.cl,.emacs,.sawfishrc setf lisp
+  au BufNewFile,BufRead *.lsp,*.lisp,*.asd,*.el,*.cl,.emacs,.sawfishrc setf lisp
 endif
 
 " SBCL implementation of Common Lisp
@@ -1002,7 +1095,7 @@ au BufNewFile,BufRead *.markdown,*.mdown,*.mkd,*.mkdn,*.mdwn,*.md  setf markdown
 " Mason
 au BufNewFile,BufRead *.mason,*.mhtml,*.comp	setf mason
 
-" Mathematica, Matlab, Murphi or Objective C
+" Mathematica, Matlab, Murphi, Objective C or Octave
 au BufNewFile,BufRead *.m			call dist#ft#FTm()
 
 " Mathematica notebook
@@ -1044,7 +1137,9 @@ au BufNewFile,BufRead *.mmp			setf mmp
 
 " Modsim III (or LambdaProlog)
 au BufNewFile,BufRead *.mod
-	\ if getline(1) =~ '\<module\>' |
+	\ if expand("<afile>") =~ '\<go.mod$' |
+	\   setf gomod |
+	\ elseif getline(1) =~ '\<module\>' |
 	\   setf lprolog |
 	\ else |
 	\   setf modsim3 |
@@ -1065,6 +1160,9 @@ au BufNewFile,BufRead *.moo			setf moo
 " Modconf
 au BufNewFile,BufRead */etc/modules.conf,*/etc/modules,*/etc/conf.modules setf modconf
 
+" MPD is based on XML
+au BufNewFile,BufRead *.mpd			setf xml
+
 " Mplayer config
 au BufNewFile,BufRead mplayer.conf,*/.mplayer/config	setf mplayerconf
 
@@ -1080,11 +1178,15 @@ au BufNewFile,BufRead *.msql			setf msql
 " Mysql
 au BufNewFile,BufRead *.mysql			setf mysql
 
-" Mutt setup files (must be before catch *.rc)
-au BufNewFile,BufRead */etc/Muttrc.d/*		call s:StarSetf('muttrc')
+" Tcl Shell RC file
+au BufNewFile,BufRead tclsh.rc			setf tcl
 
 " M$ Resource files
-au BufNewFile,BufRead *.rc,*.rch		setf rc
+" /etc/Muttrc.d/file.rc is muttrc
+au BufNewFile,BufRead *.rc,*.rch
+	\ if expand("<afile>") !~ "/etc/Muttrc.d/" |
+	\   setf rc |
+	\ endif
 
 " MuPAD source
 au BufRead,BufNewFile *.mu			setf mupad
@@ -1113,8 +1215,14 @@ au BufNewFile,BufRead Neomuttrc			setf neomuttrc
 " Netrc
 au BufNewFile,BufRead .netrc			setf netrc
 
+" Nginx
+au BufNewFile,BufRead *.nginx,nginx*.conf,*nginx.conf,*/etc/nginx/*,*/usr/local/nginx/conf/*,*/nginx/*.conf			setf nginx
+
 " Ninja file
 au BufNewFile,BufRead *.ninja			setf ninja
+
+" Nix
+au BufRead,BufNewFile *.nix			setf nix
 
 " NPM RC file
 au BufNewFile,BufRead npmrc,.npmrc		setf dosini
@@ -1148,11 +1256,17 @@ au BufNewFile,BufRead *.ml,*.mli,*.mll,*.mly,.ocamlinit,*.mlt,*.mlp,*.mlip,*.mli
 " Occam
 au BufNewFile,BufRead *.occ			setf occam
 
+" Octave
+au BufNewFile,BufRead octave.conf,.octaverc,octaverc	setf octave
+
 " Omnimark
 au BufNewFile,BufRead *.xom,*.xin		setf omnimark
 
 " OPAM
 au BufNewFile,BufRead opam,*.opam,*.opam.template setf opam
+
+" OpenFOAM
+au BufNewFile,BufRead [a-zA-Z0-9]*Dict\(.*\)\=,[a-zA-Z]*Properties\(.*\)\=,*Transport\(.*\),fvSchemes,fvSolution,fvConstrains,fvModels,*/constant/g,*/0\(\.orig\)\=/* call dist#ft#FTfoam()
 
 " OpenROAD
 au BufNewFile,BufRead *.or			setf openroad
@@ -1162,6 +1276,9 @@ au BufNewFile,BufRead *.[Oo][Pp][Ll]		setf opl
 
 " Oracle config file
 au BufNewFile,BufRead *.ora			setf ora
+
+" Org
+au BufNewFile,BufRead *.org,*.org_archive	setf org
 
 " Packet filter conf
 au BufNewFile,BufRead pf.conf			setf pf
@@ -1248,7 +1365,7 @@ au BufNewFile,BufRead *.rcp			setf pilrc
 au BufNewFile,BufRead .pinerc,pinerc,.pinercex,pinercex		setf pine
 
 " Pipenv Pipfiles
-au BufNewFile,BufRead Pipfile			setf config
+au BufNewFile,BufRead Pipfile			setf toml
 au BufNewFile,BufRead Pipfile.lock		setf json
 
 " PL/1, PL/I
@@ -1295,12 +1412,18 @@ au BufNewFile,BufRead *printcap
 au BufNewFile,BufRead *termcap
 	\ let b:ptcap_type = "term" | setf ptcap
 
+" Prisma
+au BufRead,BufNewFile *.prisma			setf prisma
+
 " PCCTS / ANTLR
 "au BufNewFile,BufRead *.g			setf antlr
 au BufNewFile,BufRead *.g			setf pccts
 
 " PPWizard
 au BufNewFile,BufRead *.it,*.ih			setf ppwiz
+
+" Pug
+au BufRead,BufNewFile *.pug			setf pug
 
 " Puppet
 au BufNewFile,BufRead Puppetfile		setf ruby
@@ -1356,6 +1479,9 @@ au BufNewFile,BufRead *.pk			setf poke
 " Protocols
 au BufNewFile,BufRead */etc/protocols		setf protocols
 
+" Pyret
+au BufNewFile,BufRead *.arr			setf pyret
+
 " Pyrex
 au BufNewFile,BufRead *.pyx,*.pxd		setf pyrex
 
@@ -1364,10 +1490,13 @@ au BufNewFile,BufRead *.pyx,*.pxd		setf pyrex
 au BufNewFile,BufRead *.py,*.pyw,.pythonstartup,.pythonrc  setf python
 au BufNewFile,BufRead *.ptl,*.pyi,SConstruct		   setf python
 
+" QL
+au BufRead,BufNewFile *.ql,*.qll		setf ql
+
 " Radiance
 au BufNewFile,BufRead *.rad,*.mat		setf radiance
 
-" Raku (formelly Perl6)
+" Raku (formerly Perl6)
 au BufNewFile,BufRead *.pm6,*.p6,*.t6,*.pod6,*.raku,*.rakumod,*.rakudoc,*.rakutest  setf raku
 
 " Ratpoison config/command files
@@ -1429,6 +1558,9 @@ au BufNewFile,BufRead *.r,*.R				call dist#ft#FTr()
 " Remind
 au BufNewFile,BufRead .reminders,*.remind,*.rem		setf remind
 
+" ReScript
+au BufNewFile,BufRead *.res,*.resi			setf rescript
+
 " Resolv.conf
 au BufNewFile,BufRead resolv.conf		setf resolv
 
@@ -1446,6 +1578,9 @@ au BufNewFile,BufRead robots.txt		setf robots
 
 " Rpcgen
 au BufNewFile,BufRead *.x			setf rpcgen
+
+" MikroTik RouterOS script
+au BufRead,BufNewFile *.rsc			setf routeros
 
 " reStructuredText Documentation Format
 au BufNewFile,BufRead *.rst			setf rst
@@ -1479,6 +1614,7 @@ au BufNewFile,BufRead [rR]antfile,*.rant,[rR]akefile,*.rake	setf ruby
 
 " Rust
 au BufNewFile,BufRead *.rs			setf rust
+au BufNewFile,BufRead Cargo.lock,*/.cargo/config,*/.cargo/credentials	setf toml
 
 " S-lang (or shader language, or SmallLisp)
 au BufNewFile,BufRead *.sl			setf slang
@@ -1496,13 +1632,16 @@ au BufNewFile,BufRead *.sass			setf sass
 au BufNewFile,BufRead *.sa			setf sather
 
 " Scala
-au BufNewFile,BufRead *.scala			setf scala
+au BufNewFile,BufRead *.scala,*.sc		setf scala
 
 " SBT - Scala Build Tool
 au BufNewFile,BufRead *.sbt			setf sbt
 
 " Scilab
 au BufNewFile,BufRead *.sci,*.sce		setf scilab
+
+" scdoc
+au BufNewFile,BufRead *.scd			setf scdoc
 
 " SCSS
 au BufNewFile,BufRead *.scss			setf scss
@@ -1587,13 +1726,16 @@ au BufNewFile,BufRead .tcshrc,*.tcsh,tcsh.tcshrc,tcsh.login	call dist#ft#SetFile
 " (patterns ending in a start further below)
 au BufNewFile,BufRead .login,.cshrc,csh.cshrc,csh.login,csh.logout,*.csh,.alias  call dist#ft#CSH()
 
+" Zig
+au BufNewFile,BufRead *.zig			setf zig
+
 " Z-Shell script (patterns ending in a star further below)
 au BufNewFile,BufRead .zprofile,*/etc/zprofile,.zfbfmarks  setf zsh
 au BufNewFile,BufRead .zshrc,.zshenv,.zlogin,.zlogout,.zcompdump setf zsh
 au BufNewFile,BufRead *.zsh			setf zsh
 
 " Scheme
-au BufNewFile,BufRead *.scm,*.ss,*.rkt		setf scheme
+au BufNewFile,BufRead *.scm,*.ss,*.sld,*.rkt,*.rktd,*.rktl	setf scheme
 
 " Screen RC
 au BufNewFile,BufRead .screenrc,screenrc	setf screen
@@ -1661,6 +1803,9 @@ au BufNewFile,BufRead *.mib,*.my		setf mib
 au BufNewFile,BufRead *.hog,snort.conf,vision.conf	setf hog
 au BufNewFile,BufRead *.rules			call dist#ft#FTRules()
 
+" Solidity
+au BufRead,BufNewFile *.sol			setf solidity
+
 " SPARQL queries
 au BufNewFile,BufRead *.rq,*.sparql		setf sparql
 
@@ -1672,6 +1817,10 @@ au BufNewFile,BufRead *.speedup,*.spdata,*.spd	setf spup
 
 " Slice
 au BufNewFile,BufRead *.ice			setf slice
+
+" Microsoft Visual Studio Solution
+au BufNewFile,BufRead *.sln			setf solution
+au BufNewFile,BufRead *.slnf			setf json
 
 " Spice
 au BufNewFile,BufRead *.sp,*.spice		setf spice
@@ -1694,9 +1843,12 @@ au BufNewFile,BufRead *.sqlj			setf sqlj
 " SQR
 au BufNewFile,BufRead *.sqr,*.sqi		setf sqr
 
+" Squirrel
+au BufNewFile,BufRead *.nut			setf squirrel
+
 " OpenSSH configuration
-au BufNewFile,BufRead ssh_config,*/.ssh/config		setf sshconfig
-au BufNewFile,BufRead */etc/ssh/ssh_config.d/*.conf	setf sshconfig
+au BufNewFile,BufRead ssh_config,*/.ssh/config,*/.ssh/*.conf	setf sshconfig
+au BufNewFile,BufRead */etc/ssh/ssh_config.d/*.conf		setf sshconfig
 
 " OpenSSH server configuration
 au BufNewFile,BufRead sshd_config			setf sshdconfig
@@ -1751,6 +1903,9 @@ au BufNewFile,BufRead */etc/sudoers,sudoers.tmp	setf sudoers
 " SVG (Scalable Vector Graphics)
 au BufNewFile,BufRead *.svg			setf svg
 
+" Surface
+au BufRead,BufNewFile *.sface			setf surface
+
 " Tads (or Nroff or Perl test file)
 au BufNewFile,BufRead *.t
 	\ if !dist#ft#FTnroff() && !dist#ft#FTperl() | setf tads | endif
@@ -1766,7 +1921,10 @@ au BufRead,BufNewFile {pending,completed,undo}.data  setf taskdata
 au BufRead,BufNewFile *.task			setf taskedit
 
 " Tcl (JACL too)
-au BufNewFile,BufRead *.tcl,*.tk,*.itcl,*.itk,*.jacl	setf tcl
+au BufNewFile,BufRead *.tcl,*.tm,*.tk,*.itcl,*.itk,*.jacl,.tclshrc,.wishrc	setf tcl
+
+" Teal
+au BufRead,BufNewFile *.tl			setf teal
 
 " TealInfo
 au BufNewFile,BufRead *.tli			setf tli
@@ -1785,6 +1943,9 @@ au BufRead,BufNewFile *.ttl
 " Terminfo
 au BufNewFile,BufRead *.ti			setf terminfo
 
+" Terraform
+au BufRead,BufNewFile *.tfvars			setf terraform
+
 " TeX
 au BufNewFile,BufRead *.latex,*.sty,*.dtx,*.ltx,*.bbl	setf tex
 au BufNewFile,BufRead *.tex			call dist#ft#FTtex()
@@ -1802,7 +1963,13 @@ au BufNewFile,BufRead texmf.cnf			setf texmf
 au BufNewFile,BufRead .tidyrc,tidyrc,tidy.conf	setf tidy
 
 " TF mud client
-au BufNewFile,BufRead *.tf,.tfrc,tfrc		setf tf
+au BufNewFile,BufRead .tfrc,tfrc		setf tf
+
+" TF mud client or terraform
+au BufNewFile,BufRead *.tf			call dist#ft#FTtf()
+
+" TLA+
+au BufNewFile,BufRead *.tla			setf tla
 
 " tmux configuration
 au BufNewFile,BufRead {.,}tmux*.conf		setf tmux
@@ -1811,7 +1978,7 @@ au BufNewFile,BufRead {.,}tmux*.conf		setf tmux
 au BufNewFile,BufRead *.toml			setf toml
 
 " TPP - Text Presentation Program
-au BufNewFile,BufReadPost *.tpp			setf tpp
+au BufNewFile,BufRead *.tpp			setf tpp
 
 " Treetop
 au BufRead,BufNewFile *.treetop			setf treetop
@@ -1868,6 +2035,9 @@ au BufNewFile,BufRead */.init/*.conf,*/.init/*.override	       setf upstart
 au BufNewFile,BufRead */.config/upstart/*.conf		       setf upstart
 au BufNewFile,BufRead */.config/upstart/*.override	       setf upstart
 
+" Vala
+au BufNewFile,BufRead *.vala			setf vala
+
 " Vera
 au BufNewFile,BufRead *.vr,*.vri,*.vrh		setf vera
 
@@ -1898,7 +2068,7 @@ au BufRead,BufNewFile *.hw,*.module,*.pkg
 	\ endif
 
 " Visual Basic (also uses *.bas) or FORM
-au BufNewFile,BufRead *.frm			call dist#ft#FTVB("form")
+au BufNewFile,BufRead *.frm			call dist#ft#FTfrm()
 
 " SaxBasic is close to Visual Basic
 au BufNewFile,BufRead *.sba			setf vb
@@ -1960,14 +2130,15 @@ au BufNewFile,BufRead *.ws[fc]			setf wsh
 " XHTML
 au BufNewFile,BufRead *.xhtml,*.xht		setf xhtml
 
-" X Pixmap (dynamically sets colors, use BufEnter to make it work better)
-au BufEnter *.xpm
+" X Pixmap (dynamically sets colors, this used to trigger on BufEnter to make
+" it work better, but that breaks setting 'filetype' manually)
+au BufNewFile,BufRead *.xpm
 	\ if getline(1) =~ "XPM2" |
 	\   setf xpm2 |
 	\ else |
 	\   setf xpm |
 	\ endif
-au BufEnter *.xpm2				setf xpm2
+au BufNewFile,BufRead *.xpm2			setf xpm2
 
 " XFree86 config
 au BufNewFile,BufRead XF86Config
@@ -2002,8 +2173,14 @@ au BufNewFile,BufRead *.xml			call dist#ft#FTxml()
 " XMI (holding UML models) is also XML
 au BufNewFile,BufRead *.xmi			setf xml
 
-" CSPROJ files are Visual Studio.NET's XML-based project config files
+" CSPROJ files are Visual Studio.NET's XML-based C# project config files
 au BufNewFile,BufRead *.csproj,*.csproj.user	setf xml
+
+" FSPROJ files are Visual Studio.NET's XML-based F# project config files
+au BufNewFile,BufRead *.fsproj,*.fsproj.user	setf xml
+
+" VBPROJ files are Visual Studio.NET's XML-based Visual Basic project config files
+au BufNewFile,BufRead *.vbproj,*.vbproj.user	setf xml
 
 " Qt Linguist translation source and Qt User Interface Files are XML
 " However, for .ts Typescript is more common.
@@ -2055,6 +2232,9 @@ au BufNewFile,BufRead *.raml			setf raml
 " yum conf (close enough to dosini)
 au BufNewFile,BufRead */etc/yum.conf		setf dosini
 
+" YANG
+au BufRead,BufNewFile *.yang			setf yang
+
 " Zimbu
 au BufNewFile,BufRead *.zu			setf zimbu
 " Zimbu Templates
@@ -2090,6 +2270,12 @@ au BufNewFile,BufRead *
 au StdinReadPost * if !did_filetype() | runtime! scripts.vim | endif
 
 
+" Plain text files, needs to be far down to not override others.  This avoids
+" the "conf" type being used if there is a line starting with '#'.
+" But before patterns matching everything in a directory.
+au BufNewFile,BufRead *.text,README,LICENSE,COPYING,AUTHORS	setf text
+
+
 " Extra checks for when no filetype has been detected now.  Mostly used for
 " patterns that end in "*".  E.g., "zsh*" matches "zsh.vim", but that's a Vim
 " script file.
@@ -2102,7 +2288,10 @@ au BufNewFile,BufRead proftpd.conf*					call s:StarSetf('apachestyle')
 
 " More Apache config files
 au BufNewFile,BufRead access.conf*,apache.conf*,apache2.conf*,httpd.conf*,srm.conf*	call s:StarSetf('apache')
-au BufNewFile,BufRead */etc/apache2/*.conf*,*/etc/apache2/conf.*/*,*/etc/apache2/mods-*/*,*/etc/apache2/sites-*/*,*/etc/httpd/conf.d/*.conf*		call s:StarSetf('apache')
+au BufNewFile,BufRead */etc/apache2/*.conf*,*/etc/apache2/conf.*/*,*/etc/apache2/mods-*/*,*/etc/apache2/sites-*/*,*/etc/httpd/conf.*/*,*/etc/httpd/mods-*/*,*/etc/httpd/sites-*/*,*/etc/httpd/conf.d/*.conf*		call s:StarSetf('apache')
+
+" APT config file
+au BufNewFile,BufRead */etc/apt/apt.conf.d/{[-_[:alnum:]]\+,[-_.[:alnum:]]\+.conf} call s:StarSetf('aptconf')
 
 " Asterisk config file
 au BufNewFile,BufRead *asterisk/*.conf*		call s:StarSetf('asterisk')
@@ -2139,6 +2328,9 @@ au BufNewFile,BufRead crontab,crontab.*,*/etc/cron.d/*		call s:StarSetf('crontab
 
 " dnsmasq(8) configuration
 au BufNewFile,BufRead */etc/dnsmasq.d/*		call s:StarSetf('dnsmasq')
+
+" Dockerfile
+au BufNewFile,BufRead Dockerfile.*,Containerfile.*	call s:StarSetf('dockerfile')
 
 " Dracula
 au BufNewFile,BufRead drac.*			call s:StarSetf('dracula')
@@ -2184,6 +2376,9 @@ au BufNewFile,BufRead Kconfig.*			call s:StarSetf('kconfig')
 " Lilo: Linux loader
 au BufNewFile,BufRead lilo.conf*		call s:StarSetf('lilo')
 
+" Libsensors
+au BufNewFile,BufRead */etc/sensors.d/[^.]*	call s:StarSetf('sensors')
+
 " Logcheck
 au BufNewFile,BufRead */etc/logcheck/*.d*/*	call s:StarSetf('logcheck')
 
@@ -2204,6 +2399,9 @@ au BufNewFile,BufRead */etc/modutils/*
 	\|  call s:StarSetf('modconf')
 	\|endif
 au BufNewFile,BufRead */etc/modprobe.*		call s:StarSetf('modconf')
+
+" Mutt setup files (must be before catch *.rc)
+au BufNewFile,BufRead */etc/Muttrc.d/*		call s:StarSetf('muttrc')
 
 " Mutt setup file
 au BufNewFile,BufRead .mutt{ng,}rc*,*/.mutt{ng,}/mutt{ng,}rc*	call s:StarSetf('muttrc')
@@ -2250,11 +2448,17 @@ au BufNewFile,BufRead .bashrc*,.bash[_-]profile*,.bash[_-]logout*,.bash[_-]alias
 au BufNewFile,BufRead .kshrc* call dist#ft#SetFileTypeSH("ksh")
 au BufNewFile,BufRead .profile* call dist#ft#SetFileTypeSH(getline(1))
 
+" Sudoers
+au BufNewFile,BufRead */etc/sudoers.d/*		call s:StarSetf('sudoers')
+
 " tcsh scripts ending in a star
 au BufNewFile,BufRead .tcshrc*	call dist#ft#SetFileTypeShell("tcsh")
 
 " csh scripts ending in a star
 au BufNewFile,BufRead .login*,.cshrc*  call dist#ft#CSH()
+
+" tmux configuration with arbitrary extension
+au BufNewFile,BufRead {.,}tmux*.conf*		setf tmux
 
 " VHDL
 au BufNewFile,BufRead *.vhdl_[0-9]*		call s:StarSetf('vhdl')
@@ -2291,10 +2495,6 @@ au BufNewFile,BufRead .zsh*,.zlog*,.zcompdump*  call s:StarSetf('zsh')
 au BufNewFile,BufRead zsh*,zlog*		call s:StarSetf('zsh')
 
 
-" Plain text files, needs to be far down to not override others.  This avoids
-" the "conf" type being used if there is a line starting with '#'.
-au BufNewFile,BufRead *.text,README		setf text
-
 " Help files match *.txt but should have a last line that is a modeline.
 au BufNewFile,BufRead *.txt
 	\  if getline('$') !~ 'vim:.*ft=help'
@@ -2330,7 +2530,7 @@ endif
 " Function called for testing all functions defined here.  These are
 " script-local, thus need to be executed here.
 " Returns a string with error messages (hopefully empty).
-func! TestFiletypeFuncs(testlist)
+func TestFiletypeFuncs(testlist)
   let output = ''
   for f in a:testlist
     try

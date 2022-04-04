@@ -175,7 +175,6 @@ func Test_scroll_CursorLineNr_update()
   call writefile(lines, filename)
   let buf = RunVimInTerminal('-S '.filename, #{rows: 5, cols: 50})
   call term_sendkeys(buf, "k")
-  call TermWait(buf)
   call VerifyScreenDump(buf, 'Test_winline_rnu', {})
 
   " clean up
@@ -257,6 +256,27 @@ func Test_display_scroll_at_topline()
   call StopVimInTerminal(buf)
 endfunc
 
+func Test_display_scroll_update_visual()
+  CheckScreendump
+
+  let lines =<< trim END
+      set scrolloff=0
+      call setline(1, repeat(['foo'], 10))
+      call sign_define('foo', { 'text': '>' })
+      call sign_place(1, 'bar', 'foo', bufnr(), { 'lnum': 2 })
+      call sign_place(2, 'bar', 'foo', bufnr(), { 'lnum': 1 })
+      autocmd CursorMoved * if getcurpos()[1] == 2 | call sign_unplace('bar', { 'id': 1 }) | endif
+  END
+  call writefile(lines, 'XupdateVisual.vim')
+
+  let buf = RunVimInTerminal('-S XupdateVisual.vim', #{rows: 8, cols: 60})
+  call term_sendkeys(buf, "VG7kk")
+  call VerifyScreenDump(buf, 'Test_display_scroll_update_visual', {})
+
+  call StopVimInTerminal(buf)
+  call delete('XupdateVisual.vim')
+endfunc
+
 " Test for 'eob' (EndOfBuffer) item in 'fillchars'
 func Test_eob_fillchars()
   " default value
@@ -266,6 +286,8 @@ func Test_eob_fillchars()
   call assert_fails(':set fillchars=eob:xy', 'E474:')
   call assert_fails(':set fillchars=eob:\255', 'E474:')
   call assert_fails(':set fillchars=eob:<ff>', 'E474:')
+  call assert_fails(":set fillchars=eob:\x01", 'E474:')
+  call assert_fails(':set fillchars=eob:\\x01', 'E474:')
   " default is ~
   new
   redraw

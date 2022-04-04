@@ -126,10 +126,11 @@ RequestExecutionLevel highest
 # This adds '\Vim' to the user choice automagically.  The actual value is
 # obtained below with CheckOldVim.
 !ifdef WIN64
-InstallDir "$PROGRAMFILES64\Vim"
+  !define DEFAULT_INSTDIR "$PROGRAMFILES64\Vim"
 !else
-InstallDir "$PROGRAMFILES\Vim"
+  !define DEFAULT_INSTDIR "$PROGRAMFILES\Vim"
 !endif
+InstallDir ${DEFAULT_INSTDIR}
 
 # Types of installs we can perform:
 InstType $(str_type_typical)
@@ -347,6 +348,9 @@ Section "$(str_section_exe)" id_section_exe
 !if /FileExists "${VIMSRC}\vim${BIT}.dll"
 	File ${VIMSRC}\vim${BIT}.dll
 !endif
+!if /FileExists "${VIMRT}\libsodium.dll"
+	File ${VIMRT}\libsodium.dll
+!endif
 	File /oname=install.exe ${VIMSRC}\installw32.exe
 	File /oname=uninstall.exe ${VIMSRC}\uninstallw32.exe
 	File ${VIMSRC}\vimrun.exe
@@ -356,7 +360,6 @@ Section "$(str_section_exe)" id_section_exe
 	File ..\README.txt
 	File ..\uninstall.txt
 	File ${VIMRT}\*.vim
-	File ${VIMRT}\rgb.txt
 
 	File ${VIMTOOLS}\diff.exe
 	File ${VIMTOOLS}\winpty${BIT}.dll
@@ -366,6 +369,8 @@ Section "$(str_section_exe)" id_section_exe
 	File ${VIMRT}\colors\*.*
 	SetOutPath $0\colors\tools
 	File ${VIMRT}\colors\tools\*.*
+	SetOutPath $0\colors\lists
+	File ${VIMRT}\colors\lists\*.*
 
 	SetOutPath $0\compiler
 	File ${VIMRT}\compiler\*.*
@@ -397,6 +402,9 @@ Section "$(str_section_exe)" id_section_exe
 
 	SetOutPath $0\autoload\xml
 	File ${VIMRT}\autoload\xml\*.*
+
+	SetOutPath $0\bitmaps
+	File ${VIMSRC}\vim.ico
 
 	SetOutPath $0\syntax
 	File ${VIMRT}\syntax\*.*
@@ -710,8 +718,13 @@ Function .onInit
   !insertmacro MUI_LANGDLL_DISPLAY
 !endif
 
-  # Check $VIM
-  ReadEnvStr $INSTDIR "VIM"
+  ${If} $INSTDIR == ${DEFAULT_INSTDIR}
+    # Check $VIM
+    ReadEnvStr $3 "VIM"
+    ${If} $3 != ""
+      StrCpy $INSTDIR $3
+    ${EndIf}
+  ${EndIf}
 
   call CheckOldVim
   Pop $3
@@ -721,18 +734,9 @@ Function .onInit
     SectionSetInstTypes ${id_section_old_ver} 0
     SectionSetText ${id_section_old_ver} ""
   ${Else}
-    ${If} $INSTDIR == ""
+    ${If} $INSTDIR == ${DEFAULT_INSTDIR}
       StrCpy $INSTDIR $3
     ${EndIf}
-  ${EndIf}
-
-  # If did not find a path: use the default dir.
-  ${If} $INSTDIR == ""
-!ifdef WIN64
-    StrCpy $INSTDIR "$PROGRAMFILES64\Vim"
-!else
-    StrCpy $INSTDIR "$PROGRAMFILES\Vim"
-!endif
   ${EndIf}
 
   ${If} ${RunningX64}

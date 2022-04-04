@@ -59,6 +59,7 @@
 #define P_NDNAME      0x8000000L // only normal dir name chars allowed
 #define P_RWINONLY   0x10000000L // only redraw current window
 #define P_MLE	     0x20000000L // under control of 'modelineexpr'
+#define P_FUNC	     0x40000000L // accept a function reference or a lambda
 
 // Returned by get_option_value().
 typedef enum {
@@ -88,11 +89,7 @@ typedef enum {
 #   ifdef VMS
 #    define DFLT_EFM	"%A%p^,%C%%CC-%t-%m,%Cat line number %l in file %f,%f|%l| %m"
 #   else // Unix, probably
-#    ifdef EBCDIC
-#define DFLT_EFM	"%*[^ ] %*[^ ] %f:%l%*[ ]%m,%*[^\"]\"%f\"%*\\D%l: %m,\"%f\"%*\\D%l: %m,%f:%l:%c:%m,%f(%l):%m,%f:%l:%m,\"%f\"\\, line %l%*\\D%c%*[^ ] %m,%D%*\\a[%*\\d]: Entering directory %*[`']%f',%X%*\\a[%*\\d]: Leaving directory %*[`']%f',%DMaking %*\\a in %f,%f|%l| %m"
-#     else
 #define DFLT_EFM	"%*[^\"]\"%f\"%*\\D%l: %m,\"%f\"%*\\D%l: %m,%-G%f:%l: (Each undeclared identifier is reported only once,%-G%f:%l: for each function it appears in.),%-GIn file included from %f:%l:%c:,%-GIn file included from %f:%l:%c\\,,%-GIn file included from %f:%l:%c,%-GIn file included from %f:%l,%-G%*[ ]from %f:%l:%c,%-G%*[ ]from %f:%l:,%-G%*[ ]from %f:%l\\,,%-G%*[ ]from %f:%l,%f:%l:%c:%m,%f(%l):%m,%f:%l:%m,\"%f\"\\, line %l%*\\D%c%*[^ ] %m,%D%*\\a[%*\\d]: Entering directory %*[`']%f',%X%*\\a[%*\\d]: Leaving directory %*[`']%f',%D%*\\a: Entering directory %*[`']%f',%X%*\\a: Leaving directory %*[`']%f',%DMaking %*\\a in %f,%f|%l| %m"
-#    endif
 #   endif
 #  endif
 # endif
@@ -134,7 +131,7 @@ typedef enum {
 #endif
 
 // end-of-line style
-#define EOL_UNKNOWN	-1	// not defined yet
+#define EOL_UNKNOWN	(-1)	// not defined yet
 #define EOL_UNIX	0	// NL
 #define EOL_DOS		1	// CR NL
 #define EOL_MAC		2	// CR
@@ -360,6 +357,12 @@ typedef enum {
 #define WIM_LIST	0x04
 #define WIM_BUFLASTUSED	0x08
 
+// flags for the 'wildoptions' option
+// each defined char should be unique over all values.
+#define WOP_FUZZY	'z'
+#define WOP_TAGFILE	't'
+#define WOP_PUM		'p'
+
 // arguments for can_bs()
 // each defined char should be unique over all values
 // except for BS_START, that intentionally also matches BS_NOSTOP
@@ -405,6 +408,7 @@ EXTERN char_u	*p_cinw;	// 'cinwords'
 #ifdef FEAT_COMPL_FUNC
 EXTERN char_u	*p_cfu;		// 'completefunc'
 EXTERN char_u	*p_ofu;		// 'omnifunc'
+EXTERN char_u	*p_tsrfu;	// 'thesaurusfunc'
 #endif
 EXTERN int	p_ci;		// 'copyindent'
 #ifdef FEAT_ANTIALIAS
@@ -484,7 +488,10 @@ EXTERN int	p_deco;		// 'delcombine'
 #ifdef FEAT_EVAL
 EXTERN char_u	*p_ccv;		// 'charconvert'
 #endif
+EXTERN int	p_cdh;		// 'cdhome'
+#ifdef FEAT_CINDENT
 EXTERN char_u	*p_cino;	// 'cinoptions'
+#endif
 #ifdef FEAT_CMDWIN
 EXTERN char_u	*p_cedit;	// 'cedit'
 EXTERN long	p_cwh;		// 'cmdwinheight'
@@ -564,7 +571,7 @@ EXTERN char_u	*p_fenc;	// 'fileencoding'
 EXTERN char_u	*p_fencs;	// 'fileencodings'
 EXTERN char_u	*p_ff;		// 'fileformat'
 EXTERN char_u	*p_ffs;		// 'fileformats'
-EXTERN long	p_fic;		// 'fileignorecase'
+EXTERN int	p_fic;		// 'fileignorecase'
 EXTERN char_u	*p_ft;		// 'filetype'
 EXTERN char_u	*p_fcs;		// 'fillchar'
 EXTERN int	p_fixeol;	// 'fixendofline'
@@ -634,6 +641,9 @@ EXTERN char_u	*p_guifontset;	// 'guifontset'
 EXTERN char_u	*p_guifontwide;	// 'guifontwide'
 EXTERN int	p_guipty;	// 'guipty'
 #endif
+#ifdef FEAT_GUI_GTK
+EXTERN char_u	*p_guiligatures;  // 'guiligatures'
+# endif
 #if defined(FEAT_GUI_GTK) || defined(FEAT_GUI_X11)
 EXTERN long	p_ghr;		// 'guiheadroom'
 #endif
@@ -666,10 +676,8 @@ EXTERN int	p_hkmapp;	// 'hkmapp'
 EXTERN int	p_arshape;	// 'arabicshape'
 # endif
 #endif
-#ifdef FEAT_TITLE
 EXTERN int	p_icon;		// 'icon'
 EXTERN char_u	*p_iconstring;	// 'iconstring'
-#endif
 EXTERN int	p_ic;		// 'ignorecase'
 #if defined(FEAT_XIM) && (defined(FEAT_GUI_GTK) || defined(FEAT_GUI_MACVIM))
 EXTERN char_u	*p_imak;	// 'imactivatekey'
@@ -745,13 +753,6 @@ EXTERN char_u	*p_mef;		// 'makeef'
 EXTERN char_u	*p_mp;		// 'makeprg'
 #endif
 EXTERN char_u	*p_mps;		// 'matchpairs'
-#ifdef FEAT_SIGNS
-EXTERN char_u  *p_scl;		// signcolumn
-#endif
-#ifdef FEAT_SYN_HL
-EXTERN char_u   *p_cc;		// 'colorcolumn'
-EXTERN int      p_cc_cols[256]; // array for 'colorcolumn' columns
-#endif
 EXTERN long	p_mat;		// 'matchtime'
 EXTERN long	p_mco;		// 'maxcombine'
 #ifdef FEAT_EVAL
@@ -768,7 +769,7 @@ EXTERN long	p_mis;		// 'menuitems'
 EXTERN char_u	*p_msm;		// 'mkspellmem'
 #endif
 EXTERN int	p_ml;		// 'modeline'
-EXTERN long	p_mle;		// 'modelineexpr'
+EXTERN int	p_mle;		// 'modelineexpr'
 EXTERN long	p_mls;		// 'modelines'
 EXTERN int	p_ma;		// 'modifiable'
 #ifdef FEAT_GUI_MACVIM
@@ -860,7 +861,9 @@ EXTERN int	p_ru;		// 'ruler'
 EXTERN char_u	*p_ruf;		// 'rulerformat'
 #endif
 EXTERN char_u	*p_pp;		// 'packpath'
+#ifdef FEAT_QUICKFIX
 EXTERN char_u	*p_qftf;	// 'quickfixtextfunc'
+#endif
 EXTERN char_u	*p_rtp;		// 'runtimepath'
 EXTERN long	p_sj;		// 'scrolljump'
 #if defined(MSWIN) && defined(FEAT_GUI)
@@ -969,7 +972,9 @@ EXTERN unsigned	swb_flags;
 #define SWB_NEWTAB		0x008
 #define SWB_VSPLIT		0x010
 #define SWB_USELAST		0x020
+#ifdef FEAT_SYN_HL
 EXTERN char_u	*p_syn;		// 'syntax'
+#endif
 EXTERN long	p_ts;		// 'tabstop'
 EXTERN int	p_tbs;		// 'tagbsearch'
 EXTERN char_u	*p_tc;		// 'tagcase'
@@ -1006,12 +1011,10 @@ EXTERN long	p_tw;		// 'textwidth'
 EXTERN int	p_to;		// 'tildeop'
 EXTERN int	p_timeout;	// 'timeout'
 EXTERN long	p_tm;		// 'timeoutlen'
-#ifdef FEAT_TITLE
 EXTERN int	p_title;	// 'title'
 EXTERN long	p_titlelen;	// 'titlelen'
 EXTERN char_u	*p_titleold;	// 'titleold'
 EXTERN char_u	*p_titlestring;	// 'titlestring'
-#endif
 EXTERN char_u	*p_tsr;		// 'thesaurus'
 #ifdef FEAT_TRANSPARENCY
 EXTERN long     p_transp;       // 'transparency'
@@ -1052,8 +1055,8 @@ EXTERN unsigned ttym_flags;
 # define TTYM_URXVT		0x40
 # define TTYM_SGR		0x80
 #endif
-EXTERN char_u	*p_udir;	// 'undodir'
 #ifdef FEAT_PERSISTENT_UNDO
+EXTERN char_u	*p_udir;	// 'undodir'
 EXTERN int	p_udf;		// 'undofile'
 #endif
 EXTERN long	p_ul;		// 'undolevels'
@@ -1080,6 +1083,8 @@ EXTERN unsigned ve_flags;
 #define VE_INSERT	6	// includes "all"
 #define VE_ALL		4
 #define VE_ONEMORE	8
+#define VE_NONE		16	// "none"
+#define VE_NONEU	32      // "NONE"
 EXTERN long	p_verbose;	// 'verbose'
 #ifdef IN_OPTION_C
 char_u	*p_vfile = (char_u *)""; // used before options are initialized
@@ -1101,7 +1106,7 @@ EXTERN int	p_wiv;		// 'weirdinvert'
 EXTERN char_u	*p_ww;		// 'whichwrap'
 EXTERN long	p_wc;		// 'wildchar'
 EXTERN long	p_wcm;		// 'wildcharm'
-EXTERN long	p_wic;		// 'wildignorecase'
+EXTERN int	p_wic;		// 'wildignorecase'
 EXTERN char_u	*p_wim;		// 'wildmode'
 #ifdef FEAT_WILDMENU
 EXTERN int	p_wmnu;		// 'wildmenu'
@@ -1119,6 +1124,7 @@ EXTERN int	p_write;	// 'write'
 EXTERN int	p_wa;		// 'writeany'
 EXTERN int	p_wb;		// 'writebackup'
 EXTERN long	p_wd;		// 'writedelay'
+EXTERN int	p_xtermcodes;	// 'xtermcodes'
 
 /*
  * "indir" values for buffer-local options.
@@ -1246,6 +1252,9 @@ enum
 #endif
     , BV_TAGS
     , BV_TC
+#ifdef FEAT_COMPL_FUNC
+    , BV_TSRFU
+#endif
     , BV_TS
     , BV_TW
     , BV_TX
@@ -1310,6 +1319,7 @@ enum
 #endif
     , WV_NU
     , WV_RNU
+    , WV_VE
 #ifdef FEAT_LINEBREAK
     , WV_NUW
 #endif
@@ -1349,6 +1359,6 @@ enum
 };
 
 // Value for b_p_ul indicating the global value must be used.
-#define NO_LOCAL_UNDOLEVEL -123456
+#define NO_LOCAL_UNDOLEVEL (-123456)
 
 #endif // _OPTION_H_

@@ -665,6 +665,7 @@ func Test_popup_and_window_resize()
   CheckFeature terminal
   CheckFeature quickfix
   CheckNotGui
+  let g:test_is_flaky = 1
 
   let h = winheight(0)
   if h < 15
@@ -990,6 +991,10 @@ func Test_popup_complete_info_01()
         \ ["\<C-X>", 'ctrl_x'],
         \ ["\<C-X>\<C-N>", 'keyword'],
         \ ["\<C-X>\<C-P>", 'keyword'],
+        \ ["\<C-X>\<C-E>", 'scroll'],
+        \ ["\<C-X>\<C-Y>", 'scroll'],
+        \ ["\<C-X>\<C-E>\<C-E>\<C-Y>", 'scroll'],
+        \ ["\<C-X>\<C-Y>\<C-E>\<C-Y>", 'scroll'],
         \ ["\<C-X>\<C-L>", 'whole_line'],
         \ ["\<C-X>\<C-F>", 'files'],
         \ ["\<C-X>\<C-]>", 'tags'],
@@ -1147,7 +1152,9 @@ endfunc
 
 " Test for the popup menu with the 'rightleft' option set
 func Test_pum_rightleft()
+  CheckFeature rightleft
   CheckScreendump
+
   let lines =<< trim END
     abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz
     vim
@@ -1157,7 +1164,6 @@ func Test_pum_rightleft()
   let buf = RunVimInTerminal('--cmd "set rightleft" Xtest1', {})
   call term_wait(buf)
   call term_sendkeys(buf, "Go\<C-P>")
-  call term_wait(buf)
   call VerifyScreenDump(buf, 'Test_pum_rightleft_01', {'rows': 8})
   call term_sendkeys(buf, "\<C-P>\<C-Y>")
   call term_wait(buf)
@@ -1199,16 +1205,16 @@ func Test_pum_scrollbar()
   let buf = RunVimInTerminal('--cmd "set pumheight=2" Xtest1', {})
   call term_wait(buf)
   call term_sendkeys(buf, "Go\<C-P>\<C-P>\<C-P>")
-  call term_wait(buf)
   call VerifyScreenDump(buf, 'Test_pum_scrollbar_01', {'rows': 7})
   call term_sendkeys(buf, "\<C-E>\<Esc>dd")
   call term_wait(buf)
 
-  call term_sendkeys(buf, ":set rightleft\<CR>")
-  call term_wait(buf)
-  call term_sendkeys(buf, "Go\<C-P>\<C-P>\<C-P>")
-  call term_wait(buf)
-  call VerifyScreenDump(buf, 'Test_pum_scrollbar_02', {'rows': 7})
+  if has('rightleft')
+    call term_sendkeys(buf, ":set rightleft\<CR>")
+    call term_wait(buf)
+    call term_sendkeys(buf, "Go\<C-P>\<C-P>\<C-P>")
+    call VerifyScreenDump(buf, 'Test_pum_scrollbar_02', {'rows': 7})
+  endif
 
   call StopVimInTerminal(buf)
   call delete('Xtest1')

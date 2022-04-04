@@ -1,7 +1,7 @@
 " Vim syntax file
 " Language:	C
 " Maintainer:	Bram Moolenaar <Bram@vim.org>
-" Last Change:	2021 May 24
+" Last Change:	2022 Mar 17
 
 " Quit when a (custom) syntax file was already loaded
 if exists("b:current_syntax")
@@ -196,7 +196,6 @@ syn match	cNumber		display contained "0x\x\+\(u\=l\{0,2}\|ll\=u\)\>"
 " Flag the first zero of an octal number as something special
 syn match	cOctal		display contained "0\o\+\(u\=l\{0,2}\|ll\=u\)\>" contains=cOctalZero
 syn match	cOctalZero	display contained "\<0"
-syn match	cFloat		display contained "\d\+f"
 "floating point number, with dot, optional exponent
 syn match	cFloat		display contained "\d\+\.\d*\(e[-+]\=\d\+\)\=[fl]\="
 "floating point number, starting with a dot, optional exponent
@@ -246,8 +245,14 @@ syn match	cWrongComTail	display "\*/"
 
 syn keyword	cOperator	sizeof
 if exists("c_gnu")
+  syn keyword	cType		__label__ __complex__
   syn keyword	cStatement	__asm__
-  syn keyword	cOperator	typeof __real__ __imag__
+  syn keyword	cOperator	__alignof__
+  syn keyword	cOperator	typeof __typeof__
+  syn keyword	cOperator	__real__ __imag__
+  syn keyword	cStorageClass	__attribute__ __const__ __extension__
+  syn keyword	cStorageClass	inline __inline__
+  syn keyword	cStorageClass	__restrict__ __volatile__ __noreturn__
 endif
 syn keyword	cType		int long short char void
 syn keyword	cType		signed unsigned float double
@@ -271,16 +276,10 @@ if !exists("c_no_c99") " ISO C99
   syn keyword	cType		intptr_t uintptr_t
   syn keyword	cType		intmax_t uintmax_t
 endif
-if exists("c_gnu")
-  syn keyword	cType		__label__ __complex__ __volatile__
-endif
 
 syn keyword	cTypedef	typedef
 syn keyword	cStructure	struct union enum
 syn keyword	cStorageClass	static register auto volatile extern const
-if exists("c_gnu")
-  syn keyword	cStorageClass	inline __attribute__
-endif
 if !exists("c_no_c99") && !s:in_cpp_family
   syn keyword	cStorageClass	inline restrict
 endif
@@ -293,6 +292,7 @@ if !exists("c_no_c11")
   syn keyword	cOperator	_Static_assert static_assert
   syn keyword	cStorageClass	_Thread_local thread_local
   syn keyword   cType		char16_t char32_t
+  syn keyword   cType		max_align_t
   " C11 atomics (take down the shield wall!)
   syn keyword	cType		atomic_bool atomic_char atomic_schar atomic_uchar
   syn keyword	Ctype		atomic_short atomic_ushort atomic_int atomic_uint

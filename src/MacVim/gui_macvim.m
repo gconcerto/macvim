@@ -1017,7 +1017,7 @@ gui_mch_get_font(char_u *name, int giveErrorIfMissing)
         return font;
 
     if (giveErrorIfMissing)
-        semsg(_(e_font), name);
+        semsg(_(e_unknown_font_str), name);
 
     return NOFONT;
 }
@@ -1690,14 +1690,17 @@ gui_mch_get_color(char_u *name)
     if (![MMBackend sharedInstance])
 	return INVALCOLOR;
 
-    name = CONVERT_TO_UTF8(name);
+    char_u *u8name = CONVERT_TO_UTF8(name);
 
-    NSString *key = [NSString stringWithUTF8String:(char*)name];
-    guicolor_T col = [[MMBackend sharedInstance] lookupColorWithKey:key];
+    NSString *key = [NSString stringWithUTF8String:(char*)u8name];
+    guicolor_T color = [[MMBackend sharedInstance] lookupColorWithKey:key];
 
-    CONVERT_TO_UTF8_FREE(name);
+    CONVERT_TO_UTF8_FREE(u8name);
 
-    return col;
+    if (color != INVALCOLOR)
+        return color;
+
+    return gui_get_color_cmn(name);
 }
 
 
@@ -1829,7 +1832,6 @@ gui_mch_set_text_area_pos(int x UNUSED, int y UNUSED, int w UNUSED, int h UNUSED
 }
 
 
-#ifdef FEAT_TITLE
 /*
  * Set the window title and icon.
  * (The icon is not taken care of).
@@ -1850,7 +1852,6 @@ gui_mch_settitle(char_u *title, char_u *icon)
 
     CONVERT_TO_UTF8_FREE(title);
 }
-#endif
 
 
     void
@@ -2453,7 +2454,7 @@ gui_mch_register_sign(char_u *signfile)
     NSString *imgName = [NSString stringWithVimString:signfile];
     NSImage *img = [[NSImage alloc] initWithContentsOfFile:imgName];
     if (!img) {
-        emsg(_(e_signdata));
+        emsg(_(e_couldnt_read_in_sign_data));
         return NULL;
     }
 

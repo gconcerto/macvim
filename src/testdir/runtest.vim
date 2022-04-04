@@ -13,6 +13,9 @@
 " For csh:
 "     setenv TEST_FILTER Test_channel
 "
+" If the environment variable $TEST_SKIP_PAT is set then test functions
+" matching this pattern will be skipped.  It's the opposite of $TEST_FILTER.
+"
 " While working on a test you can make $TEST_NO_RETRY non-empty to not retry:
 "     export TEST_NO_RETRY=yes
 "
@@ -74,6 +77,9 @@ if has('reltime')
   let s:start_time = reltime()
 endif
 
+" Always use forward slashes.
+set shellslash
+
 " Common with all tests on all systems.
 source setup.vim
 
@@ -90,7 +96,12 @@ set encoding=utf-8
 " REDIR_TEST_TO_NULL has a very permissive SwapExists autocommand which is for
 " the test_name.vim file itself. Replace it here with a more restrictive one,
 " so we still catch mistakes.
-let s:test_script_fname = expand('%')
+if has("win32")
+  " replace any '/' directory separators by '\\'
+  let s:test_script_fname = substitute(expand('%'), '/', '\\', 'g')
+else
+  let s:test_script_fname = expand('%')
+endif
 au! SwapExists * call HandleSwapExists()
 func HandleSwapExists()
   if exists('g:ignoreSwapExists')
@@ -120,9 +131,6 @@ if has('gui_running') && exists('did_install_default_menus')
   source $VIMRUNTIME/menu.vim
 endif
 
-" Always use forward slashes.
-set shellslash
-
 let s:srcdir = expand('%:p:h:h')
 
 if has('win32')
@@ -137,7 +145,7 @@ else
 endif
 
 if has('mac')
-  " In MacOS, when starting a shell in a terminal, a bash deprecation warning
+  " In macOS, when starting a shell in a terminal, a bash deprecation warning
   " message is displayed. This breaks the terminal test. Disable the warning
   " message.
   let $BASH_SILENCE_DEPRECATION_WARNING = 1
@@ -280,6 +288,15 @@ endfunc
 
 func AfterTheTest(func_name)
   if len(v:errors) > 0
+    if has('gui_macvim') && g:test_is_flaky
+      " MacVim's currently doesn't always pass these tests. Make these
+      " tests pending for now before a more proper fix is implemented.
+      call add(s:messages, 'MacVim marked ' .. a:func_name .. 'as pending')
+      let s:pending += 1
+      call add(s:errors_pending, 'Found errors in ' . g:testfunc . ':')
+      call extend(s:errors_pending, v:errors)
+      call add(s:errors_pending, 'PENDING ' .. a:func_name)
+    else
     if match(s:may_fail_list, '^' .. a:func_name) >= 0
       let s:fail_expected += 1
       call add(s:errors_expected, 'Found errors in ' . g:testfunc . ':')
@@ -289,6 +306,7 @@ func AfterTheTest(func_name)
       call add(s:errors, 'Found errors in ' . g:testfunc . ':')
       call extend(s:errors, v:errors)
     endif
+    endif
     let v:errors = []
   endif
 endfunc
@@ -296,6 +314,7 @@ endfunc
 func EarlyExit(test)
   " It's OK for the test we use to test the quit detection.
   if a:test != 'Test_zz_quit_detected()'
+    call add(v:errors, v:errmsg)
     call add(v:errors, 'Test caused Vim to exit: ' . a:test)
   endif
 
@@ -312,7 +331,7 @@ func FinishTesting()
   " Clean up files created by setup.vim
   call delete('XfakeHOME', 'rf')
 
-  if s:fail == 0 && s:fail_expected == 0
+  if s:fail == 0 && s:fail_expected == 0 && s:pending == 0
     " Success, create the .res file so that make knows it's done.
     exe 'split ' . fnamemodify(g:testname, ':r') . '.res'
     write
@@ -329,13 +348,17 @@ func FinishTesting()
 
   if s:done == 0
     if s:filtered > 0
-      let message = "NO tests match $TEST_FILTER: '" .. $TEST_FILTER .. "'"
+      if $TEST_FILTER != ''
+        let message = "NO tests match $TEST_FILTER: '" .. $TEST_FILTER .. "'"
+      else
+        let message = "ALL tests match $TEST_SKIP_PAT: '" .. $TEST_SKIP_PAT .. "'"
+      endif
     else
       let message = 'NO tests executed'
     endif
   else
     if s:filtered > 0
-      call add(s:messages, "Filtered " .. s:filtered .. " tests with $TEST_FILTER")
+      call add(s:messages, "Filtered " .. s:filtered .. " tests with $TEST_FILTER and $TEST_SKIP_PAT")
     endif
     let message = 'Executed ' . s:done . (s:done > 1 ? ' tests' : ' test')
   endif
@@ -357,6 +380,12 @@ func FinishTesting()
     echo message
     call add(s:messages, message)
     call extend(s:messages, s:errors_expected)
+  endif
+  if s:pending > 0
+    let message = s:pending . ' FAILED (pending):'
+    echo message
+    call add(s:messages, message)
+    call extend(s:messages, s:errors_pending)
   endif
 
   " Add SKIPPED messages
@@ -382,6 +411,8 @@ let s:errors = []
 let s:errors_expected = []
 let s:messages = []
 let s:skipped = []
+let s:pending = 0
+let s:errors_pending = []
 if expand('%') =~ 'test_vimscript.vim'
   " this test has intentional errors, don't use try/catch.
   source %
@@ -397,41 +428,8 @@ else
   endtry
 endif
 
-" Names of flaky tests.
-let s:flaky_tests = [
-      \ 'Test_BufWrite_lockmarks()',
-      \ 'Test_autocmd_SafeState()',
-      \ 'Test_bufunload_all()',
-      \ 'Test_client_server()',
-      \ 'Test_close_and_exit_cb()',
-      \ 'Test_close_output_buffer()',
-      \ 'Test_collapse_buffers()',
-      \ 'Test_cwd()',
-      \ 'Test_diff_screen()',
-      \ 'Test_exit_callback_interval()',
-      \ 'Test_map_timeout_with_timer_interrupt()',
-      \ 'Test_out_cb()',
-      \ 'Test_pipe_through_sort_all()',
-      \ 'Test_pipe_through_sort_some()',
-      \ 'Test_popup_and_window_resize()',
-      \ 'Test_quoteplus()',
-      \ 'Test_quotestar()',
-      \ 'Test_reltime()',
-      \ 'Test_state()',
-      \ 'Test_terminal_composing_unicode()',
-      \ 'Test_terminal_does_not_truncate_last_newlines()',
-      \ 'Test_terminal_no_cmd()',
-      \ 'Test_terminal_noblock()',
-      \ 'Test_terminal_redir_file()',
-      \ 'Test_termwinscroll()',
-      \ 'Test_timer_oneshot()',
-      \ 'Test_timer_paused()',
-      \ 'Test_timer_repeat_many()',
-      \ 'Test_timer_repeat_three()',
-      \ 'Test_timer_stop_all_in_callback()',
-      \ 'Test_timer_stop_in_callback()',
-      \ 'Test_timer_with_partial_callback()',
-      \ ]
+" Delete the .res file, it may change behavior for completion
+call delete(fnamemodify(g:testname, ':r') .. '.res')
 
 " Locate Test_ functions and execute them.
 redir @q
@@ -461,6 +459,12 @@ endif
 
 " Execute the tests in alphabetical order.
 for g:testfunc in sort(s:tests)
+  if $TEST_SKIP_PAT != '' && g:testfunc =~ $TEST_SKIP_PAT
+    call add(s:messages, g:testfunc .. ' matches $TEST_SKIP_PAT')
+    let s:filtered += 1
+    continue
+  endif
+
   " Silence, please!
   set belloff=all
   let prev_error = ''
@@ -478,8 +482,7 @@ for g:testfunc in sort(s:tests)
   " - it fails five times (with a different message)
   if len(v:errors) > 0
         \ && $TEST_NO_RETRY == ''
-        \ && (index(s:flaky_tests, g:testfunc) >= 0
-        \      || g:test_is_flaky)
+        \ && g:test_is_flaky
     while 1
       call add(s:messages, 'Found errors in ' . g:testfunc . ':')
       call extend(s:messages, v:errors)
@@ -490,15 +493,6 @@ for g:testfunc in sort(s:tests)
       if g:run_nr == 5 || prev_error == v:errors[0]
         call add(total_errors, 'Flaky test failed too often, giving up')
         let v:errors = total_errors
-        if has('gui_macvim')
-          " MacVim's currently doesn't always pass these tests. Make these
-          " tests pending for now before a more proper fix is implemented.
-          call extend(s:messages, [
-                \ 'Flaky test failed too often, giving up',
-                \ 'MacVim marked ' . g:testfunc . ' as pending',
-                \ ])
-          let v:errors = []
-        endif
         break
       endif
 

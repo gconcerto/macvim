@@ -20,8 +20,6 @@
 
 static int json_encode_item(garray_T *gap, typval_T *val, int copyID, int options);
 
-static char e_json_error[] = N_("E491: json decode error at '%s'");
-
 /*
  * Encode "val" into a JSON format string.
  * The result is added to "gap"
@@ -87,6 +85,32 @@ json_encode_nr_expr(int nr, typval_T *val, int options)
     list_unref(listtv.vval.v_list);
     ga_append(&ga, NUL);
     return ga.ga_data;
+}
+
+/*
+ * Encode "val" into a JSON format string prefixed by the LSP HTTP header.
+ * Returns NULL when out of memory.
+ */
+    char_u *
+json_encode_lsp_msg(typval_T *val)
+{
+    garray_T	ga;
+    garray_T	lspga;
+
+    ga_init2(&ga, 1, 4000);
+    if (json_encode_gap(&ga, val, 0) == FAIL)
+	return NULL;
+    ga_append(&ga, NUL);
+
+    ga_init2(&lspga, 1, 4000);
+    vim_snprintf((char *)IObuff, IOSIZE,
+	    "Content-Length: %u\r\n"
+	    "Content-Type: application/vim-jsonrpc; charset=utf-8\r\n\r\n",
+	    ga.ga_len - 1);
+    ga_concat(&lspga, IObuff);
+    ga_concat_len(&lspga, ga.ga_data, ga.ga_len);
+    ga_clear(&ga);
+    return lspga.ga_data;
 }
 #endif
 
@@ -246,7 +270,7 @@ json_encode_item(garray_T *gap, typval_T *val, int copyID, int options)
 		    if (i > 0)
 			ga_concat(gap, (char_u *)",");
 		    vim_snprintf((char *)numbuf, NUMBUFLEN, "%d",
-			    (int)blob_get(b, i));
+			    blob_get(b, i));
 		    ga_concat(gap, numbuf);
 		}
 		ga_append(gap, ']');
@@ -607,7 +631,7 @@ json_decode_item(js_read_T *reader, typval_T *res, int options)
     cur_item = res;
     init_tv(&item);
     if (res != NULL)
-    	init_tv(res);
+	init_tv(res);
 
     fill_numbuflen(reader);
     p = reader->js_buf + reader->js_used;
@@ -740,7 +764,7 @@ json_decode_item(js_read_T *reader, typval_T *res, int options)
 			retval = json_decode_string(reader, cur_item, *p);
 		    else
 		    {
-			semsg(_(e_json_error), p);
+			semsg(_(e_json_decode_error_at_str), p);
 			retval = FAIL;
 		    }
 		    break;
@@ -748,7 +772,7 @@ json_decode_item(js_read_T *reader, typval_T *res, int options)
 		case ',': // comma: empty item
 		    if ((options & JSON_JS) == 0)
 		    {
-			semsg(_(e_json_error), p);
+			semsg(_(e_json_decode_error_at_str), p);
 			retval = FAIL;
 			break;
 		    }
@@ -778,7 +802,7 @@ json_decode_item(js_read_T *reader, typval_T *res, int options)
 			    }
 			    if (!VIM_ISDIGIT(*sp))
 			    {
-				semsg(_(e_json_error), p);
+				semsg(_(e_json_decode_error_at_str), p);
 				retval = FAIL;
 				break;
 			    }
@@ -791,12 +815,13 @@ json_decode_item(js_read_T *reader, typval_T *res, int options)
 			    {
 				float_T f;
 
-				len = string2float(p, &f);
+				len = string2float(p, &f, FALSE);
 			    }
 			    else
 			    {
 				cur_item->v_type = VAR_FLOAT;
-				len = string2float(p, &cur_item->vval.v_float);
+				len = string2float(p, &cur_item->vval.v_float,
+									FALSE);
 			    }
 			}
 			else
@@ -809,7 +834,7 @@ json_decode_item(js_read_T *reader, typval_T *res, int options)
 				    &nr, NULL, 0, TRUE);
 			    if (len == 0)
 			    {
-				semsg(_(e_json_error), p);
+				semsg(_(e_json_decode_error_at_str), p);
 				retval = FAIL;
 				goto theend;
 			    }
@@ -920,10 +945,19 @@ json_decode_item(js_read_T *reader, typval_T *res, int options)
 	    if (top_item != NULL && top_item->jd_type == JSON_OBJECT_KEY
 		    && cur_item != NULL)
 	    {
+#ifdef FEAT_FLOAT
+		if (cur_item->v_type == VAR_FLOAT)
+		{
+		    // cannot use a float as a key
+		    emsg(_(e_using_float_as_string));
+		    retval = FAIL;
+		    goto theend;
+		}
+#endif
 		top_item->jd_key = tv_get_string_buf_chk(cur_item, key_buf);
 		if (top_item->jd_key == NULL)
 		{
-		    emsg(_(e_invarg));
+		    emsg(_(e_invalid_argument));
 		    retval = FAIL;
 		    goto theend;
 		}
@@ -961,7 +995,7 @@ item_end:
 			retval = MAYBE;
 		    else
 		    {
-			semsg(_(e_json_error), p);
+			semsg(_(e_json_decode_error_at_str), p);
 			retval = FAIL;
 		    }
 		    goto theend;
@@ -979,7 +1013,7 @@ item_end:
 			retval = MAYBE;
 		    else
 		    {
-			semsg(_(e_json_error), p);
+			semsg(_(e_json_decode_error_at_str), p);
 			retval = FAIL;
 		    }
 		    goto theend;
@@ -996,8 +1030,7 @@ item_end:
 			&& dict_find(top_item->jd_tv.vval.v_dict,
 						 top_item->jd_key, -1) != NULL)
 		{
-		    semsg(_("E938: Duplicate key in JSON: \"%s\""),
-							     top_item->jd_key);
+		    semsg(_(e_duplicate_key_in_json_str), top_item->jd_key);
 		    clear_tv(cur_item);
 		    retval = FAIL;
 		    goto theend;
@@ -1034,7 +1067,7 @@ item_end:
 			retval = MAYBE;
 		    else
 		    {
-			semsg(_(e_json_error), p);
+			semsg(_(e_json_decode_error_at_str), p);
 			retval = FAIL;
 		    }
 		    goto theend;
@@ -1053,7 +1086,7 @@ item_end:
 	res->v_type = VAR_SPECIAL;
 	res->vval.v_number = VVAL_NONE;
     }
-    semsg(_(e_json_error), p);
+    semsg(_(e_json_decode_error_at_str), p);
 
 theend:
     for (i = 0; i < stack.ga_len; i++)
@@ -1080,13 +1113,13 @@ json_decode_all(js_read_T *reader, typval_T *res, int options)
     if (ret != OK)
     {
 	if (ret == MAYBE)
-	    semsg(_(e_json_error), reader->js_buf);
+	    semsg(_(e_json_decode_error_at_str), reader->js_buf);
 	return FAIL;
     }
     json_skip_white(reader);
     if (reader->js_buf[reader->js_used] != NUL)
     {
-	semsg(_(e_trailing_arg), reader->js_buf + reader->js_used);
+	semsg(_(e_trailing_characters_str), reader->js_buf + reader->js_used);
 	return FAIL;
     }
     return OK;
@@ -1147,11 +1180,14 @@ f_js_decode(typval_T *argvars, typval_T *rettv)
 {
     js_read_T	reader;
 
+    if (in_vim9script() && check_for_string_arg(argvars, 0) == FAIL)
+	return;
+
     reader.js_buf = tv_get_string(&argvars[0]);
     reader.js_fill = NULL;
     reader.js_used = 0;
     if (json_decode_all(&reader, rettv, JSON_JS) != OK)
-	emsg(_(e_invarg));
+	emsg(_(e_invalid_argument));
 }
 
 /*
@@ -1171,6 +1207,9 @@ f_js_encode(typval_T *argvars, typval_T *rettv)
 f_json_decode(typval_T *argvars, typval_T *rettv)
 {
     js_read_T	reader;
+
+    if (in_vim9script() && check_for_string_arg(argvars, 0) == FAIL)
+	return;
 
     reader.js_buf = tv_get_string(&argvars[0]);
     reader.js_fill = NULL;

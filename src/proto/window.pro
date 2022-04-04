@@ -1,4 +1,5 @@
 /* window.c */
+win_T *prevwin_curwin(void);
 void do_window(int nchar, long Prenum, int xchar);
 void get_wincmd_addr_type(char_u *arg, exarg_T *eap);
 int win_split(int size, int flags);
@@ -45,6 +46,7 @@ win_T *win_horz_neighbor(tabpage_T *tp, win_T *wp, int left, long count);
 void win_enter(win_T *wp, int undo_sync);
 win_T *buf_jump_open_win(buf_T *buf);
 win_T *buf_jump_open_tab(buf_T *buf);
+int win_unlisted(win_T *wp);
 void win_free_popup(win_T *win);
 void win_remove(win_T *wp, tabpage_T *tp);
 int win_alloc_lines(win_T *wp);
@@ -54,6 +56,7 @@ void shell_new_columns(void);
 void win_size_save(garray_T *gap);
 void win_size_restore(garray_T *gap);
 int win_comp_pos(void);
+void win_ensure_size(void);
 void win_setheight(int height);
 void win_setheight_win(int height, win_T *win);
 void win_setwidth(int width);

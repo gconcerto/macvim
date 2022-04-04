@@ -16,7 +16,6 @@
 static void set_vv_searchforward(void);
 static int first_submatch(regmmatch_T *rp);
 #endif
-static int check_linecomment(char_u *line);
 #ifdef FEAT_FIND_ID
 static void show_pat_in_path(char_u *, int,
 					 int, int, FILE *, linenr_T *, long);
@@ -84,15 +83,14 @@ static int	lastc_bytelen = 1;	// >1 for multi-byte char
 
 // copy of spats[], for keeping the search patterns while executing autocmds
 static spat_T	    saved_spats[2];
+static char_u	    *saved_mr_pattern = NULL;
 # ifdef FEAT_SEARCH_EXTRA
 static int	    saved_spats_last_idx = 0;
 static int	    saved_spats_no_hlsearch = 0;
 # endif
 
-static char_u	    *mr_pattern = NULL;	// pattern used by search_regcomp()
-#ifdef FEAT_RIGHTLEFT
-static int	    mr_pattern_alloced = FALSE; // mr_pattern was allocated
-#endif
+// allocated copy of pattern used by search_regcomp()
+static char_u	    *mr_pattern = NULL;
 
 #ifdef FEAT_FIND_ID
 /*
@@ -148,9 +146,9 @@ search_regcomp(
 	if (spats[i].pat == NULL)	// pattern was never defined
 	{
 	    if (pat_use == RE_SUBST)
-		emsg(_(e_nopresub));
+		emsg(_(e_no_previous_substitute_regular_expression));
 	    else
-		emsg(_(e_noprevre));
+		emsg(_(e_no_previous_regular_expression));
 	    rc_did_emsg = TRUE;
 	    return FAIL;
 	}
@@ -161,29 +159,13 @@ search_regcomp(
     else if (options & SEARCH_HIS)	// put new pattern in history
 	add_to_history(HIST_SEARCH, pat, TRUE, NUL);
 
+    vim_free(mr_pattern);
 #ifdef FEAT_RIGHTLEFT
-    if (mr_pattern_alloced)
-    {
-	vim_free(mr_pattern);
-	mr_pattern_alloced = FALSE;
-    }
-
     if (curwin->w_p_rl && *curwin->w_p_rlc == 's')
-    {
-	char_u *rev_pattern;
-
-	rev_pattern = reverse_text(pat);
-	if (rev_pattern == NULL)
-	    mr_pattern = pat;	    // out of memory, keep normal pattern.
-	else
-	{
-	    mr_pattern = rev_pattern;
-	    mr_pattern_alloced = TRUE;
-	}
-    }
+	mr_pattern = reverse_text(pat);
     else
 #endif
-	mr_pattern = pat;
+	mr_pattern = vim_strsave(pat);
 
     /*
      * Save the currently used pattern in the appropriate place,
@@ -298,6 +280,10 @@ save_search_patterns(void)
 	saved_spats[1] = spats[1];
 	if (spats[1].pat != NULL)
 	    saved_spats[1].pat = vim_strsave(spats[1].pat);
+	if (mr_pattern == NULL)
+	    saved_mr_pattern = NULL;
+	else
+	    saved_mr_pattern = vim_strsave(mr_pattern);
 #ifdef FEAT_SEARCH_EXTRA
 	saved_spats_last_idx = last_idx;
 	saved_spats_no_hlsearch = no_hlsearch;
@@ -317,6 +303,8 @@ restore_search_patterns(void)
 #endif
 	vim_free(spats[1].pat);
 	spats[1] = saved_spats[1];
+	vim_free(mr_pattern);
+	mr_pattern = saved_mr_pattern;
 #ifdef FEAT_SEARCH_EXTRA
 	last_idx = saved_spats_last_idx;
 	set_no_hlsearch(saved_spats_no_hlsearch);
@@ -330,15 +318,7 @@ free_search_patterns(void)
 {
     vim_free(spats[0].pat);
     vim_free(spats[1].pat);
-
-# ifdef FEAT_RIGHTLEFT
-    if (mr_pattern_alloced)
-    {
-	vim_free(mr_pattern);
-	mr_pattern_alloced = FALSE;
-	mr_pattern = NULL;
-    }
-# endif
+    VIM_CLEAR(mr_pattern);
 }
 #endif
 
@@ -349,6 +329,8 @@ static spat_T	    saved_last_search_spat;
 static int	    did_save_last_search_spat = 0;
 static int	    saved_last_idx = 0;
 static int	    saved_no_hlsearch = 0;
+static int	    saved_search_match_endcol;
+static int	    saved_search_match_lines;
 
 /*
  * Save and restore the search pattern for incremental highlight search
@@ -394,6 +376,25 @@ restore_last_search_pattern(void)
     set_no_hlsearch(saved_no_hlsearch);
 }
 
+/*
+ * Save and restore the incsearch highlighting variables.
+ * This is required so that calling searchcount() at does not invalidate the
+ * incsearch highlighting.
+ */
+    static void
+save_incsearch_state(void)
+{
+    saved_search_match_endcol = search_match_endcol;
+    saved_search_match_lines  = search_match_lines;
+}
+
+    static void
+restore_incsearch_state(void)
+{
+    search_match_endcol = saved_search_match_endcol;
+    search_match_lines  = saved_search_match_lines;
+}
+
     char_u *
 last_search_pattern(void)
 {
@@ -434,6 +435,10 @@ ignorecase_opt(char_u *pat, int ic_in, int scs)
 pat_has_uppercase(char_u *pat)
 {
     char_u *p = pat;
+    magic_T magic_val = MAGIC_ON;
+
+    // get the magicness of the pattern
+    (void)skip_regexp_ex(pat, NUL, magic_isset(), NULL, NULL, &magic_val);
 
     while (*p != NUL)
     {
@@ -445,7 +450,7 @@ pat_has_uppercase(char_u *pat)
 		return TRUE;
 	    p += l;
 	}
-	else if (*p == '\\')
+	else if (*p == '\\' && magic_val <= MAGIC_ON)
 	{
 	    if (p[1] == '_' && p[2] != NUL)  // skip "\_X"
 		p += 3;
@@ -455,6 +460,13 @@ pat_has_uppercase(char_u *pat)
 		p += 2;
 	    else
 		p += 1;
+	}
+	else if ((*p == '%' || *p == '_') && magic_val == MAGIC_ALL)
+	{
+	    if (p[1] != NUL)  // skip "_X" and %X
+		p += 2;
+	    else
+		p++;
 	}
 	else if (MB_ISUPPER(*p))
 	    return TRUE;
@@ -673,7 +685,7 @@ searchit(
 		   (options & (SEARCH_HIS + SEARCH_KEEP)), &regmatch) == FAIL)
     {
 	if ((options & SEARCH_MSG) && !rc_did_emsg)
-	    semsg(_("E383: Invalid search string: %s"), mr_pattern);
+	    semsg(_(e_invalid_search_string_str), mr_pattern);
 	return FAIL;
     }
 
@@ -1138,17 +1150,15 @@ searchit(
     if (!found)		    // did not find it
     {
 	if (got_int)
-	    emsg(_(e_interr));
+	    emsg(_(e_interrupted));
 	else if ((options & SEARCH_MSG) == SEARCH_MSG)
 	{
 	    if (p_ws)
-		semsg(_(e_patnotf2), mr_pattern);
+		semsg(_(e_pattern_not_found_str), mr_pattern);
 	    else if (lnum == 0)
-		semsg(_("E384: search hit TOP without match for: %s"),
-								  mr_pattern);
+		semsg(_(e_search_hit_top_without_match_for_str), mr_pattern);
 	    else
-		semsg(_("E385: search hit BOTTOM without match for: %s"),
-								  mr_pattern);
+		semsg(_(e_search_hit_bottom_without_match_for_str), mr_pattern);
 	}
 	return FAIL;
     }
@@ -1165,7 +1175,7 @@ searchit(
     return submatch + 1;
 }
 
-#ifdef FEAT_EVAL
+#if defined(FEAT_EVAL) || defined(FEAT_PROTO)
     void
 set_search_direction(int cdir)
 {
@@ -1226,7 +1236,8 @@ first_submatch(regmmatch_T *rp)
 do_search(
     oparg_T	    *oap,	// can be NULL
     int		    dirc,	// '/' or '?'
-    int		    search_delim, // the delimiter for the search, e.g. '%' in s%regex%replacement%
+    int		    search_delim, // the delimiter for the search, e.g. '%' in
+				  // s%regex%replacement%
     char_u	    *pat,
     long	    count,
     int		    options,
@@ -1331,7 +1342,7 @@ do_search(
 		searchstr = spats[RE_SUBST].pat;
 		if (searchstr == NULL)
 		{
-		    emsg(_(e_noprevre));
+		    emsg(_(e_no_previous_regular_expression));
 		    retval = 0;
 		    goto end_do_search;
 		}
@@ -1485,11 +1496,11 @@ do_search(
 			msgbuf = trunc;
 		    }
 
-    #ifdef FEAT_RIGHTLEFT
-		    // The search pattern could be shown on the right in rightleft
-		    // mode, but the 'ruler' and 'showcmd' area use it too, thus
-		    // it would be blanked out again very soon.  Show it on the
-		    // left, but do reverse the text.
+#ifdef FEAT_RIGHTLEFT
+		    // The search pattern could be shown on the right in
+		    // rightleft mode, but the 'ruler' and 'showcmd' area use
+		    // it too, thus it would be blanked out again very soon.
+		    // Show it on the left, but do reverse the text.
 		    if (curwin->w_p_rl && *curwin->w_p_rlc == 's')
 		    {
 			char_u *r;
@@ -1512,7 +1523,7 @@ do_search(
 				vim_memset(msgbuf + pat_len, ' ', r - msgbuf);
 			}
 		    }
-    #endif
+#endif
 		    msg_outtrans(msgbuf);
 		    msg_clr_eos();
 		    msg_check();
@@ -1557,6 +1568,9 @@ do_search(
 	    }
 	}
 
+	/*
+	 * The actual search.
+	 */
 	c = searchit(curwin, curbuf, &pos, NULL,
 					      dirc == '/' ? FORWARD : BACKWARD,
 		searchstr, count, spats[0].off.end + (options &
@@ -1566,7 +1580,7 @@ do_search(
 		RE_LAST, sia);
 
 	if (dircp != NULL)
-	    *dircp = search_delim;	// restore second '/' or '?' for normal_cmd()
+	    *dircp = search_delim; // restore second '/' or '?' for normal_cmd()
 
 	if (!shortmess(SHM_SEARCH)
 		&& ((dirc == '/' && LT_POS(pos, curwin->w_cursor))
@@ -1660,7 +1674,7 @@ do_search(
 	if (dirc != '?' && dirc != '/')
 	{
 	    retval = 0;
-	    emsg(_("E386: Expected '?' or '/'  after ';'"));
+	    emsg(_(e_expected_question_or_slash_after_semicolon));
 	    goto end_do_search;
 	}
 	++pat;
@@ -1743,16 +1757,15 @@ search_for_exact_line(
 
 	// when adding lines the matching line may be empty but it is not
 	// ignored because we are interested in the next line -- Acevedo
-	if ((compl_cont_status & CONT_ADDING)
-					   && !(compl_cont_status & CONT_SOL))
+	if (compl_status_adding() && !compl_status_sol())
 	{
 	    if ((p_ic ? MB_STRICMP(p, pat) : STRCMP(p, pat)) == 0)
 		return OK;
 	}
 	else if (*p != NUL)	// ignore empty lines
 	{	// expanding lines or words
-	    if ((p_ic ? MB_STRNICMP(p, pat, compl_length)
-				   : STRNCMP(p, pat, compl_length)) == 0)
+	    if ((p_ic ? MB_STRNICMP(p, pat, ins_compl_len())
+				   : STRNCMP(p, pat, ins_compl_len())) == 0)
 		return OK;
 	}
     }
@@ -2150,6 +2163,8 @@ findmatchlimit(
     else if (initc != '#' && initc != NUL)
     {
 	find_mps_values(&initc, &findc, &backwards, TRUE);
+	if (dir)
+	    backwards = (dir == FORWARD) ? FALSE : TRUE;
 	if (findc == NUL)
 	    return NULL;
     }
@@ -2726,9 +2741,8 @@ findmatchlimit(
 /*
  * Check if line[] contains a / / comment.
  * Return MAXCOL if not, otherwise return the column.
- * TODO: skip strings.
  */
-    static int
+    int
 check_linecomment(char_u *line)
 {
     char_u  *p;
@@ -2758,7 +2772,8 @@ check_linecomment(char_u *line)
 			in_str = TRUE;
 		}
 		else if (!in_str && ((p - line) < 2
-				    || (*(p - 1) != '\\' && *(p - 2) != '#')))
+				    || (*(p - 1) != '\\' && *(p - 2) != '#'))
+			       && !is_pos_in_string(line, (colnr_T)(p - line)))
 		    break;	// found!
 		++p;
 	    }
@@ -2770,9 +2785,11 @@ check_linecomment(char_u *line)
 #endif
     while ((p = vim_strchr(p, '/')) != NULL)
     {
-	// accept a double /, unless it's preceded with * and followed by *,
-	// because * / / * is an end and start of a C comment
-	if (p[1] == '/' && (p == line || p[-1] != '*' || p[2] != '*'))
+	// Accept a double /, unless it's preceded with * and followed by *,
+	// because * / / * is an end and start of a C comment.
+	// Only accept the position if it is not inside a string.
+	if (p[1] == '/' && (p == line || p[-1] != '*' || p[2] != '*')
+			       && !is_pos_in_string(line, (colnr_T)(p - line)))
 	    break;
 	++p;
     }
@@ -3329,7 +3346,7 @@ update_search_stat(
 #if defined(FEAT_FIND_ID) || defined(PROTO)
 /*
  * Find identifiers or defines in included files.
- * If p_ic && (compl_cont_status & CONT_SOL) then ptr must be in lowercase.
+ * If p_ic && compl_status_sol() then ptr must be in lowercase.
  */
     void
 find_pattern_in_path(
@@ -3387,9 +3404,9 @@ find_pattern_in_path(
 	return;
 
     if (type != CHECK_PATH && type != FIND_DEFINE
-	// when CONT_SOL is set compare "ptr" with the beginning of the line
-	// is faster than quote_meta/regcomp/regexec "ptr" -- Acevedo
-	    && !(compl_cont_status & CONT_SOL))
+	    // when CONT_SOL is set compare "ptr" with the beginning of the
+	    // line is faster than quote_meta/regcomp/regexec "ptr" -- Acevedo
+	    && !compl_status_sol())
     {
 	pat = alloc(len + 5);
 	if (pat == NULL)
@@ -3664,7 +3681,7 @@ search_line:
 	     */
 	    if (def_regmatch.regprog == NULL || define_matched)
 	    {
-		if (define_matched || (compl_cont_status & CONT_SOL))
+		if (define_matched || compl_status_sol())
 		{
 		    // compare the first "len" chars from "ptr"
 		    startp = skipwhite(p);
@@ -3737,9 +3754,9 @@ search_line:
 		    break;
 		found = TRUE;
 		aux = p = startp;
-		if (compl_cont_status & CONT_ADDING)
+		if (compl_status_adding())
 		{
-		    p += compl_length;
+		    p += ins_compl_len();
 		    if (vim_iswordp(p))
 			goto exit_matched;
 		    p = find_word_start(p);
@@ -3747,7 +3764,7 @@ search_line:
 		p = find_word_end(p);
 		i = (int)(p - aux);
 
-		if ((compl_cont_status & CONT_ADDING) && i == compl_length)
+		if (compl_status_adding() && i == ins_compl_len())
 		{
 		    // IOSIZE > compl_length, so the STRNCPY works
 		    STRNCPY(IObuff, aux, i);
@@ -3795,7 +3812,7 @@ search_line:
 		    IObuff[i] = NUL;
 		    aux = IObuff;
 
-		    if (i == compl_length)
+		    if (i == ins_compl_len())
 			goto exit_matched;
 		}
 
@@ -3842,7 +3859,7 @@ search_line:
 						      && g_do_tagpreview == 0
 #endif
 						      )
-		    emsg(_("E387: Match is on current line"));
+		    emsg(_(e_match_is_on_current_line));
 		else if (action == ACTION_SHOW)
 		{
 		    show_pat_in_path(line, type, did_show, action,
@@ -3928,7 +3945,7 @@ exit_matched:
 	    // are not at the end of it already
 	    if (def_regmatch.regprog == NULL
 		    && action == ACTION_EXPAND
-		    && !(compl_cont_status & CONT_SOL)
+		    && !compl_status_sol()
 		    && *startp != NUL
 		    && *(p = startp + mb_ptr2len(startp)) != NUL)
 		goto search_line;
@@ -4006,11 +4023,11 @@ exit_matched:
     else if (!found && action != ACTION_EXPAND)
     {
 	if (got_int || ins_compl_interrupted())
-	    emsg(_(e_interr));
+	    emsg(_(e_interrupted));
 	else if (type == FIND_DEFINE)
-	    emsg(_("E388: Couldn't find definition"));
+	    emsg(_(e_couldnt_find_definition));
 	else
-	    emsg(_("E389: Couldn't find pattern"));
+	    emsg(_(e_couldnt_find_pattern));
     }
     if (action == ACTION_SHOW || action == ACTION_SHOW_ALL)
 	msg_end();
@@ -4105,7 +4122,7 @@ get_spat_last_idx(void)
 }
 #endif
 
-#ifdef FEAT_EVAL
+#if defined(FEAT_EVAL) || defined(FEAT_PROTO)
 /*
  * "searchcount()" function
  */
@@ -4122,6 +4139,9 @@ f_searchcount(typval_T *argvars, typval_T *rettv)
     if (rettv_dict_alloc(rettv) == FAIL)
 	return;
 
+    if (in_vim9script() && check_for_opt_dict_arg(argvars, 0) == FAIL)
+	return;
+
     if (shortmess(SHM_SEARCHCOUNT))	// 'shortmess' contains 'S' flag
 	recompute = TRUE;
 
@@ -4134,7 +4154,7 @@ f_searchcount(typval_T *argvars, typval_T *rettv)
 
 	if (argvars[0].v_type != VAR_DICT || argvars[0].vval.v_dict == NULL)
 	{
-	    emsg(_(e_dictreq));
+	    emsg(_(e_dictionary_required));
 	    return;
 	}
 	dict = argvars[0].vval.v_dict;
@@ -4165,12 +4185,12 @@ f_searchcount(typval_T *argvars, typval_T *rettv)
 	{
 	    if (di->di_tv.v_type != VAR_LIST)
 	    {
-		semsg(_(e_invarg2), "pos");
+		semsg(_(e_invalid_argument_str), "pos");
 		return;
 	    }
 	    if (list_len(di->di_tv.vval.v_list) != 3)
 	    {
-		semsg(_(e_invarg2), "List format should be [lnum, col, off]");
+		semsg(_(e_invalid_argument_str), "List format should be [lnum, col, off]");
 		return;
 	    }
 	    li = list_find(di->di_tv.vval.v_list, 0L);
@@ -4198,6 +4218,9 @@ f_searchcount(typval_T *argvars, typval_T *rettv)
     }
 
     save_last_search_pattern();
+#ifdef FEAT_SEARCH_EXTRA
+    save_incsearch_state();
+#endif
     if (pattern != NULL)
     {
 	if (*pattern == NUL)
@@ -4218,7 +4241,11 @@ f_searchcount(typval_T *argvars, typval_T *rettv)
 
 the_end:
     restore_last_search_pattern();
+#ifdef FEAT_SEARCH_EXTRA
+    restore_incsearch_state();
+#endif
 }
+#endif
 
 /*
  * Fuzzy string matching
@@ -4289,15 +4316,15 @@ typedef struct
 // bonus if the first letter is matched
 #define FIRST_LETTER_BONUS 15
 // penalty applied for every letter in str before the first match
-#define LEADING_LETTER_PENALTY -5
+#define LEADING_LETTER_PENALTY (-5)
 // maximum penalty for leading letters
-#define MAX_LEADING_LETTER_PENALTY -15
+#define MAX_LEADING_LETTER_PENALTY (-15)
 // penalty for every letter that doesn't match
-#define UNMATCHED_LETTER_PENALTY -1
+#define UNMATCHED_LETTER_PENALTY (-1)
 // penalty for gap in matching positions (-2 * k)
-#define GAP_PENALTY	-2
+#define GAP_PENALTY	(-2)
 // Score for a string that doesn't fuzzy match the pattern
-#define SCORE_NONE	-9999
+#define SCORE_NONE	(-9999)
 
 #define FUZZY_MATCH_RECURSION_LIMIT	10
 
@@ -4459,7 +4486,7 @@ fuzzy_match_recursive(
 	    if (fuzzy_match_recursive(fuzpat, next_char, strIdx + 1,
 			&recursiveScore, strBegin, strLen, matches,
 			recursiveMatches,
-			sizeof(recursiveMatches)/sizeof(recursiveMatches[0]),
+			ARRAY_LENGTH(recursiveMatches),
 			nextMatch, recursionCount))
 	    {
 		// Pick best recursive score
@@ -4600,6 +4627,7 @@ fuzzy_match(
     return numMatches != 0;
 }
 
+#if defined(FEAT_EVAL) || defined(FEAT_PROTO)
 /*
  * Sort the fuzzy matches in the descending order of the match score.
  * For items with same score, retain the order using the index (stable sort)
@@ -4809,18 +4837,25 @@ do_fuzzymatch(typval_T *argvars, typval_T *rettv, int retmatchpos)
     int		ret;
     int		matchseq = FALSE;
 
+    if (in_vim9script()
+	    && (check_for_list_arg(argvars, 0) == FAIL
+		|| check_for_string_arg(argvars, 1) == FAIL
+		|| check_for_opt_dict_arg(argvars, 2) == FAIL))
+	return;
+
     CLEAR_POINTER(&cb);
 
     // validate and get the arguments
     if (argvars[0].v_type != VAR_LIST || argvars[0].vval.v_list == NULL)
     {
-	semsg(_(e_listarg), retmatchpos ? "matchfuzzypos()" : "matchfuzzy()");
+	semsg(_(e_argument_of_str_must_be_list),
+			     retmatchpos ? "matchfuzzypos()" : "matchfuzzy()");
 	return;
     }
     if (argvars[1].v_type != VAR_STRING
 	    || argvars[1].vval.v_string == NULL)
     {
-	semsg(_(e_invarg2), tv_get_string(&argvars[1]));
+	semsg(_(e_invalid_argument_str), tv_get_string(&argvars[1]));
 	return;
     }
 
@@ -4831,7 +4866,7 @@ do_fuzzymatch(typval_T *argvars, typval_T *rettv, int retmatchpos)
 
 	if (argvars[2].v_type != VAR_DICT || argvars[2].vval.v_dict == NULL)
 	{
-	    emsg(_(e_dictreq));
+	    emsg(_(e_dictionary_required));
 	    return;
 	}
 
@@ -4844,7 +4879,7 @@ do_fuzzymatch(typval_T *argvars, typval_T *rettv, int retmatchpos)
 		    || di->di_tv.vval.v_string == NULL
 		    || *di->di_tv.vval.v_string == NUL)
 	    {
-		semsg(_(e_invarg2), tv_get_string(&di->di_tv));
+		semsg(_(e_invalid_argument_str), tv_get_string(&di->di_tv));
 		return;
 	    }
 	    key = tv_get_string(&di->di_tv);
@@ -4854,7 +4889,7 @@ do_fuzzymatch(typval_T *argvars, typval_T *rettv, int retmatchpos)
 	    cb = get_callback(&di->di_tv);
 	    if (cb.cb_name == NULL)
 	    {
-		semsg(_(e_invargval), "text_cb");
+		semsg(_(e_invalid_value_for_argument_str), "text_cb");
 		return;
 	    }
 	}
@@ -4915,5 +4950,131 @@ f_matchfuzzypos(typval_T *argvars, typval_T *rettv)
 {
     do_fuzzymatch(argvars, rettv, TRUE);
 }
-
 #endif
+
+/*
+ * Same as fuzzy_match_item_compare() except for use with a string match
+ */
+    static int
+fuzzy_match_str_compare(const void *s1, const void *s2)
+{
+    int		v1 = ((fuzmatch_str_T *)s1)->score;
+    int		v2 = ((fuzmatch_str_T *)s2)->score;
+    int		idx1 = ((fuzmatch_str_T *)s1)->idx;
+    int		idx2 = ((fuzmatch_str_T *)s2)->idx;
+
+    return v1 == v2 ? (idx1 - idx2) : v1 > v2 ? -1 : 1;
+}
+
+/*
+ * Sort fuzzy matches by score
+ */
+    static void
+fuzzy_match_str_sort(fuzmatch_str_T *fm, int sz)
+{
+    // Sort the list by the descending order of the match score
+    qsort((void *)fm, (size_t)sz, sizeof(fuzmatch_str_T),
+	    fuzzy_match_str_compare);
+}
+
+/*
+ * Same as fuzzy_match_item_compare() except for use with a function name
+ * string match. <SNR> functions should be sorted to the end.
+ */
+    static int
+fuzzy_match_func_compare(const void *s1, const void *s2)
+{
+    int		v1 = ((fuzmatch_str_T *)s1)->score;
+    int		v2 = ((fuzmatch_str_T *)s2)->score;
+    int		idx1 = ((fuzmatch_str_T *)s1)->idx;
+    int		idx2 = ((fuzmatch_str_T *)s2)->idx;
+    char_u	*str1 = ((fuzmatch_str_T *)s1)->str;
+    char_u	*str2 = ((fuzmatch_str_T *)s2)->str;
+
+    if (*str1 != '<' && *str2 == '<') return -1;
+    if (*str1 == '<' && *str2 != '<') return 1;
+    return v1 == v2 ? (idx1 - idx2) : v1 > v2 ? -1 : 1;
+}
+
+/*
+ * Sort fuzzy matches of function names by score.
+ * <SNR> functions should be sorted to the end.
+ */
+    static void
+fuzzy_match_func_sort(fuzmatch_str_T *fm, int sz)
+{
+    // Sort the list by the descending order of the match score
+    qsort((void *)fm, (size_t)sz, sizeof(fuzmatch_str_T),
+		fuzzy_match_func_compare);
+}
+
+/*
+ * Fuzzy match 'pat' in 'str'. Returns 0 if there is no match. Otherwise,
+ * returns the match score.
+ */
+    int
+fuzzy_match_str(char_u *str, char_u *pat)
+{
+    int		score = 0;
+    int_u	matchpos[MAX_FUZZY_MATCHES];
+
+    if (str == NULL || pat == NULL)
+	return 0;
+
+    fuzzy_match(str, pat, TRUE, &score, matchpos,
+				sizeof(matchpos) / sizeof(matchpos[0]));
+
+    return score;
+}
+
+/*
+ * Copy a list of fuzzy matches into a string list after sorting the matches by
+ * the fuzzy score. Frees the memory allocated for 'fuzmatch'.
+ * Returns OK on success and FAIL on memory allocation failure.
+ */
+    int
+fuzzymatches_to_strmatches(
+	fuzmatch_str_T	*fuzmatch,
+	char_u		***matches,
+	int		count,
+	int		funcsort)
+{
+    int		i;
+
+    if (count <= 0)
+	return OK;
+
+    *matches = ALLOC_MULT(char_u *, count);
+    if (*matches == NULL)
+    {
+	for (i = 0; i < count; i++)
+	    vim_free(fuzmatch[i].str);
+	vim_free(fuzmatch);
+	return FAIL;
+    }
+
+    // Sort the list by the descending order of the match score
+    if (funcsort)
+	fuzzy_match_func_sort((void *)fuzmatch, (size_t)count);
+    else
+	fuzzy_match_str_sort((void *)fuzmatch, (size_t)count);
+
+    for (i = 0; i < count; i++)
+	(*matches)[i] = fuzmatch[i].str;
+    vim_free(fuzmatch);
+
+    return OK;
+}
+
+/*
+ * Free a list of fuzzy string matches.
+ */
+    void
+fuzmatch_str_free(fuzmatch_str_T *fuzmatch, int count)
+{
+    if (count <= 0 || fuzmatch == NULL)
+	return;
+    while (count--)
+	vim_free(fuzmatch[count].str);
+    vim_free(fuzmatch);
+}

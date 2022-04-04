@@ -612,7 +612,8 @@ may_adjust_incsearch_highlighting(
     // NOTE: must call restore_last_search_pattern() before returning!
     save_last_search_pattern();
 
-    if (!do_incsearch_highlighting(firstc, &search_delim, is_state, &skiplen, &patlen))
+    if (!do_incsearch_highlighting(firstc, &search_delim, is_state,
+							    &skiplen, &patlen))
     {
 	restore_last_search_pattern();
 	return OK;
@@ -626,6 +627,11 @@ may_adjust_incsearch_highlighting(
     if (search_delim == ccline.cmdbuff[skiplen])
     {
 	pat = last_search_pattern();
+	if (pat == NULL)
+	{
+	    restore_last_search_pattern();
+	    return FAIL;
+	}
 	skiplen = 0;
 	patlen = (int)STRLEN(pat);
     }
@@ -918,9 +924,18 @@ cmdline_wildchar_complete(
 	// if 'wildmode' contains "list" may still need to list
 	if (xp->xp_numfiles > 1
 		&& !*did_wild_list
-		&& (wim_flags[wim_index] & WIM_LIST))
+		&& ((wim_flags[wim_index] & WIM_LIST)
+#ifdef FEAT_WILDMENU
+		    || (p_wmnu && (wim_flags[wim_index] & WIM_FULL) != 0)
+#endif
+		    ))
 	{
+#ifdef FEAT_WILDMENU
+	    (void)showmatches(xp,
+		    p_wmnu && ((wim_flags[wim_index] & WIM_LIST) == 0));
+#else
 	    (void)showmatches(xp, FALSE);
+#endif
 	    redrawcmd();
 	    *did_wild_list = TRUE;
 	}
@@ -1507,7 +1522,7 @@ init_ccline(int firstc, int indent)
     ccline.cmdindent = (firstc > 0 ? indent : 0);
 
     // alloc initial ccline.cmdbuff
-    alloc_cmdbuff(exmode_active ? 250 : indent + 1);
+    alloc_cmdbuff(indent + 50);
     if (ccline.cmdbuff == NULL)
 	return FAIL;
     ccline.cmdlen = ccline.cmdpos = 0;
@@ -1548,10 +1563,10 @@ init_ccline(int firstc, int indent)
  */
     char_u *
 getcmdline(
-    int		firstc,
-    long	count,		// only used for incremental search
-    int		indent,		// indent for inside conditionals
-    int		do_concat UNUSED)
+    int		  firstc,
+    long	  count,	// only used for incremental search
+    int		  indent,	// indent for inside conditionals
+    getline_opt_T do_concat UNUSED)
 {
     return getcmdline_int(firstc, count, indent, TRUE);
 }
@@ -1591,6 +1606,7 @@ getcmdline_int(
     cmdline_info_T save_ccline;
     int		did_save_ccline = FALSE;
     int		cmdline_type;
+    int		wild_type;
 
     if (ccline.cmdbuff != NULL)
     {
@@ -1696,6 +1712,10 @@ getcmdline_int(
     // Trigger CmdlineEnter autocommands.
     cmdline_type = firstc == NUL ? '-' : firstc;
     trigger_cmd_autocmd(cmdline_type, EVENT_CMDLINEENTER);
+#ifdef FEAT_EVAL
+    if (!debug_mode)
+	trigger_modechanged();
+#endif
 
     init_history();
     hiscnt = get_hislen();	// set hiscnt to impossible history value
@@ -1738,6 +1758,7 @@ getcmdline_int(
     for (;;)
     {
 	int trigger_cmdlinechanged = TRUE;
+	int end_wildmenu;
 
 	redir_off = TRUE;	// Don't redirect the typed command.
 				// Repeated, because a ":redir" inside
@@ -1762,11 +1783,11 @@ getcmdline_int(
 	    c = safe_vgetc();
 	} while (c == K_IGNORE || c == K_NOP);
 
-	if (c == K_COMMAND)
+	if (c == K_COMMAND || c == K_SCRIPT_COMMAND)
 	{
 	    int	    clen = ccline.cmdlen;
 
-	    if (do_cmdline(NULL, getcmdkeycmd, NULL, DOCMD_NOWAIT) == OK)
+	    if (do_cmdkey_command(c, DOCMD_NOWAIT) == OK)
 	    {
 		if (clen == ccline.cmdlen)
 		    trigger_cmdlinechanged = FALSE;
@@ -1837,16 +1858,47 @@ getcmdline_int(
 	    c = Ctrl_P;
 
 #ifdef FEAT_WILDMENU
-	c = wildmenu_translate_key(&ccline, c, &xpc, did_wild_list);
+	if (p_wmnu)
+	    c = wildmenu_translate_key(&ccline, c, &xpc, did_wild_list);
+
+	if (cmdline_pum_active())
+	{
+	    // Ctrl-Y: Accept the current selection and close the popup menu.
+	    // Ctrl-E: cancel the cmdline popup menu and return the original
+	    // text.
+	    if (c == Ctrl_E || c == Ctrl_Y)
+	    {
+		wild_type = (c == Ctrl_E) ? WILD_CANCEL : WILD_APPLY;
+		if (nextwild(&xpc, wild_type, WILD_NO_BEEP,
+							firstc != '@') == FAIL)
+		    break;
+		c = Ctrl_E;
+	    }
+	}
+#endif
+
+	// The wildmenu is cleared if the pressed key is not used for
+	// navigating the wild menu (i.e. the key is not 'wildchar' or
+	// 'wildcharm' or Ctrl-N or Ctrl-P or Ctrl-A or Ctrl-L).
+	// If the popup menu is displayed, then PageDown and PageUp keys are
+	// also used to navigate the menu.
+	end_wildmenu = (!(c == p_wc && KeyTyped) && c != p_wcm
+		&& c != Ctrl_N && c != Ctrl_P && c != Ctrl_A && c != Ctrl_L);
+#ifdef FEAT_WILDMENU
+	end_wildmenu = end_wildmenu && (!cmdline_pum_active() ||
+			    (c != K_PAGEDOWN && c != K_PAGEUP
+			     && c != K_KPAGEDOWN && c != K_KPAGEUP));
 #endif
 
 	// free expanded names when finished walking through matches
-	if (xpc.xp_numfiles != -1
-		&& !(c == p_wc && KeyTyped) && c != p_wcm
-		&& c != Ctrl_N && c != Ctrl_P && c != Ctrl_A
-		&& c != Ctrl_L)
+	if (end_wildmenu)
 	{
-	    (void)ExpandOne(&xpc, NULL, NULL, 0, WILD_FREE);
+#ifdef FEAT_WILDMENU
+	    if (cmdline_pum_active())
+		cmdline_pum_remove();
+#endif
+	    if (xpc.xp_numfiles != -1)
+		(void)ExpandOne(&xpc, NULL, NULL, 0, WILD_FREE);
 	    did_wild_list = FALSE;
 #ifdef FEAT_WILDMENU
 	    if (!p_wmnu || (c != K_UP && c != K_DOWN))
@@ -1859,7 +1911,8 @@ getcmdline_int(
 	}
 
 #ifdef FEAT_WILDMENU
-	c = wildmenu_process_key(&ccline, c, &xpc);
+	if (p_wmnu)
+	    c = wildmenu_process_key(&ccline, c, &xpc);
 #endif
 
 	// CTRL-\ CTRL-N goes to Normal mode, CTRL-\ CTRL-G goes to Insert
@@ -1940,10 +1993,22 @@ getcmdline_int(
 	// <S-Tab> goes to last match, in a clumsy way
 	if (c == K_S_TAB && KeyTyped)
 	{
-	    if (nextwild(&xpc, WILD_EXPAND_KEEP, 0, firstc != '@') == OK
-		    && nextwild(&xpc, WILD_PREV, 0, firstc != '@') == OK
-		    && nextwild(&xpc, WILD_PREV, 0, firstc != '@') == OK)
-		goto cmdline_changed;
+	    if (nextwild(&xpc, WILD_EXPAND_KEEP, 0, firstc != '@') == OK)
+	    {
+		if (xpc.xp_numfiles > 1)
+		{
+#ifdef FEAT_WILDMENU
+		    // Trigger the popup menu when wildoptions=pum
+		    showmatches(&xpc, p_wmnu
+			    && ((wim_flags[wim_index] & WIM_LIST) == 0));
+#else
+		    (void)showmatches(&xpc, FALSE);
+#endif
+		}
+		if (nextwild(&xpc, WILD_PREV, 0, firstc != '@') == OK
+			&& nextwild(&xpc, WILD_PREV, 0, firstc != '@') == OK)
+		    goto cmdline_changed;
+	    }
 	}
 
 	if (c == NUL || c == K_ZERO)	    // NUL is stored as NL
@@ -2219,8 +2284,16 @@ getcmdline_int(
 		goto cmdline_not_changed;
 
 	case Ctrl_A:	    // all matches
+#ifdef FEAT_WILDMENU
+		if (cmdline_pum_active())
+		    // As Ctrl-A completes all the matches, close the popup
+		    // menu (if present)
+		    cmdline_pum_cleanup(&ccline);
+#endif
 		if (nextwild(&xpc, WILD_ALL, 0, firstc != '@') == FAIL)
 		    break;
+		xpc.xp_context = EXPAND_NOTHING;
+		did_wild_list = FALSE;
 		goto cmdline_changed;
 
 	case Ctrl_L:
@@ -2238,8 +2311,8 @@ getcmdline_int(
 	case Ctrl_P:	    // previous match
 		if (xpc.xp_numfiles > 0)
 		{
-		    if (nextwild(&xpc, (c == Ctrl_P) ? WILD_PREV : WILD_NEXT,
-						    0, firstc != '@') == FAIL)
+		    wild_type = (c == Ctrl_P) ? WILD_PREV : WILD_NEXT;
+		    if (nextwild(&xpc, wild_type, 0, firstc != '@') == FAIL)
 			break;
 		    goto cmdline_not_changed;
 		}
@@ -2252,12 +2325,30 @@ getcmdline_int(
 	case K_KPAGEUP:
 	case K_PAGEDOWN:
 	case K_KPAGEDOWN:
-		res = cmdline_browse_history(c, firstc, &lookfor, histype,
-			&hiscnt, &xpc);
-		if (res == CMDLINE_CHANGED)
-		    goto cmdline_changed;
-		else if (res == GOTO_NORMAL_MODE)
-		    goto returncmd;
+#ifdef FEAT_WILDMENU
+		if (cmdline_pum_active()
+			&& (c == K_PAGEUP || c == K_PAGEDOWN ||
+			    c == K_KPAGEUP || c == K_KPAGEDOWN))
+		{
+		    // If the popup menu is displayed, then PageUp and PageDown
+		    // are used to scroll the menu.
+		    wild_type = WILD_PAGEUP;
+		    if (c == K_PAGEDOWN || c == K_KPAGEDOWN)
+			wild_type = WILD_PAGEDOWN;
+		    if (nextwild(&xpc, wild_type, 0, firstc != '@') == FAIL)
+			break;
+		    goto cmdline_not_changed;
+		}
+		else
+#endif
+		{
+		    res = cmdline_browse_history(c, firstc, &lookfor, histype,
+			    &hiscnt, &xpc);
+		    if (res == CMDLINE_CHANGED)
+			goto cmdline_changed;
+		    else if (res == GOTO_NORMAL_MODE)
+			goto returncmd;
+		}
 		goto cmdline_not_changed;
 
 #ifdef FEAT_SEARCH_EXTRA
@@ -2399,7 +2490,7 @@ cmdline_changed:
 	    trigger_cmd_autocmd(cmdline_type, EVENT_CMDLINECHANGED);
 
 #ifdef FEAT_SEARCH_EXTRA
-	if (xpc.xp_context == EXPAND_NOTHING)
+	if (xpc.xp_context == EXPAND_NOTHING && (KeyTyped || vpeekc() == NUL))
 	    may_do_incsearch_highlighting(firstc, count, &is_state);
 #endif
 
@@ -2470,6 +2561,12 @@ returncmd:
     trigger_cmd_autocmd(cmdline_type, EVENT_CMDLINELEAVE);
 
     State = save_State;
+
+#ifdef FEAT_EVAL
+    if (!debug_mode)
+	trigger_modechanged();
+#endif
+
 #ifdef HAVE_INPUT_METHOD
     if (b_im_ptr != NULL && *b_im_ptr != B_IMODE_LMAP)
 	im_save_status(b_im_ptr);
@@ -2631,11 +2728,11 @@ get_text_locked_msg(void)
 {
 #ifdef FEAT_CMDWIN
     if (cmdwin_type != 0)
-	return e_cmdwin;
+	return e_invalid_in_cmdline_window;
 #endif
     if (textwinlock != 0)
-	return e_textwinlock;
-    return e_textlock;
+	return e_not_allowed_to_change_text_or_change_window;
+    return e_not_allowed_to_change_text_here;
 }
 
 /*
@@ -2657,7 +2754,7 @@ curbuf_locked(void)
 {
     if (curbuf_lock > 0)
     {
-	emsg(_("E788: Not allowed to edit another buffer now"));
+	emsg(_(e_not_allowed_to_edit_another_buffer_now));
 	return TRUE;
     }
     return allbuf_locked();
@@ -2672,7 +2769,7 @@ allbuf_locked(void)
 {
     if (allbuf_lock > 0)
     {
-	emsg(_("E811: Not allowed to change buffer information now"));
+	emsg(_(e_not_allowed_to_change_buffer_information_now));
 	return TRUE;
     }
     return FALSE;
@@ -3726,6 +3823,10 @@ redrawcmdline(void)
     redrawcmdline_ex(TRUE);
 }
 
+/*
+ * When "do_compute_cmdrow" is TRUE the command line is redrawn at the bottom.
+ * If FALSE cmdline_row is used, which should redraw in the same place.
+ */
     void
 redrawcmdline_ex(int do_compute_cmdrow)
 {
@@ -3890,27 +3991,32 @@ ccheck_abbr(int c)
 }
 
 /*
- * Escape special characters in "fname" for when used as a file name argument
- * after a Vim command, or, when "shell" is non-zero, a shell command.
+ * Escape special characters in "fname", depending on "what":
+ * VSE_NONE: for when used as a file name argument after a Vim command.
+ * VSE_SHELL: for a shell command.
+ * VSE_BUFFER: for the ":buffer" command.
  * Returns the result in allocated memory.
  */
     char_u *
-vim_strsave_fnameescape(char_u *fname, int shell UNUSED)
+vim_strsave_fnameescape(char_u *fname, int what)
 {
     char_u	*p;
 #ifdef BACKSLASH_IN_FILENAME
     char_u	buf[20];
     int		j = 0;
 
-    // Don't escape '[', '{' and '!' if they are in 'isfname'.
-    for (p = PATH_ESC_CHARS; *p != NUL; ++p)
+    // Don't escape '[', '{' and '!' if they are in 'isfname' and for the
+    // ":buffer" command.
+    for (p = what == VSE_BUFFER ? BUFFER_ESC_CHARS : PATH_ESC_CHARS;
+								*p != NUL; ++p)
 	if ((*p != '[' && *p != '{' && *p != '!') || !vim_isfilec(*p))
 	    buf[j++] = *p;
     buf[j] = NUL;
     p = vim_strsave_escaped(fname, buf);
 #else
-    p = vim_strsave_escaped(fname, shell ? SHELL_ESC_CHARS : PATH_ESC_CHARS);
-    if (shell && csh_like_shell() && p != NULL)
+    p = vim_strsave_escaped(fname, what == VSE_SHELL ? SHELL_ESC_CHARS
+		    : what == VSE_BUFFER ? BUFFER_ESC_CHARS : PATH_ESC_CHARS);
+    if (what == VSE_SHELL && csh_like_shell() && p != NULL)
     {
 	char_u	    *s;
 
@@ -4073,12 +4179,42 @@ set_cmdline_pos(
     void
 f_setcmdpos(typval_T *argvars, typval_T *rettv)
 {
-    int		pos = (int)tv_get_number(&argvars[0]) - 1;
+    int		pos;
 
+    if (in_vim9script() && check_for_number_arg(argvars, 0) == FAIL)
+	return;
+
+    pos = (int)tv_get_number(&argvars[0]) - 1;
     if (pos >= 0)
 	rettv->vval.v_number = set_cmdline_pos(pos);
 }
+#endif
 
+#if defined(FEAT_EVAL) || defined(FEAT_CMDWIN)
+/*
+ * Get the current command-line type.
+ * Returns ':' or '/' or '?' or '@' or '>' or '-'
+ * Only works when the command line is being edited.
+ * Returns NUL when something is wrong.
+ */
+    static int
+get_cmdline_type(void)
+{
+    cmdline_info_T *p = get_ccline_ptr();
+
+    if (p == NULL)
+	return NUL;
+    if (p->cmdfirstc == NUL)
+	return
+# ifdef FEAT_EVAL
+	    (p->input_fn) ? '@' :
+# endif
+	    '-';
+    return p->cmdfirstc;
+}
+#endif
+
+#if defined(FEAT_EVAL) || defined(PROTO)
 /*
  * "getcmdtype()" function
  */
@@ -4094,30 +4230,6 @@ f_getcmdtype(typval_T *argvars UNUSED, typval_T *rettv)
     }
 }
 
-#endif
-
-#if defined(FEAT_EVAL) || defined(FEAT_CMDWIN) || defined(PROTO)
-/*
- * Get the current command-line type.
- * Returns ':' or '/' or '?' or '@' or '>' or '-'
- * Only works when the command line is being edited.
- * Returns NUL when something is wrong.
- */
-    int
-get_cmdline_type(void)
-{
-    cmdline_info_T *p = get_ccline_ptr();
-
-    if (p == NULL)
-	return NUL;
-    if (p->cmdfirstc == NUL)
-	return
-# ifdef FEAT_EVAL
-	    (p->input_fn) ? '@' :
-# endif
-	    '-';
-    return p->cmdfirstc;
-}
 #endif
 
 /*
@@ -4183,7 +4295,7 @@ check_cedit(void)
     {
 	n = string_to_key(p_cedit, FALSE);
 	if (vim_isprintc(n))
-	    return e_invarg;
+	    return e_invalid_argument;
 	cedit_key = n;
     }
     return NULL;
@@ -4373,7 +4485,7 @@ open_cmdwin(void)
     if (!win_valid(old_curwin) || !bufref_valid(&old_curbuf))
     {
 	cmdwin_result = Ctrl_C;
-	emsg(_("E199: Active window or buffer deleted"));
+	emsg(_(e_active_window_or_buffer_deleted));
     }
     else
     {
@@ -4472,6 +4584,15 @@ open_cmdwin(void)
 
     return cmdwin_result;
 }
+
+/*
+ * Return TRUE if in the cmdwin, not editing the command line.
+ */
+    int
+is_in_cmdwin(void)
+{
+    return cmdwin_type != 0 && get_cmdline_type() == NUL;
+}
 #endif // FEAT_CMDWIN
 
 /*
@@ -4529,7 +4650,7 @@ get_user_input(
     int		inputdialog,
     int		secret)
 {
-    char_u	*prompt = tv_get_string_chk(&argvars[0]);
+    char_u	*prompt;
     char_u	*p = NULL;
     int		c;
     char_u	buf[NUMBUFLEN];
@@ -4542,6 +4663,15 @@ get_user_input(
     rettv->vval.v_string = NULL;
     if (input_busy)
 	return;  // this doesn't work recursively.
+
+    if (in_vim9script()
+	    && (check_for_string_arg(argvars, 0) == FAIL
+		|| check_for_opt_string_arg(argvars, 1) == FAIL
+		|| (argvars[1].v_type != VAR_UNKNOWN
+		    && check_for_opt_string_arg(argvars, 2) == FAIL)))
+	return;
+
+    prompt = tv_get_string_chk(&argvars[0]);
 
 #ifdef NO_CONSOLE_INPUT
     // While starting up, there is no place to enter text. When running tests
@@ -4582,7 +4712,7 @@ get_user_input(
 	    {
 		char_u	*xp_name;
 		int	xp_namelen;
-		long	argt;
+		long	argt = 0;
 
 		// input() with a third argument: completion
 		rettv->vval.v_string = NULL;
