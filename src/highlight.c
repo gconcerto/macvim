@@ -25,10 +25,16 @@
  * following names, separated by commas (but no spaces!).
  */
 static char *(hl_name_table[]) =
-    {"bold", "standout", "underline", "undercurl",
-      "italic", "reverse", "inverse", "nocombine", "strikethrough", "NONE"};
+    {"bold", "standout", "underline",
+	"undercurl", "underdouble", "underdotted", "underdashed",
+	"italic", "reverse", "inverse", "nocombine", "strikethrough", "NONE"};
 static int hl_attr_table[] =
-    {HL_BOLD, HL_STANDOUT, HL_UNDERLINE, HL_UNDERCURL, HL_ITALIC, HL_INVERSE, HL_INVERSE, HL_NOCOMBINE, HL_STRIKETHROUGH, 0};
+    {HL_BOLD, HL_STANDOUT, HL_UNDERLINE,
+	HL_UNDERCURL, HL_UNDERDOUBLE, HL_UNDERDOTTED, HL_UNDERDASHED,
+	HL_ITALIC, HL_INVERSE, HL_INVERSE, HL_NOCOMBINE, HL_STRIKETHROUGH, 0};
+// length of all attribute names, plus commas, together (and a bit more)
+#define MAX_ATTR_LEN 120
+
 #define ATTR_COMBINE(attr_a, attr_b) ((((attr_b) & HL_NOCOMBINE) ? (attr_b) : (attr_a)) | (attr_b))
 
 /*
@@ -157,6 +163,7 @@ static char *(highlight_init_both[]) = {
     "default link QuickFixLine Search",
     "default link CursorLineSign SignColumn",
     "default link CursorLineFold FoldColumn",
+    "default link CurSearch Search",
     CENT("Normal cterm=NONE", "Normal gui=NONE"),
     NULL
 };
@@ -565,7 +572,7 @@ static int color_numbers_8[28] = {0, 4, 2, 6,
  * "boldp" will be set to TRUE or FALSE for a foreground color when using 8
  * colors, otherwise it will be unchanged.
  */
-    int
+    static int
 lookup_color(int idx, int foreground, int *boldp)
 {
     int		color = color_numbers_16[idx];
@@ -718,7 +725,7 @@ highlight_reset_all(void)
 # ifdef FEAT_BEVAL_TIP
 	gui_init_tooltip_font();
 # endif
-# if defined(FEAT_MENU) && (defined(FEAT_GUI_ATHENA) || defined(FEAT_GUI_MOTIF))
+# if defined(FEAT_MENU) && defined(FEAT_GUI_MOTIF)
 	gui_init_menu_font();
 # endif
     }
@@ -973,8 +980,8 @@ highlight_set_ctermbg(int idx, int color, int is_normal_group)
 			&& dark != (*p_bg == 'd')
 			&& !option_was_set((char_u *)"bg"))
 		{
-		    set_option_value((char_u *)"bg", 0L,
-			    (char_u *)(dark ? "dark" : "light"), 0);
+		    set_option_value_give_err((char_u *)"bg",
+				   0L, (char_u *)(dark ? "dark" : "light"), 0);
 		    reset_option_was_set((char_u *)"bg");
 		}
 	    }
@@ -1355,7 +1362,7 @@ highlight_set_startstop_termcode(int idx, char_u *key, char_u *arg, int init)
 	// Copy characters from arg[] to buf[], translating <> codes.
 	for (p = arg, off = 0; off < 100 - 6 && *p; )
 	{
-	    len = trans_special(&p, buf + off, FSK_SIMPLIFY, NULL);
+	    len = trans_special(&p, buf + off, FSK_SIMPLIFY, FALSE, NULL);
 	    if (len > 0)	    // recognized special char
 		off += len;
 	    else		    // copy as normal char
@@ -2134,7 +2141,7 @@ hl_do_font(
 	|| do_menu
 #  endif
 #  ifdef FEAT_BEVAL_TIP
-	// In Athena & Motif, the Tooltip highlight group is always a fontset
+	// In Motif, the Tooltip highlight group is always a fontset
 	|| do_tooltip
 #  endif
 	    )
@@ -2156,7 +2163,7 @@ hl_do_font(
 	// fontset.  Same for the Menu group.
 	if (do_normal)
 	    gui_init_font(arg, TRUE);
-#   if (defined(FEAT_GUI_MOTIF) || defined(FEAT_GUI_ATHENA)) && defined(FEAT_MENU)
+#   if defined(FEAT_GUI_MOTIF) && defined(FEAT_MENU)
 	if (do_menu)
 	{
 #    ifdef FONTSET_ALWAYS
@@ -2170,7 +2177,7 @@ hl_do_font(
 #    ifdef FEAT_BEVAL_GUI
 	if (do_tooltip)
 	{
-	    // The Athena widget set cannot currently handle switching between
+	    // The Athena widget set could not handle switching between
 	    // displaying a single font and a fontset.
 	    // If the XtNinternational resource is set to True at widget
 	    // creation, then a fontset is always used, otherwise an
@@ -2194,7 +2201,7 @@ hl_do_font(
 	    if (do_normal)
 		gui_init_font(arg, FALSE);
 #ifndef FONTSET_ALWAYS
-# if (defined(FEAT_GUI_MOTIF) || defined(FEAT_GUI_ATHENA)) && defined(FEAT_MENU)
+# if defined(FEAT_GUI_MOTIF) && defined(FEAT_MENU)
 	    if (do_menu)
 	    {
 		gui.menu_font = HL_TABLE()[idx].sg_font;
@@ -2355,7 +2362,7 @@ colorname2rgb(char_u *name)
     guicolor_T
 gui_get_color_cmn(char_u *name)
 {
-    int         i;
+    int		i;
     guicolor_T  color;
 
     struct rgbcolor_table_S {
@@ -2962,7 +2969,7 @@ highlight_list_arg(
     char_u	*sarg,
     char	*name)
 {
-    char_u	buf[100];
+    char_u	buf[MAX_ATTR_LEN];
     char_u	*ts;
     int		i;
 
@@ -2983,8 +2990,8 @@ highlight_list_arg(
 		if (iarg & hl_attr_table[i])
 		{
 		    if (buf[0] != NUL)
-			vim_strcat(buf, (char_u *)",", 100);
-		    vim_strcat(buf, (char_u *)hl_name_table[i], 100);
+			vim_strcat(buf, (char_u *)",", MAX_ATTR_LEN);
+		    vim_strcat(buf, (char_u *)hl_name_table[i], MAX_ATTR_LEN);
 		    iarg &= ~hl_attr_table[i];	    // don't want "inverse"
 		}
 	    }
@@ -3282,32 +3289,12 @@ set_hl_attr(
 	at_en.ae_u.cterm.bg_color = sgp->sg_cterm_bg;
 	at_en.ae_u.cterm.ul_color = sgp->sg_cterm_ul;
 # ifdef FEAT_TERMGUICOLORS
-#  ifdef MSWIN
-#   ifdef VIMDLL
-	// Only when not using the GUI.
-	if (!gui.in_use && !gui.starting)
-#   endif
-	{
-	    int id;
-	    guicolor_T fg, bg;
-
-	    id = syn_name2id((char_u *)"Normal");
-	    if (id > 0)
-	    {
-		syn_id2colors(id, &fg, &bg);
-		if (sgp->sg_gui_fg == INVALCOLOR)
-		    sgp->sg_gui_fg = fg;
-		if (sgp->sg_gui_bg == INVALCOLOR)
-		    sgp->sg_gui_bg = bg;
-	    }
-
-	}
-#  endif
 	at_en.ae_u.cterm.fg_rgb = GUI_MCH_GET_RGB2(sgp->sg_gui_fg);
 	at_en.ae_u.cterm.bg_rgb = GUI_MCH_GET_RGB2(sgp->sg_gui_bg);
 	// Only use the underline/undercurl color when used, it may clear the
 	// background color if not supported.
-	if (sgp->sg_cterm & (HL_UNDERLINE | HL_UNDERCURL))
+	if (sgp->sg_cterm & (HL_UNDERLINE | HL_UNDERCURL
+			   | HL_UNDERDOUBLE | HL_UNDERDOTTED | HL_UNDERDASHED))
 	    at_en.ae_u.cterm.ul_rgb = GUI_MCH_GET_RGB2(sgp->sg_gui_sp);
 	else
 	    at_en.ae_u.cterm.ul_rgb = INVALCOLOR;
@@ -3820,6 +3807,12 @@ highlight_changed(void)
 		    case 'u':	attr |= HL_UNDERLINE;
 				break;
 		    case 'c':	attr |= HL_UNDERCURL;
+				break;
+		    case '2':	attr |= HL_UNDERDOUBLE;
+				break;
+		    case 'd':	attr |= HL_UNDERDOTTED;
+				break;
+		    case '=':	attr |= HL_UNDERDASHED;
 				break;
 		    case 't':	attr |= HL_STRIKETHROUGH;
 				break;
@@ -4382,9 +4375,9 @@ hlg_add_or_update(dict_T *dict)
 {
     char_u	*name;
     int		error;
-    char_u	term_attr[80];
-    char_u	cterm_attr[80];
-    char_u	gui_attr[80];
+    char_u	term_attr[MAX_ATTR_LEN];
+    char_u	cterm_attr[MAX_ATTR_LEN];
+    char_u	gui_attr[MAX_ATTR_LEN];
     char_u	*start;
     char_u	*stop;
     char_u	*ctermfg;
@@ -4411,7 +4404,7 @@ hlg_add_or_update(dict_T *dict)
     if (dict_get_bool(dict, (char_u *)"default", VVAL_FALSE) == VVAL_TRUE)
 	dodefault = TRUE;
 
-    if (dict_find(dict, (char_u *)"cleared", -1) != NULL)
+    if (dict_has_key(dict, "cleared"))
     {
 	varnumber_T	cleared;
 
@@ -4425,7 +4418,7 @@ hlg_add_or_update(dict_T *dict)
 	}
     }
 
-    if (dict_find(dict, (char_u *)"linksto", -1) != NULL)
+    if (dict_has_key(dict, "linksto"))
     {
 	char_u	*linksto;
 

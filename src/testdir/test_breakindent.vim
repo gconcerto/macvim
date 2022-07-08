@@ -10,7 +10,9 @@ CheckOption breakindent
 source view_util.vim
 source screendump.vim
 
-let s:input ="\tabcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOP"
+func SetUp()
+  let s:input ="\tabcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOP"
+endfunc
 
 func s:screen_lines(lnum, width) abort
   return ScreenLines([a:lnum, a:lnum + 2], a:width)
@@ -797,12 +799,12 @@ func Test_breakindent20_list()
   call s:compare_lines(expect, lines)
   " check formatlistpat indent with different list levels
   let &l:flp = '^\s*\*\+\s\+'
-  redraw!
   %delete _
   call setline(1, ['* Congress shall make no law',
         \ '*** Congress shall make no law',
         \ '**** Congress shall make no law'])
   norm! 1gg
+  redraw!
   let expect = [
 	\ "* Congress shall    ",
 	\ "  make no law       ",
@@ -837,16 +839,17 @@ endfunc
 func Test_window_resize_with_linebreak()
   new
   53vnew
-  set linebreak
-  set showbreak=>>
-  set breakindent
-  set breakindentopt=shift:4
+  setl linebreak
+  setl showbreak=>>
+  setl breakindent
+  setl breakindentopt=shift:4
   call setline(1, "\naaaaaaaaa\n\na\naaaaa\n¯aaaaaaaaaa\naaaaaaaaaaaa\naaa\n\"a:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa - aaaaaaaa\"\naaaaaaaa\n\"a")
   redraw!
   call assert_equal(["    >>aa^@\"a: "], ScreenLines(2, 14))
   vertical resize 52
   redraw!
   call assert_equal(["    >>aaa^@\"a:"], ScreenLines(2, 14))
+  set linebreak& showbreak& breakindent& breakindentopt&
   %bw!
 endfunc
 
@@ -877,9 +880,9 @@ func Test_no_spurious_match()
   let @/ = '\%>3v[y]'
   redraw!
   call searchcount().total->assert_equal(1)
+
   " cleanup
   set hls&vim
-  let s:input = "\tabcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOP"
   bwipeout!
 endfunc
 
@@ -939,6 +942,57 @@ func Test_no_extra_indent()
   \ "~                   ",
   \ ]
   let lines = s:screen_lines2(1, 5, 20)
+  call s:compare_lines(expect, lines)
+  bwipeout!
+endfunc
+
+func Test_breakindent_column()
+  call s:test_windows('setl breakindent breakindentopt=column:10')
+  redraw!
+  " 1) default: does not indent, too wide :(
+  let expect = [
+  \ "                    ",
+  \ "    abcdefghijklmnop",
+  \ "qrstuvwxyzABCDEFGHIJ",
+  \ "KLMNOP              "
+  \ ]
+  let lines = s:screen_lines2(1, 4, 20)
+  call s:compare_lines(expect, lines)
+  " 2) lower min value, so that breakindent works
+  setl breakindentopt+=min:5
+  redraw!
+  let expect = [
+  \ "                    ",
+  \ "    abcdefghijklmnop",
+  \ "          qrstuvwxyz",
+  \ "          ABCDEFGHIJ",
+  \ "          KLMNOP    "
+  \ ]
+  let lines = s:screen_lines2(1, 5, 20)
+  " 3) set shift option -> no influence
+  setl breakindentopt+=shift:5
+  redraw!
+  let expect = [
+  \ "                    ",
+  \ "    abcdefghijklmnop",
+  \ "          qrstuvwxyz",
+  \ "          ABCDEFGHIJ",
+  \ "          KLMNOP    "
+  \ ]
+  let lines = s:screen_lines2(1, 5, 20)
+  call s:compare_lines(expect, lines)
+  " 4) add showbreak value
+  setl showbreak=++
+  redraw!
+  let expect = [
+  \ "                    ",
+  \ "    abcdefghijklmnop",
+  \ "          ++qrstuvwx",
+  \ "          ++yzABCDEF",
+  \ "          ++GHIJKLMN",
+  \ "          ++OP      "
+  \ ]
+  let lines = s:screen_lines2(1, 6, 20)
   call s:compare_lines(expect, lines)
   bwipeout!
 endfunc

@@ -73,6 +73,10 @@ typedef struct {
 							char_u *p2, int last);
 } cryptmethod_T;
 
+static int crypt_sodium_init(cryptstate_T *state, char_u *key, char_u *salt, int salt_len, char_u *seed, int seed_len);
+static long crypt_sodium_buffer_decode(cryptstate_T *state, char_u *from, size_t len, char_u **buf_out, int last);
+static long crypt_sodium_buffer_encode(cryptstate_T *state, char_u *from, size_t len, char_u **buf_out, int last);
+
 // index is method_nr of cryptstate_T, CRYPT_M_*
 static cryptmethod_T cryptmethods[CRYPT_M_COUNT] = {
     // PK_Zip; very weak
@@ -452,8 +456,8 @@ crypt_create(
     if (cryptmethods[method_nr].init_fn(
 	state, key, salt, salt_len, seed, seed_len) == FAIL)
     {
-        vim_free(state);
-        return NULL;
+	vim_free(state);
+	return NULL;
     }
     return state;
 }
@@ -692,7 +696,7 @@ crypt_encode_inplace(
     cryptstate_T *state,
     char_u	*buf,
     size_t	len,
-    int         last)
+    int		last)
 {
     cryptmethods[state->method_nr].encode_inplace_fn(state, buf, len,
 								    buf, last);
@@ -752,7 +756,7 @@ crypt_check_swapfile_curbuf(void)
 	// encryption uses padding and MAC, that does not work very well with
 	// swap and undo files, so disable them
 	mf_close_file(curbuf, TRUE);	// remove the swap file
-	set_option_value((char_u *)"swf", 0, NULL, OPT_LOCAL);
+	set_option_value_give_err((char_u *)"swf", 0, NULL, OPT_LOCAL);
 	msg_scroll = TRUE;
 	msg(_("Note: Encryption of swapfile not supported, disabling swap file"));
     }
@@ -807,7 +811,7 @@ crypt_get_key(
 
 	    if (store)
 	    {
-		set_option_value((char_u *)"key", 0L, p1, OPT_LOCAL);
+		set_option_value_give_err((char_u *)"key", 0L, p1, OPT_LOCAL);
 		crypt_free_key(p1);
 		p1 = curbuf->b_p_key;
 #ifdef FEAT_SODIUM
@@ -850,7 +854,7 @@ crypt_append_msg(
     }
 }
 
-    int
+    static int
 crypt_sodium_init(
     cryptstate_T	*state UNUSED,
     char_u		*key UNUSED,
@@ -1030,7 +1034,7 @@ fail:
  * Encrypt "from[len]" into "to[len]".
  * "from" and "to" can be equal to encrypt in place.
  */
-    long
+    static long
 crypt_sodium_buffer_encode(
     cryptstate_T *state UNUSED,
     char_u	*from UNUSED,
@@ -1080,7 +1084,7 @@ crypt_sodium_buffer_encode(
  * Decrypt "from[len]" into "to[len]".
  * "from" and "to" can be equal to encrypt in place.
  */
-    long
+    static long
 crypt_sodium_buffer_decode(
     cryptstate_T *state UNUSED,
     char_u	*from UNUSED,

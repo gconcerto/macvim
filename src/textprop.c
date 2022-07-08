@@ -287,7 +287,7 @@ prop_add_one(
 					    props + i * sizeof(textprop_T),
 					    sizeof(textprop_T) * (proplen - i));
 
-	if (buf->b_ml.ml_flags & ML_LINE_DIRTY)
+	if (buf->b_ml.ml_flags & (ML_LINE_DIRTY | ML_ALLOCATED))
 	    vim_free(buf->b_ml.ml_line_ptr);
 	buf->b_ml.ml_line_ptr = newtext;
 	buf->b_ml.ml_line_len += sizeof(textprop_T);
@@ -331,19 +331,23 @@ f_prop_add_list(typval_T *argvars, typval_T *rettv UNUSED)
     }
 
     dict = argvars[0].vval.v_dict;
-    if (dict == NULL || dict_find(dict, (char_u *)"type", -1) == NULL)
+    if (dict == NULL || !dict_has_key(dict, "type"))
     {
 	emsg(_(e_missing_property_type_name));
 	return;
     }
     type_name = dict_get_string(dict, (char_u *)"type", FALSE);
 
-    if (dict_find(dict, (char_u *)"id", -1) != NULL)
+    if (dict_has_key(dict, "id"))
 	id = dict_get_number(dict, (char_u *)"id");
 
     if (get_bufnr_from_arg(&argvars[0], &buf) == FAIL)
 	return;
 
+    // This must be done _before_ we start adding properties because property
+    // changes trigger buffer (memline) reorganisation, which needs this flag
+    // to be correctly set.
+    buf->b_has_textprop = TRUE;  // this is never reset
     FOR_ALL_LIST_ITEMS(argvars[1].vval.v_list, li)
     {
 	if (li->li_tv.v_type != VAR_LIST || li->li_tv.vval.v_list == NULL)
@@ -368,7 +372,6 @@ f_prop_add_list(typval_T *argvars, typval_T *rettv UNUSED)
 	    return;
     }
 
-    buf->b_has_textprop = TRUE;  // this is never reset
     redraw_buf_later(buf, VALID);
 }
 
@@ -391,14 +394,14 @@ prop_add_common(
     buf_T	*buf = default_buf;
     int		id = 0;
 
-    if (dict == NULL || dict_find(dict, (char_u *)"type", -1) == NULL)
+    if (dict == NULL || !dict_has_key(dict, "type"))
     {
 	emsg(_(e_missing_property_type_name));
 	return;
     }
     type_name = dict_get_string(dict, (char_u *)"type", FALSE);
 
-    if (dict_find(dict, (char_u *)"end_lnum", -1) != NULL)
+    if (dict_has_key(dict, "end_lnum"))
     {
 	end_lnum = dict_get_number(dict, (char_u *)"end_lnum");
 	if (end_lnum < start_lnum)
@@ -410,7 +413,7 @@ prop_add_common(
     else
 	end_lnum = start_lnum;
 
-    if (dict_find(dict, (char_u *)"length", -1) != NULL)
+    if (dict_has_key(dict, "length"))
     {
 	long length = dict_get_number(dict, (char_u *)"length");
 
@@ -421,7 +424,7 @@ prop_add_common(
 	}
 	end_col = start_col + length;
     }
-    else if (dict_find(dict, (char_u *)"end_col", -1) != NULL)
+    else if (dict_has_key(dict, "end_col"))
     {
 	end_col = dict_get_number(dict, (char_u *)"end_col");
 	if (end_col <= 0)
@@ -435,15 +438,19 @@ prop_add_common(
     else
 	end_col = 1;
 
-    if (dict_find(dict, (char_u *)"id", -1) != NULL)
+    if (dict_has_key(dict, "id"))
 	id = dict_get_number(dict, (char_u *)"id");
 
     if (dict_arg != NULL && get_bufnr_from_arg(dict_arg, &buf) == FAIL)
 	return;
 
+    // This must be done _before_ we add the property because property changes
+    // trigger buffer (memline) reorganisation, which needs this flag to be
+    // correctly set.
+    buf->b_has_textprop = TRUE;  // this is never reset
+
     prop_add_one(buf, type_name, id, start_lnum, end_lnum, start_col, end_col);
 
-    buf->b_has_textprop = TRUE;  // this is never reset
     redraw_buf_later(buf, VALID);
 }
 
@@ -557,7 +564,7 @@ set_text_props(linenr_T lnum, char_u *props, int len)
     mch_memmove(newtext, text, textlen);
     if (len > 0)
 	mch_memmove(newtext + textlen, props, len);
-    if (curbuf->b_ml.ml_flags & ML_LINE_DIRTY)
+    if (curbuf->b_ml.ml_flags & (ML_LINE_DIRTY | ML_ALLOCATED))
 	vim_free(curbuf->b_ml.ml_line_ptr);
     curbuf->b_ml.ml_line_ptr = newtext;
     curbuf->b_ml.ml_line_len = textlen + len;
@@ -691,6 +698,8 @@ f_prop_clear(typval_T *argvars, typval_T *rettv UNUSED)
 		// need to allocate the line now
 		if (newtext == NULL)
 		    return;
+		if (buf->b_ml.ml_flags & ML_ALLOCATED)
+		    vim_free(buf->b_ml.ml_line_ptr);
 		buf->b_ml.ml_line_ptr = newtext;
 		buf->b_ml.ml_flags |= ML_LINE_DIRTY;
 	    }
@@ -713,14 +722,14 @@ f_prop_find(typval_T *argvars, typval_T *rettv)
     dictitem_T  *di;
     int		lnum_start;
     int		start_pos_has_prop = 0;
-    int		seen_end = 0;
+    int		seen_end = FALSE;
     int		id = 0;
     int		id_found = FALSE;
     int		type_id = -1;
-    int		skipstart = 0;
+    int		skipstart = FALSE;
     int		lnum = -1;
     int		col = -1;
-    int		dir = 1;    // 1 = forward, -1 = backward
+    int		dir = FORWARD;    // FORWARD == 1, BACKWARD == -1
     int		both;
 
     if (in_vim9script()
@@ -745,7 +754,7 @@ f_prop_find(typval_T *argvars, typval_T *rettv)
 	char_u      *dir_s = tv_get_string(&argvars[1]);
 
 	if (*dir_s == 'b')
-	    dir = -1;
+	    dir = BACKWARD;
 	else if (*dir_s != 'f')
 	{
 	    emsg(_(e_invalid_argument));
@@ -777,12 +786,12 @@ f_prop_find(typval_T *argvars, typval_T *rettv)
 
     skipstart = dict_get_bool(dict, (char_u *)"skipstart", 0);
 
-    if (dict_find(dict, (char_u *)"id", -1) != NULL)
+    if (dict_has_key(dict, "id"))
     {
 	id = dict_get_number(dict, (char_u *)"id");
 	id_found = TRUE;
     }
-    if (dict_find(dict, (char_u *)"type", -1))
+    if (dict_has_key(dict, "type"))
     {
 	char_u	    *name = dict_get_string(dict, (char_u *)"type", FALSE);
 	proptype_T  *type = lookup_prop_type(name, buf);
@@ -819,17 +828,19 @@ f_prop_find(typval_T *argvars, typval_T *rettv)
 	int	    prop_start;
 	int	    prop_end;
 
-	for (i = 0; i < count; ++i)
+	for (i = dir == BACKWARD ? count - 1 : 0; i >= 0 && i < count; i += dir)
 	{
 	    mch_memmove(&prop, text + textlen + i * sizeof(textprop_T),
-			    sizeof(textprop_T));
+							   sizeof(textprop_T));
 
+	    // For the very first line try to find the first property before or
+	    // after `col`, depending on the search direction.
 	    if (lnum == lnum_start)
 	    {
-		if (dir < 0)
+		if (dir == BACKWARD)
 		{
-		    if (col < prop.tp_col)
-			break;
+		    if (prop.tp_col > col)
+			continue;
 		}
 		else if (prop.tp_col + prop.tp_len - (prop.tp_len != 0) < col)
 		    continue;
@@ -845,9 +856,13 @@ f_prop_find(typval_T *argvars, typval_T *rettv)
 							 - (prop.tp_len != 0)))
 		    start_pos_has_prop = 1;
 
+		// The property was not continued from last line, it starts on
+		// this line.
 		prop_start = !(prop.tp_flags & TP_FLAG_CONT_PREV);
+		// The property does not continue on the next line, it ends on
+		// this line.
 		prop_end = !(prop.tp_flags & TP_FLAG_CONT_NEXT);
-		if (!prop_start && prop_end && dir > 0)
+		if (!prop_start && prop_end && dir == FORWARD)
 		    seen_end = 1;
 
 		// Skip lines without the start flag.
@@ -856,7 +871,7 @@ f_prop_find(typval_T *argvars, typval_T *rettv)
 		    // Always search backwards for start when search started
 		    // on a prop and we're not skipping.
 		    if (start_pos_has_prop && !skipstart)
-			dir = -1;
+			dir = BACKWARD;
 		    continue;
 		}
 
@@ -887,8 +902,6 @@ f_prop_find(typval_T *argvars, typval_T *rettv)
 		break;
 	    lnum--;
 	}
-	// Adjust col to indicate that we're continuing from prev/next line.
-	col = dir < 0 ? buf->b_ml.ml_line_len : 1;
     }
 }
 
@@ -1065,7 +1078,7 @@ f_prop_list(typval_T *argvars, typval_T *rettv)
 		|| check_for_opt_dict_arg(argvars, 1) == FAIL))
 	return;
 
-    if (rettv_list_alloc(rettv) != OK)
+    if (rettv_list_alloc(rettv) == FAIL)
 	return;
 
     // default: get text properties on current line
@@ -1202,9 +1215,9 @@ f_prop_remove(typval_T *argvars, typval_T *rettv)
 
     do_all = dict_get_bool(dict, (char_u *)"all", FALSE);
 
-    if (dict_find(dict, (char_u *)"id", -1) != NULL)
+    if (dict_has_key(dict, "id"))
 	id = dict_get_number(dict, (char_u *)"id");
-    if (dict_find(dict, (char_u *)"type", -1))
+    if (dict_has_key(dict, "type"))
     {
 	char_u	    *name = dict_get_string(dict, (char_u *)"type", FALSE);
 	proptype_T  *type = lookup_prop_type(name, buf);
@@ -1262,6 +1275,8 @@ f_prop_remove(typval_T *argvars, typval_T *rettv)
 			    return;
 			mch_memmove(newptr, buf->b_ml.ml_line_ptr,
 							buf->b_ml.ml_line_len);
+			if (buf->b_ml.ml_flags & ML_ALLOCATED)
+			    vim_free(buf->b_ml.ml_line_ptr);
 			buf->b_ml.ml_line_ptr = newptr;
 			buf->b_ml.ml_flags |= ML_LINE_DIRTY;
 
@@ -1646,11 +1661,12 @@ adjust_prop(
     proptype_T	*pt = text_prop_type_by_id(curbuf, prop->tp_type);
     int		start_incl = (pt != NULL
 				    && (pt->pt_flags & PT_FLAG_INS_START_INCL))
-						   || (flags & APC_SUBSTITUTE);
+				|| (flags & APC_SUBSTITUTE)
+				|| (prop->tp_flags & TP_FLAG_CONT_PREV);
     int		end_incl = (pt != NULL
-				     && (pt->pt_flags & PT_FLAG_INS_END_INCL));
-		// Do not drop zero-width props if they later can increase in
-		// size.
+				      && (pt->pt_flags & PT_FLAG_INS_END_INCL))
+				|| (prop->tp_flags & TP_FLAG_CONT_NEXT);
+    // Do not drop zero-width props if they later can increase in size.
     int		droppable = !(start_incl || end_incl);
     adjustres_T res = {TRUE, FALSE};
 
@@ -1754,8 +1770,13 @@ adjust_prop_columns(
 	colnr_T newlen = (int)textlen + wi * (colnr_T)sizeof(textprop_T);
 
 	if ((curbuf->b_ml.ml_flags & ML_LINE_DIRTY) == 0)
-	    curbuf->b_ml.ml_line_ptr =
-				 vim_memsave(curbuf->b_ml.ml_line_ptr, newlen);
+	{
+	    char_u *p = vim_memsave(curbuf->b_ml.ml_line_ptr, newlen);
+
+	    if (curbuf->b_ml.ml_flags & ML_ALLOCATED)
+		vim_free(curbuf->b_ml.ml_line_ptr);
+	    curbuf->b_ml.ml_line_ptr = p;
+	}
 	curbuf->b_ml.ml_flags |= ML_LINE_DIRTY;
 	curbuf->b_ml.ml_line_len = newlen;
     }

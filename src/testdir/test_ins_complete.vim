@@ -140,6 +140,30 @@ func Test_omni_dash()
   set omnifunc=
 endfunc
 
+func Test_omni_throw()
+  let g:CallCount = 0
+  func Omni(findstart, base)
+    let g:CallCount += 1
+    if a:findstart
+      throw "he he he"
+    endif
+  endfunc
+  set omnifunc=Omni
+  new
+  try
+    exe "normal ifoo\<C-x>\<C-o>"
+    call assert_false(v:true, 'command should have failed')
+  catch
+    call assert_exception('he he he')
+    call assert_equal(1, g:CallCount)
+  endtry
+
+  bwipe!
+  delfunc Omni
+  unlet g:CallCount
+  set omnifunc=
+endfunc
+
 func Test_omni_autoload()
   let save_rtp = &rtp
   set rtp=Xruntime/some
@@ -392,100 +416,6 @@ func Test_compl_feedkeys()
   set completeopt&
 endfunc
 
-func s:ComplInCmdwin_GlobalCompletion(a, l, p)
-  return 'global'
-endfunc
-
-func s:ComplInCmdwin_LocalCompletion(a, l, p)
-  return 'local'
-endfunc
-
-func Test_compl_in_cmdwin()
-  CheckFeature cmdwin
-
-  set wildmenu wildchar=<Tab>
-  com! -nargs=1 -complete=command GetInput let input = <q-args>
-  com! -buffer TestCommand echo 'TestCommand'
-  let w:test_winvar = 'winvar'
-  let b:test_bufvar = 'bufvar'
-
-  " User-defined commands
-  let input = ''
-  call feedkeys("q:iGetInput T\<C-x>\<C-v>\<CR>", 'tx!')
-  call assert_equal('TestCommand', input)
-
-  let input = ''
-  call feedkeys("q::GetInput T\<Tab>\<CR>:q\<CR>", 'tx!')
-  call assert_equal('T', input)
-
-
-  com! -nargs=1 -complete=var GetInput let input = <q-args>
-  " Window-local variables
-  let input = ''
-  call feedkeys("q:iGetInput w:test_\<C-x>\<C-v>\<CR>", 'tx!')
-  call assert_equal('w:test_winvar', input)
-
-  let input = ''
-  call feedkeys("q::GetInput w:test_\<Tab>\<CR>:q\<CR>", 'tx!')
-  call assert_equal('w:test_', input)
-
-  " Buffer-local variables
-  let input = ''
-  call feedkeys("q:iGetInput b:test_\<C-x>\<C-v>\<CR>", 'tx!')
-  call assert_equal('b:test_bufvar', input)
-
-  let input = ''
-  call feedkeys("q::GetInput b:test_\<Tab>\<CR>:q\<CR>", 'tx!')
-  call assert_equal('b:test_', input)
-
-
-  " Argument completion of buffer-local command
-  func s:ComplInCmdwin_GlobalCompletionList(a, l, p)
-    return ['global']
-  endfunc
-
-  func s:ComplInCmdwin_LocalCompletionList(a, l, p)
-    return ['local']
-  endfunc
-
-  func s:ComplInCmdwin_CheckCompletion(arg)
-    call assert_equal('local', a:arg)
-  endfunc
-
-  com! -nargs=1 -complete=custom,<SID>ComplInCmdwin_GlobalCompletion
-       \ TestCommand call s:ComplInCmdwin_CheckCompletion(<q-args>)
-  com! -buffer -nargs=1 -complete=custom,<SID>ComplInCmdwin_LocalCompletion
-       \ TestCommand call s:ComplInCmdwin_CheckCompletion(<q-args>)
-  call feedkeys("q:iTestCommand \<Tab>\<CR>", 'tx!')
-
-  com! -nargs=1 -complete=customlist,<SID>ComplInCmdwin_GlobalCompletionList
-       \ TestCommand call s:ComplInCmdwin_CheckCompletion(<q-args>)
-  com! -buffer -nargs=1 -complete=customlist,<SID>ComplInCmdwin_LocalCompletionList
-       \ TestCommand call s:ComplInCmdwin_CheckCompletion(<q-args>)
-
-  call feedkeys("q:iTestCommand \<Tab>\<CR>", 'tx!')
-
-  func! s:ComplInCmdwin_CheckCompletion(arg)
-    call assert_equal('global', a:arg)
-  endfunc
-  new
-  call feedkeys("q:iTestCommand \<Tab>\<CR>", 'tx!')
-  quit
-
-  delfunc s:ComplInCmdwin_GlobalCompletion
-  delfunc s:ComplInCmdwin_LocalCompletion
-  delfunc s:ComplInCmdwin_GlobalCompletionList
-  delfunc s:ComplInCmdwin_LocalCompletionList
-  delfunc s:ComplInCmdwin_CheckCompletion
-
-  delcom -buffer TestCommand
-  delcom TestCommand
-  delcom GetInput
-  unlet w:test_winvar
-  unlet b:test_bufvar
-  set wildmenu& wildchar&
-endfunc
-
 " Test for insert path completion with completeslash option
 func Test_ins_completeslash()
   CheckMSWindows
@@ -553,6 +483,15 @@ func Test_pum_stopped_by_timer()
 
   call StopVimInTerminal(buf)
   call delete('Xpumscript')
+endfunc
+
+func Test_complete_stopinsert_startinsert()
+  nnoremap <F2> <Cmd>startinsert<CR>
+  inoremap <F2> <Cmd>stopinsert<CR>
+  " This just checks if this causes an error
+  call feedkeys("i\<C-X>\<C-N>\<F2>\<F2>", 'x')
+  nunmap <F2>
+  iunmap <F2>
 endfunc
 
 func Test_pum_with_folds_two_tabs()
@@ -665,7 +604,7 @@ func Test_completefunc_error()
   endfunc
   set completefunc=CompleteFunc
   call setline(1, ['', 'abcd', ''])
-  call assert_fails('exe "normal 2G$a\<C-X>\<C-U>"', 'E578:')
+  call assert_fails('exe "normal 2G$a\<C-X>\<C-U>"', 'E565:')
 
   " delete text when called for the second time
   func CompleteFunc2(findstart, base)
@@ -677,7 +616,7 @@ func Test_completefunc_error()
   endfunc
   set completefunc=CompleteFunc2
   call setline(1, ['', 'abcd', ''])
-  call assert_fails('exe "normal 2G$a\<C-X>\<C-U>"', 'E578:')
+  call assert_fails('exe "normal 2G$a\<C-X>\<C-U>"', 'E565:')
 
   " Jump to a different window from the complete function
   func CompleteFunc3(findstart, base)
@@ -2130,6 +2069,32 @@ func Test_thesaurusfunc_callback()
   delfunc TsrFunc2
   unlet g:TsrFunc1Args g:TsrFunc2Args
   %bw!
+endfunc
+
+func FooBarComplete(findstart, base)
+  if a:findstart
+    return col('.') - 1
+  else
+    return ["Foo", "Bar", "}"]
+  endif
+endfunc
+
+func Test_complete_smartindent()
+  new
+  setlocal smartindent completefunc=FooBarComplete
+
+  exe "norm! o{\<cr>\<c-x>\<c-u>\<c-p>}\<cr>\<esc>"
+  let result = getline(1,'$')
+  call assert_equal(['', '{','}',''], result)
+  bw!
+  delfunction! FooBarComplete
+endfunc
+
+func Test_complete_overrun()
+  " this was going past the end of the copied text
+  new
+  sil norm si0s0
+  bwipe!
 endfunc
 
 " vim: shiftwidth=2 sts=2 expandtab

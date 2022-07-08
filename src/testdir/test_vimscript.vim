@@ -3025,7 +3025,7 @@ func Test_nested_if_else_errors()
 
   " :elseif without :if
   let code =<< trim END
-    elseif
+    elseif 1
   END
   call writefile(code, 'Xtest')
   call AssertException(['source Xtest'], 'Vim(elseif):E582: :elseif without :if')
@@ -3033,7 +3033,7 @@ func Test_nested_if_else_errors()
   " :elseif without :if
   let code =<< trim END
     while 1
-      elseif
+      elseif 1
     endwhile
   END
   call writefile(code, 'Xtest')
@@ -3043,7 +3043,7 @@ func Test_nested_if_else_errors()
   let code =<< trim END
     try
     finally
-      elseif
+      elseif 1
     endtry
   END
   call writefile(code, 'Xtest')
@@ -3052,7 +3052,7 @@ func Test_nested_if_else_errors()
   " :elseif without :if
   let code =<< trim END
     try
-      elseif
+      elseif 1
     endtry
   END
   call writefile(code, 'Xtest')
@@ -3063,7 +3063,7 @@ func Test_nested_if_else_errors()
     try
       throw "a"
     catch /a/
-      elseif
+      elseif 1
     endtry
   END
   call writefile(code, 'Xtest')
@@ -3077,7 +3077,7 @@ func Test_nested_if_else_errors()
     endif
   END
   call writefile(code, 'Xtest')
-  call AssertException(['source Xtest'], 'Vim(else):E583: multiple :else')
+  call AssertException(['source Xtest'], 'Vim(else):E583: Multiple :else')
 
   " :elseif after :else
   let code =<< trim END
@@ -7526,6 +7526,25 @@ func Test_for_over_string()
     let res ..= c .. '-'
   endfor
   call assert_equal('', res)
+endfunc
+
+" Test for deeply nested :source command  {{{1
+func Test_deeply_nested_source()
+  let lines =<< trim END
+
+      so
+      sil 0scr
+      delete
+      so
+      0
+  END
+  call writefile(["vim9 silent! @0 \n/"] + lines, 'Xnested.vim')
+
+  " this must not crash
+  let cmd = GetVimCommand() .. " -e -s -S Xnested.vim -c qa!"
+  call system(cmd)
+
+  call delete('Xnested.vim')
 endfunc
 
 "-------------------------------------------------------------------------------

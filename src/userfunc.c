@@ -32,6 +32,7 @@ static funccall_T *previous_funccal = NULL;
 static void funccal_unref(funccall_T *fc, ufunc_T *fp, int force);
 static void func_clear(ufunc_T *fp, int force);
 static int func_free(ufunc_T *fp, int force);
+static char_u *untrans_function_name(char_u *name);
 
     void
 func_init()
@@ -1051,48 +1052,63 @@ get_function_body(
 		    skip_until = vim_strnsave(p, skiptowhite(p) - p);
 		getline_options = GETLINE_NONE;
 		is_heredoc = TRUE;
-		if (eap->cmdidx == CMD_def)
+		if (eap->cmdidx == CMD_def && nesting == 0)
 		    heredoc_concat_len = newlines->ga_len + 1;
 	    }
 
-	    // Check for ":cmd v =<< [trim] EOF"
-	    //       and ":cmd [a, b] =<< [trim] EOF"
-	    //       and "lines =<< [trim] EOF" for Vim9
-	    // Where "cmd" can be "let", "var", "final" or "const".
-	    arg = skipwhite(skiptowhite(p));
-	    if (*arg == '[')
-		arg = vim_strchr(arg, ']');
-	    if (arg != NULL)
+	    if (!is_heredoc)
 	    {
-		int found = (eap->cmdidx == CMD_def && arg[0] == '='
+		// Check for ":cmd v =<< [trim] EOF"
+		//       and ":cmd [a, b] =<< [trim] EOF"
+		//       and "lines =<< [trim] EOF" for Vim9
+		// Where "cmd" can be "let", "var", "final" or "const".
+		arg = skipwhite(skiptowhite(p));
+		if (*arg == '[')
+		    arg = vim_strchr(arg, ']');
+		if (arg != NULL)
+		{
+		    int found = (eap->cmdidx == CMD_def && arg[0] == '='
 					     && arg[1] == '<' && arg[2] =='<');
 
-		if (!found)
-		    // skip over the argument after "cmd"
-		    arg = skipwhite(skiptowhite(arg));
-		if (found || (arg[0] == '=' && arg[1] == '<' && arg[2] =='<'
-			&& (checkforcmd(&p, "let", 2)
-			    || checkforcmd(&p, "var", 3)
-			    || checkforcmd(&p, "final", 5)
-			    || checkforcmd(&p, "const", 5))))
-		{
-		    p = skipwhite(arg + 3);
-		    if (STRNCMP(p, "trim", 4) == 0)
+		    if (!found)
+			// skip over the argument after "cmd"
+			arg = skipwhite(skiptowhite(arg));
+		    if (found || (arg[0] == '=' && arg[1] == '<'
+								&& arg[2] =='<'
+			    && (checkforcmd(&p, "let", 2)
+				|| checkforcmd(&p, "var", 3)
+				|| checkforcmd(&p, "final", 5)
+				|| checkforcmd(&p, "const", 5))))
 		    {
-			// Ignore leading white space.
-			p = skipwhite(p + 4);
-			heredoc_trimmed = vim_strnsave(theline,
-						 skipwhite(theline) - theline);
+			p = skipwhite(arg + 3);
+			while (TRUE)
+			{
+			    if (STRNCMP(p, "trim", 4) == 0)
+			    {
+				// Ignore leading white space.
+				p = skipwhite(p + 4);
+				heredoc_trimmed = vim_strnsave(theline,
+					skipwhite(theline) - theline);
+				continue;
+			    }
+			    if (STRNCMP(p, "eval", 4) == 0)
+			    {
+				// Ignore leading white space.
+				p = skipwhite(p + 4);
+				continue;
+			    }
+			    break;
+			}
+			skip_until = vim_strnsave(p, skiptowhite(p) - p);
+			getline_options = GETLINE_NONE;
+			is_heredoc = TRUE;
 		    }
-		    skip_until = vim_strnsave(p, skiptowhite(p) - p);
-		    getline_options = GETLINE_NONE;
-		    is_heredoc = TRUE;
 		}
 	    }
 	}
 
 	// Add the line to the function.
-	if (ga_grow(newlines, 1 + sourcing_lnum_off) == FAIL)
+	if (ga_grow_id(newlines, 1 + sourcing_lnum_off, aid_get_func) == FAIL)
 	    goto theend;
 
 	if (heredoc_concat_len > 0)
@@ -1362,6 +1378,7 @@ get_lambda_tv(
     int		white_error = FALSE;
     int		called_emsg_start = called_emsg;
     int		vim9script = in_vim9script();
+    long	start_lnum = SOURCING_LNUM;
 
     if (equal_arrow && !vim9script)
 	return NOTDONE;
@@ -1422,6 +1439,7 @@ get_lambda_tv(
 	if (evalarg == NULL)
 	    // cannot happen?
 	    goto theend;
+	SOURCING_LNUM = start_lnum;  // used for where lambda is defined
 	if (lambda_function_body(arg, rettv, evalarg, pnewargs,
 			   types_optional ? &argtypes : NULL, varargs,
 			   &default_args, ret_type) == FAIL)
@@ -1552,7 +1570,8 @@ get_lambda_tv(
 	fp->uf_flags = flags;
 	fp->uf_calls = 0;
 	fp->uf_script_ctx = current_sctx;
-	fp->uf_script_ctx.sc_lnum += SOURCING_LNUM - newlines.ga_len + 1;
+	// Use the line number of the arguments.
+	fp->uf_script_ctx.sc_lnum += start_lnum;
 
 	function_using_block_scopes(fp, evalarg->eval_cstack);
 
@@ -1697,7 +1716,7 @@ deref_func_name(
 	{
 	    if (!did_type && type != NULL && ht == get_script_local_ht())
 	    {
-		svar_T  *sv = find_typval_in_script(tv, 0);
+		svar_T  *sv = find_typval_in_script(tv, 0, TRUE);
 
 		if (sv != NULL)
 		    *type = sv->sv_type;
@@ -2497,7 +2516,7 @@ copy_func(char_u *lambda, char_u *global, ectx_T *ectx)
 	    goto failed;
 	if (fill_partial_and_closure(pt, ufunc, ectx) == FAIL)
 	{
-            vim_free(pt);
+	    vim_free(pt);
 	    goto failed;
 	}
 	ufunc->uf_partial = pt;
@@ -3002,6 +3021,15 @@ call_user_func_check(
 	dict_T	    *selfdict)
 {
     int error;
+
+#ifdef FEAT_LUA
+    if (fp->uf_flags & FC_CFUNC)
+    {
+	cfunc_T cb = fp->uf_cb;
+
+	return (*cb)(argcount, argvars, rettv, fp->uf_cb_state);
+    }
+#endif
 
     if (fp->uf_flags & FC_RANGE && funcexe->fe_doesrange != NULL)
 	*funcexe->fe_doesrange = TRUE;
@@ -3566,14 +3594,6 @@ call_func(
 
 	    if (fp != NULL && (fp->uf_flags & FC_DELETED))
 		error = FCERR_DELETED;
-#ifdef FEAT_LUA
-	    else if (fp != NULL && (fp->uf_flags & FC_CFUNC))
-	    {
-		cfunc_T cb = fp->uf_cb;
-
-		error = (*cb)(argcount, argvars, rettv, fp->uf_cb_state);
-	    }
-#endif
 	    else if (fp != NULL)
 	    {
 		if (funcexe->fe_argv_func != NULL)
@@ -3696,9 +3716,12 @@ list_func_head(ufunc_T *fp, int indent)
     }
     if (fp->uf_va_name != NULL)
     {
-	if (j)
-	    msg_puts(", ");
-	msg_puts("...");
+	if (!fp->uf_varargs)
+	{
+	    if (j)
+		msg_puts(", ");
+	    msg_puts("...");
+	}
 	msg_puts((char *)fp->uf_va_name);
 	if (fp->uf_va_type != NULL)
 	{
@@ -4051,7 +4074,7 @@ theend:
  * This can be used to first search for a script-local function and fall back
  * to the global function if not found.
  */
-    char_u *
+    static char_u *
 untrans_function_name(char_u *name)
 {
     char_u *p;
@@ -4976,36 +4999,116 @@ ex_function(exarg_T *eap)
 }
 
 /*
+ * Find a function by name, including "<lambda>123".
+ * Check for "profile" and "debug" arguments and set"compile_type".
+ * Caller should initialize "compile_type" to CT_NONE.
+ * Return NULL if not found.
+ */
+    ufunc_T *
+find_func_by_name(char_u *name, compiletype_T *compile_type)
+{
+    char_u	*arg = name;
+    char_u	*fname;
+    ufunc_T	*ufunc;
+    int		is_global = FALSE;
+
+    if (STRNCMP(arg, "profile", 7) == 0 && VIM_ISWHITE(arg[7]))
+    {
+	*compile_type = CT_PROFILE;
+	arg = skipwhite(arg + 7);
+    }
+    else if (STRNCMP(arg, "debug", 5) == 0 && VIM_ISWHITE(arg[5]))
+    {
+	*compile_type = CT_DEBUG;
+	arg = skipwhite(arg + 5);
+    }
+
+    if (STRNCMP(arg, "<lambda>", 8) == 0)
+    {
+	arg += 8;
+	(void)getdigits(&arg);
+	fname = vim_strnsave(name, arg - name);
+    }
+    else
+	fname = trans_function_name(&arg, &is_global, FALSE,
+		      TFN_INT | TFN_QUIET | TFN_NO_AUTOLOAD, NULL, NULL, NULL);
+    if (fname == NULL)
+    {
+	semsg(_(e_invalid_argument_str), name);
+	return NULL;
+    }
+    if (!ends_excmd2(name, arg))
+    {
+	vim_free(fname);
+	emsg(ex_errmsg(e_trailing_characters_str, arg));
+	return NULL;
+    }
+
+    ufunc = find_func(fname, is_global);
+    if (ufunc == NULL)
+    {
+	char_u *p = untrans_function_name(fname);
+
+	if (p != NULL)
+	    // Try again without making it script-local.
+	    ufunc = find_func(p, FALSE);
+    }
+    vim_free(fname);
+    if (ufunc == NULL)
+	semsg(_(e_cannot_find_function_str), name);
+    return ufunc;
+}
+
+/*
  * :defcompile - compile all :def functions in the current script that need to
- * be compiled.  Except dead functions.  Doesn't do profiling.
+ * be compiled or the one specified by the argument.
+ * Skips dead functions.  Doesn't do profiling.
  */
     void
-ex_defcompile(exarg_T *eap UNUSED)
+ex_defcompile(exarg_T *eap)
 {
-    long	todo = (long)func_hashtab.ht_used;
-    int		changed = func_hashtab.ht_changed;
-    hashitem_T	*hi;
     ufunc_T	*ufunc;
 
-    for (hi = func_hashtab.ht_array; todo > 0 && !got_int; ++hi)
+    if (*eap->arg != NUL)
     {
-	if (!HASHITEM_EMPTY(hi))
-	{
-	    --todo;
-	    ufunc = HI2UF(hi);
-	    if (ufunc->uf_script_ctx.sc_sid == current_sctx.sc_sid
-		    && ufunc->uf_def_status == UF_TO_BE_COMPILED
-		    && (ufunc->uf_flags & FC_DEAD) == 0)
-	    {
-		(void)compile_def_function(ufunc, FALSE, CT_NONE, NULL);
+	compiletype_T compile_type = CT_NONE;
 
-		if (func_hashtab.ht_changed != changed)
+	ufunc = find_func_by_name(eap->arg, &compile_type);
+	if (ufunc != NULL)
+	{
+	    if (func_needs_compiling(ufunc, compile_type))
+		(void)compile_def_function(ufunc, FALSE, compile_type, NULL);
+	    else
+		smsg(_("Function %s does not need compiling"), eap->arg);
+	}
+    }
+    else
+    {
+	long	todo = (long)func_hashtab.ht_used;
+	int		changed = func_hashtab.ht_changed;
+	hashitem_T	*hi;
+
+	for (hi = func_hashtab.ht_array; todo > 0 && !got_int; ++hi)
+	{
+	    if (!HASHITEM_EMPTY(hi))
+	    {
+		--todo;
+		ufunc = HI2UF(hi);
+		if (ufunc->uf_script_ctx.sc_sid == current_sctx.sc_sid
+			&& ufunc->uf_def_status == UF_TO_BE_COMPILED
+			&& (ufunc->uf_flags & FC_DEAD) == 0)
 		{
-		    // a function has been added or removed, need to start over
-		    todo = (long)func_hashtab.ht_used;
-		    changed = func_hashtab.ht_changed;
-		    hi = func_hashtab.ht_array;
-		    --hi;
+		    (void)compile_def_function(ufunc, FALSE, CT_NONE, NULL);
+
+		    if (func_hashtab.ht_changed != changed)
+		    {
+			// a function has been added or removed, need to start
+			// over
+			todo = (long)func_hashtab.ht_used;
+			changed = func_hashtab.ht_changed;
+			hi = func_hashtab.ht_array;
+			--hi;
+		    }
 		}
 	    }
 	}
@@ -5518,7 +5621,6 @@ ex_call(exarg_T *eap)
     }
     if (eap->skip)
 	--emsg_skip;
-    clear_evalarg(&evalarg, eap);
 
     // When inside :try we need to check for following "| catch" or "| endtry".
     // Not when there was an error, but do check if an exception was thrown.
@@ -5538,6 +5640,8 @@ ex_call(exarg_T *eap)
 	else
 	    set_nextcmd(eap, arg);
     }
+    // Must be after using "arg", it may point into memory cleared here.
+    clear_evalarg(&evalarg, eap);
 
 end:
     dict_unref(fudi.fd_dict);

@@ -443,6 +443,25 @@ get_user_cmd_complete(expand_T *xp UNUSED, int idx)
 }
 
 #ifdef FEAT_EVAL
+/*
+ * Get the name of completion type "expand" as a string.
+ */
+    char_u *
+cmdcomplete_type_to_str(int expand)
+{
+    int i;
+
+    for (i = 0; command_complete[i].expand != 0; i++)
+	if (command_complete[i].expand == expand)
+	    return (char_u *)command_complete[i].name;
+
+    return NULL;
+}
+
+/*
+ * Get the index of completion type "complete_str".
+ * Returns EXPAND_NOTHING if no match found.
+ */
     int
 cmdcomplete_str_to_type(char_u *complete_str)
 {
@@ -1473,10 +1492,23 @@ produce_cmdmods(char_u *buf, cmdmod_T *cmod, int quote)
 			(cmod->cmod_flags & CMOD_ERRSILENT) ? "silent!"
 						      : "silent", &multi_mods);
     // :verbose
-    if (p_verbose > 0)
-	result += add_cmd_modifier(buf, "verbose", &multi_mods);
+    if (cmod->cmod_verbose > 0)
+    {
+	int verbose_value = cmod->cmod_verbose - 1;
+
+	if (verbose_value == 1)
+	    result += add_cmd_modifier(buf, "verbose", &multi_mods);
+	else
+	{
+	    char verbose_buf[NUMBUFLEN];
+
+	    sprintf(verbose_buf, "%dverbose", verbose_value);
+	    result += add_cmd_modifier(buf, verbose_buf, &multi_mods);
+	}
+    }
     // flags from cmod->cmod_split
     result += add_win_cmd_modifers(buf, cmod, &multi_mods);
+
     if (quote && buf != NULL)
     {
 	buf += result - 2;

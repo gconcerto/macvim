@@ -40,14 +40,11 @@
 #define PV_BL		OPT_BUF(BV_BL)
 #define PV_BOMB		OPT_BUF(BV_BOMB)
 #define PV_CI		OPT_BUF(BV_CI)
-#ifdef FEAT_CINDENT
-# define PV_CIN		OPT_BUF(BV_CIN)
-# define PV_CINK	OPT_BUF(BV_CINK)
-# define PV_CINO	OPT_BUF(BV_CINO)
-#endif
-#if defined(FEAT_SMARTINDENT) || defined(FEAT_CINDENT)
-# define PV_CINW	OPT_BUF(BV_CINW)
-#endif
+#define PV_CIN		OPT_BUF(BV_CIN)
+#define PV_CINK	OPT_BUF(BV_CINK)
+#define PV_CINO	OPT_BUF(BV_CINO)
+#define PV_CINSD	OPT_BUF(BV_CINSD)
+#define PV_CINW	OPT_BUF(BV_CINW)
 #define PV_CM		OPT_BOTH(OPT_BUF(BV_CM))
 #ifdef FEAT_FOLDING
 # define PV_CMS		OPT_BUF(BV_CMS)
@@ -82,7 +79,7 @@
 #define PV_FT		OPT_BUF(BV_FT)
 #define PV_IMI		OPT_BUF(BV_IMI)
 #define PV_IMS		OPT_BUF(BV_IMS)
-#if defined(FEAT_CINDENT) && defined(FEAT_EVAL)
+#if defined(FEAT_EVAL)
 # define PV_INDE	OPT_BUF(BV_INDE)
 # define PV_INDK	OPT_BUF(BV_INDK)
 #endif
@@ -98,10 +95,8 @@
 # define PV_KMAP	OPT_BUF(BV_KMAP)
 #endif
 #define PV_KP		OPT_BOTH(OPT_BUF(BV_KP))
-#ifdef FEAT_LISP
-# define PV_LISP	OPT_BUF(BV_LISP)
-# define PV_LW		OPT_BOTH(OPT_BUF(BV_LW))
-#endif
+#define PV_LISP	OPT_BUF(BV_LISP)
+#define PV_LW		OPT_BOTH(OPT_BUF(BV_LW))
 #define PV_MENC		OPT_BOTH(OPT_BUF(BV_MENC))
 #define PV_MA		OPT_BUF(BV_MA)
 #define PV_ML		OPT_BUF(BV_ML)
@@ -120,9 +115,7 @@
 # define PV_QE		OPT_BUF(BV_QE)
 #endif
 #define PV_RO		OPT_BUF(BV_RO)
-#ifdef FEAT_SMARTINDENT
-# define PV_SI		OPT_BUF(BV_SI)
-#endif
+#define PV_SI		OPT_BUF(BV_SI)
 #define PV_SN		OPT_BUF(BV_SN)
 #ifdef FEAT_SYN_HL
 # define PV_SMC		OPT_BUF(BV_SMC)
@@ -192,6 +185,7 @@
 # define PV_LBR		OPT_WIN(WV_LBR)
 #endif
 #define PV_LCS		OPT_BOTH(OPT_WIN(WV_LCS))
+#define PV_FCS		OPT_BOTH(OPT_WIN(WV_FCS))
 #define PV_NU		OPT_WIN(WV_NU)
 #define PV_RNU		OPT_WIN(WV_RNU)
 #define PV_VE		OPT_BOTH(OPT_WIN(WV_VE))
@@ -301,7 +295,7 @@ struct vimoption
 # define ISP_LATIN1 (char_u *)"@,161-255"
 #endif
 
-# define HIGHLIGHT_INIT "8:SpecialKey,~:EndOfBuffer,@:NonText,d:Directory,e:ErrorMsg,i:IncSearch,l:Search,m:MoreMsg,M:ModeMsg,n:LineNr,a:LineNrAbove,b:LineNrBelow,N:CursorLineNr,G:CursorLineSign,O:CursorLineFold,r:Question,s:StatusLine,S:StatusLineNC,c:VertSplit,t:Title,v:Visual,V:VisualNOS,w:WarningMsg,W:WildMenu,f:Folded,F:FoldColumn,A:DiffAdd,C:DiffChange,D:DiffDelete,T:DiffText,>:SignColumn,-:Conceal,B:SpellBad,P:SpellCap,R:SpellRare,L:SpellLocal,+:Pmenu,=:PmenuSel,x:PmenuSbar,X:PmenuThumb,*:TabLine,#:TabLineSel,_:TabLineFill,!:CursorColumn,.:CursorLine,o:ColorColumn,q:QuickFixLine,z:StatusLineTerm,Z:StatusLineTermNC"
+# define HIGHLIGHT_INIT "8:SpecialKey,~:EndOfBuffer,@:NonText,d:Directory,e:ErrorMsg,i:IncSearch,l:Search,y:CurSearch,m:MoreMsg,M:ModeMsg,n:LineNr,a:LineNrAbove,b:LineNrBelow,N:CursorLineNr,G:CursorLineSign,O:CursorLineFold,r:Question,s:StatusLine,S:StatusLineNC,c:VertSplit,t:Title,v:Visual,V:VisualNOS,w:WarningMsg,W:WildMenu,f:Folded,F:FoldColumn,A:DiffAdd,C:DiffChange,D:DiffDelete,T:DiffText,>:SignColumn,-:Conceal,B:SpellBad,P:SpellCap,R:SpellRare,L:SpellLocal,+:Pmenu,=:PmenuSel,x:PmenuSbar,X:PmenuThumb,*:TabLine,#:TabLineSel,_:TabLineFill,!:CursorColumn,.:CursorLine,o:ColorColumn,q:QuickFixLine,z:StatusLineTerm,Z:StatusLineTermNC"
 
 // Default python version for pyx* commands
 #if defined(FEAT_PYTHON) && defined(FEAT_PYTHON3)
@@ -629,37 +623,22 @@ static struct vimoption options[] =
 #endif
 			    SCTX_INIT},
     {"cindent",	    "cin",  P_BOOL|P_VI_DEF|P_VIM,
-#ifdef FEAT_CINDENT
 			    (char_u *)&p_cin, PV_CIN,
-#else
-			    (char_u *)NULL, PV_NONE,
-#endif
 			    {(char_u *)FALSE, (char_u *)0L} SCTX_INIT},
     {"cinkeys",	    "cink", P_STRING|P_ALLOCED|P_VI_DEF|P_ONECOMMA|P_NODUP,
-#ifdef FEAT_CINDENT
 			    (char_u *)&p_cink, PV_CINK,
-			    {INDENTKEYS_DEFAULT, (char_u *)0L}
-#else
-			    (char_u *)NULL, PV_NONE,
-			    {(char_u *)0L, (char_u *)0L}
-#endif
-			    SCTX_INIT},
+			    {INDENTKEYS_DEFAULT, (char_u *)0L} SCTX_INIT},
     {"cinoptions",  "cino", P_STRING|P_ALLOCED|P_VI_DEF|P_ONECOMMA|P_NODUP,
-#ifdef FEAT_CINDENT
 			    (char_u *)&p_cino, PV_CINO,
-#else
-			    (char_u *)NULL, PV_NONE,
-#endif
 			    {(char_u *)"", (char_u *)0L} SCTX_INIT},
+    {"cinscopedecls", "cinsd", P_STRING|P_ALLOCED|P_VI_DEF|P_ONECOMMA|P_NODUP,
+			    (char_u *)&p_cinsd, PV_CINSD,
+			    {(char_u *)"public,protected,private", (char_u *)0L}
+			    SCTX_INIT},
     {"cinwords",    "cinw", P_STRING|P_ALLOCED|P_VI_DEF|P_ONECOMMA|P_NODUP,
-#if defined(FEAT_SMARTINDENT) || defined(FEAT_CINDENT)
 			    (char_u *)&p_cinw, PV_CINW,
 			    {(char_u *)"if,else,while,do,for,switch",
 				(char_u *)0L}
-#else
-			    (char_u *)NULL, PV_NONE,
-			    {(char_u *)0L, (char_u *)0L}
-#endif
 			    SCTX_INIT},
     {"clipboard",   "cb",   P_STRING|P_VI_DEF|P_ONECOMMA|P_NODUP,
 #ifdef FEAT_CLIPBOARD
@@ -1024,7 +1003,7 @@ static struct vimoption options[] =
 			    {(char_u *)"", (char_u *)0L}
 			    SCTX_INIT},
     {"fillchars",   "fcs",  P_STRING|P_VI_DEF|P_RALL|P_ONECOMMA|P_NODUP,
-			    (char_u *)&p_fcs, PV_NONE,
+			    (char_u *)&p_fcs, PV_FCS,
 			    {(char_u *)"vert:|,fold:-,eob:~", (char_u *)0L}
 			    SCTX_INIT},
     {"fixendofline",  "fixeol", P_BOOL|P_VI_DEF|P_RSTAT,
@@ -1221,21 +1200,17 @@ static struct vimoption options[] =
 #ifdef FEAT_QUICKFIX
 			    (char_u *)&p_gp, PV_GP,
 			    {
-# ifdef MSWIN
+# if defined(MSWIN)
 			    // may be changed to "grep -n" in os_win32.c
 			    (char_u *)"findstr /n",
-# else
-#  ifdef UNIX
+# elif defined(UNIX)
 			    // Add an extra file name so that grep will always
 			    // insert a file name in the match line.
 			    (char_u *)"grep -n $* /dev/null",
-#  else
-#   ifdef VMS
+# elif defined(VMS)
 			    (char_u *)"SEARCH/NUMBERS ",
-#   else
+# else
 			    (char_u *)"grep -n ",
-#   endif
-#  endif
 # endif
 			    (char_u *)0L}
 #else
@@ -1485,7 +1460,7 @@ static struct vimoption options[] =
 			    (char_u *)&p_is, PV_NONE,
 			    {(char_u *)FALSE, (char_u *)0L} SCTX_INIT},
     {"indentexpr", "inde",  P_STRING|P_ALLOCED|P_VI_DEF|P_VIM|P_MLE,
-#if defined(FEAT_CINDENT) && defined(FEAT_EVAL)
+#if defined(FEAT_EVAL)
 			    (char_u *)&p_inde, PV_INDE,
 			    {(char_u *)"", (char_u *)0L}
 #else
@@ -1494,7 +1469,7 @@ static struct vimoption options[] =
 #endif
 			    SCTX_INIT},
     {"indentkeys", "indk",  P_STRING|P_ALLOCED|P_VI_DEF|P_ONECOMMA|P_NODUP,
-#if defined(FEAT_CINDENT) && defined(FEAT_EVAL)
+#if defined(FEAT_EVAL)
 			    (char_u *)&p_indk, PV_INDK,
 			    {INDENTKEYS_DEFAULT, (char_u *)0L}
 #else
@@ -1516,14 +1491,12 @@ static struct vimoption options[] =
 				// ( and ) are used in text separating fnames
 			    (char_u *)"@,48-57,/,\\,.,-,_,+,,,#,$,%,{,},[,],:,@-@,!,~,=",
 #else
-# ifdef AMIGA
+# if defined(AMIGA)
 			    (char_u *)"@,48-57,/,.,-,_,+,,,$,:",
-# else
-#  ifdef VMS
+# elif defined(VMS)
 			    (char_u *)"@,48-57,/,.,-,_,+,,,#,$,%,<,>,[,],:,;,~",
-#  else // UNIX et al.
+# else // UNIX et al.
 			    (char_u *)"@,48-57,/,.,-,_,+,,,#,$,%,~,=",
-#  endif
 # endif
 #endif
 				(char_u *)0L} SCTX_INIT},
@@ -1582,18 +1555,14 @@ static struct vimoption options[] =
     {"keywordprg",  "kp",   P_STRING|P_EXPAND|P_VI_DEF|P_SECURE,
 			    (char_u *)&p_kp, PV_KP,
 			    {
-#ifdef MSWIN
+#if defined(MSWIN)
 			    (char_u *)":help",
-#else
-# ifdef VMS
+#elif defined(VMS)
 			    (char_u *)"help",
-# else
-#  ifdef USEMAN_S
+#elif defined(USEMAN_S)
 			    (char_u *)"man -s",
-#  else
+#else
 			    (char_u *)"man",
-#  endif
-# endif
 #endif
 				(char_u *)0L} SCTX_INIT},
     {"langmap",     "lmap", P_STRING|P_VI_DEF|P_ONECOMMA|P_NODUP|P_SECURE,
@@ -1661,21 +1630,11 @@ static struct vimoption options[] =
 #endif
 			    SCTX_INIT},
     {"lisp",	    NULL,   P_BOOL|P_VI_DEF,
-#ifdef FEAT_LISP
 			    (char_u *)&p_lisp, PV_LISP,
-#else
-			    (char_u *)NULL, PV_NONE,
-#endif
 			    {(char_u *)FALSE, (char_u *)0L} SCTX_INIT},
     {"lispwords",   "lw",   P_STRING|P_VI_DEF|P_ONECOMMA|P_NODUP,
-#ifdef FEAT_LISP
 			    (char_u *)&p_lispwords, PV_LW,
-			    {(char_u *)LISPWORD_VALUE, (char_u *)0L}
-#else
-			    (char_u *)NULL, PV_NONE,
-			    {(char_u *)"", (char_u *)0L}
-#endif
-			    SCTX_INIT},
+			    {(char_u *)LISPWORD_VALUE, (char_u *)0L} SCTX_INIT},
     {"list",	    NULL,   P_BOOL|P_VI_DEF|P_RWIN,
 			    (char_u *)VAR_WIN, PV_LIST,
 			    {(char_u *)FALSE, (char_u *)0L} SCTX_INIT},
@@ -1858,6 +1817,13 @@ static struct vimoption options[] =
 # endif
 #endif
 				(char_u *)0L} SCTX_INIT},
+    {"mousemoveevent",   "mousemev",   P_BOOL|P_VI_DEF,
+#ifdef FEAT_GUI
+			    (char_u *)&p_mousemev, PV_NONE,
+#else
+			    (char_u *)NULL, PV_NONE,
+#endif
+			    {(char_u *)FALSE, (char_u *)0L} SCTX_INIT},
     {"mouseshape",  "mouses",  P_STRING|P_VI_DEF|P_ONECOMMA|P_NODUP,
 #ifdef FEAT_MOUSESHAPE
 			    (char_u *)&p_mouseshape, PV_NONE,
@@ -2447,11 +2413,7 @@ static struct vimoption options[] =
 			    (char_u *)&p_scs, PV_NONE,
 			    {(char_u *)FALSE, (char_u *)0L} SCTX_INIT},
     {"smartindent", "si",   P_BOOL|P_VI_DEF|P_VIM,
-#ifdef FEAT_SMARTINDENT
 			    (char_u *)&p_si, PV_SI,
-#else
-			    (char_u *)NULL, PV_NONE,
-#endif
 			    {(char_u *)FALSE, (char_u *)0L} SCTX_INIT},
     {"smarttab",    "sta",  P_BOOL|P_VI_DEF|P_VIM,
 			    (char_u *)&p_sta, PV_NONE,
@@ -2879,13 +2841,11 @@ static struct vimoption options[] =
 			    (char_u *)&p_viminfo, PV_NONE,
 #if defined(MSWIN)
 			    {(char_u *)"", (char_u *)"'100,<50,s10,h,rA:,rB:"}
-#else
-# ifdef AMIGA
+#elif defined(AMIGA)
 			    {(char_u *)"",
 				 (char_u *)"'100,<50,s10,h,rdf0:,rdf1:,rdf2:"}
-# else
+#else
 			    {(char_u *)"", (char_u *)"'100,<50,s10,h"}
-# endif
 #endif
 #else
 			    (char_u *)NULL, PV_NONE,
@@ -3053,9 +3013,9 @@ static struct vimoption options[] =
     p_term("t_BD", T_BD)
     p_term("t_cd", T_CD)
     p_term("t_ce", T_CE)
+    p_term("t_Ce", T_UCE)
     p_term("t_cl", T_CL)
     p_term("t_cm", T_CM)
-    p_term("t_Ce", T_UCE)
     p_term("t_Co", T_CCO)
     p_term("t_CS", T_CCS)
     p_term("t_Cs", T_UCS)
@@ -3065,6 +3025,8 @@ static struct vimoption options[] =
     p_term("t_db", T_DB)
     p_term("t_DL", T_CDL)
     p_term("t_dl", T_DL)
+    p_term("t_ds", T_DS)
+    p_term("t_Ds", T_CDS)
     p_term("t_EC", T_CEC)
     p_term("t_EI", T_CEI)
     p_term("t_fs", T_FS)
@@ -3112,6 +3074,7 @@ static struct vimoption options[] =
     p_term("t_u7", T_U7)
     p_term("t_ue", T_UE)
     p_term("t_us", T_US)
+    p_term("t_Us", T_USS)
     p_term("t_ut", T_UT)
     p_term("t_vb", T_VB)
     p_term("t_ve", T_VE)

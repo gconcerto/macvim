@@ -375,22 +375,36 @@ popup_is_in_scrollbar(win_T *wp, int row, int col)
     void
 popup_handle_scrollbar_click(win_T *wp, int row, int col)
 {
-    int	    height = popup_height(wp);
-    int	    old_topline = wp->w_topline;
-
     if (popup_is_in_scrollbar(wp, row, col))
     {
+	int	    height = popup_height(wp);
+	int	    new_topline = wp->w_topline;
+
 	if (row >= height / 2)
 	{
 	    // Click in lower half, scroll down.
 	    if (wp->w_topline < wp->w_buffer->b_ml.ml_line_count)
-		++wp->w_topline;
+		++new_topline;
 	}
 	else if (wp->w_topline > 1)
 	    // click on upper half, scroll up.
-	    --wp->w_topline;
-	if (wp->w_topline != old_topline)
+	    --new_topline;
+	if (new_topline != wp->w_topline)
 	{
+	    set_topline(wp, new_topline);
+	    if (wp == curwin)
+	    {
+		if (wp->w_cursor.lnum < wp->w_topline)
+		{
+		    wp->w_cursor.lnum = wp->w_topline;
+		    check_cursor();
+		}
+		else if (wp->w_cursor.lnum >= wp->w_botline)
+		{
+		    wp->w_cursor.lnum = wp->w_botline - 1;
+		    check_cursor();
+		}
+	    }
 	    popup_set_firstline(wp);
 	    redraw_win_later(wp, NOT_VALID);
 	}
@@ -978,7 +992,7 @@ apply_options(win_T *wp, dict_T *dict, int create)
 
     nr = dict_get_bool(dict, (char_u *)"hidden", FALSE);
     if (nr > 0)
-	wp->w_popup_flags |= POPF_HIDDEN;
+	wp->w_popup_flags |= POPF_HIDDEN | POPF_HIDDEN_FORCE;
 
     // when "firstline" and "cursorline" are both set and the cursor would be
     // above or below the displayed lines, move the cursor to "firstline".
@@ -1033,7 +1047,7 @@ add_popup_dicts(buf_T *buf, list_T *l)
     {
 	if (li->li_tv.v_type != VAR_DICT)
 	{
-	    emsg(_(e_dictionary_required));
+	    semsg(_(e_argument_1_list_item_nr_dictionary_required), lnum + 1);
 	    return;
 	}
 	dict = li->li_tv.vval.v_dict;
@@ -1149,6 +1163,8 @@ popup_adjust_position(win_T *wp)
     linenr_T	lnum;
     int		wrapped = 0;
     int		maxwidth;
+    int		maxwidth_no_scrollbar;
+    int		width_with_scrollbar = 0;
     int		used_maxwidth = FALSE;
     int		margin_width = 0;
     int		maxspace;
@@ -1412,15 +1428,17 @@ popup_adjust_position(win_T *wp)
     }
 
     if (wp->w_firstline < 0)
-	wp->w_topline = lnum > 0 ? lnum + 1 : lnum;
+	wp->w_topline = lnum + 1;
 
     wp->w_has_scrollbar = wp->w_want_scrollbar
 	   && (wp->w_topline > 1 || lnum <= wp->w_buffer->b_ml.ml_line_count);
 #ifdef FEAT_TERMINAL
-    if (wp->w_buffer->b_term != NULL)
-	// Terminal window never has a scrollbar, adjusts to window height.
+    if (wp->w_buffer->b_term != NULL && !term_is_finished(wp->w_buffer))
+	// Terminal window with running job never has a scrollbar, adjusts to
+	// window height.
 	wp->w_has_scrollbar = FALSE;
 #endif
+    maxwidth_no_scrollbar = maxwidth;
     if (wp->w_has_scrollbar)
     {
 	++right_extra;
@@ -1447,7 +1465,27 @@ popup_adjust_position(win_T *wp)
 	if (wp->w_width > maxspace && !wp->w_p_wrap)
 	    // some columns cut off on the right
 	    wp->w_popup_rightoff = wp->w_width - maxspace;
-	wp->w_width = maxwidth;
+
+	// If the window doesn't fit because 'minwidth' is set then the
+	// scrollbar is at the far right of the screen, use the size without
+	// the scrollbar.
+	if (wp->w_has_scrollbar && wp->w_minwidth > 0)
+	{
+	    int off = wp->w_width - maxwidth;
+
+	    if (off > right_extra)
+		extra_width -= right_extra;
+	    else
+		extra_width -= off;
+	    wp->w_width = maxwidth_no_scrollbar;
+	}
+	else
+	{
+	    wp->w_width = maxwidth;
+
+	    // when adding a scrollbar below need to adjust the width
+	    width_with_scrollbar = maxwidth_no_scrollbar - right_extra;
+	}
     }
     if (center_hor)
     {
@@ -1535,7 +1573,8 @@ popup_adjust_position(win_T *wp)
     else if (wp->w_popup_pos == POPPOS_TOPRIGHT
 		|| wp->w_popup_pos == POPPOS_TOPLEFT)
     {
-	if (wantline + (wp->w_height + extra_height) - 1 > Rows
+	if (wp != popup_dragwin
+		&& wantline + (wp->w_height + extra_height) - 1 > Rows
 		&& wantline * 2 > Rows
 		&& (wp->w_popup_flags & POPF_POSINVERT))
 	{
@@ -1563,9 +1602,13 @@ popup_adjust_position(win_T *wp)
 	// add a scrollbar.
 	wp->w_height = Rows - wp->w_winrow - extra_height;
 #ifdef FEAT_TERMINAL
-	if (wp->w_buffer->b_term == NULL)
+	if (wp->w_buffer->b_term == NULL || term_is_finished(wp->w_buffer))
 #endif
+	{
 	    wp->w_has_scrollbar = TRUE;
+	    if (width_with_scrollbar > 0)
+		wp->w_width = width_with_scrollbar;
+	}
     }
 
     // make sure w_winrow is valid
@@ -1642,7 +1685,9 @@ popup_set_buffer_text(buf_T *buf, typval_T text)
 
 	if (l != NULL && l->lv_len > 0)
 	{
-	    if (l->lv_first->li_tv.v_type == VAR_STRING)
+	    if (l->lv_first == &range_list_item)
+		emsg(_(e_using_number_as_string));
+	    else if (l->lv_first->li_tv.v_type == VAR_STRING)
 		// list of strings
 		add_popup_strings(buf, l);
 	    else
@@ -1929,7 +1974,7 @@ popup_create(typval_T *argvars, typval_T *rettv, create_type_T type)
 
     if (d != NULL)
     {
-	if (dict_find(d, (char_u *)"tabpage", -1) != NULL)
+	if (dict_has_key(d, "tabpage"))
 	    tabnr = (int)dict_get_number(d, (char_u *)"tabpage");
 	else if (type == TYPE_NOTIFICATION)
 	    tabnr = -1;  // notifications are global by default
@@ -1961,7 +2006,9 @@ popup_create(typval_T *argvars, typval_T *rettv, create_type_T type)
 	new_buffer = FALSE;
 	win_init_popup_win(wp, buf);
 	set_local_options_default(wp, FALSE);
+	swap_exists_action = SEA_READONLY;
 	buffer_ensure_loaded(buf);
+	swap_exists_action = SEA_NONE;
     }
     else
     {
@@ -1969,7 +2016,10 @@ popup_create(typval_T *argvars, typval_T *rettv, create_type_T type)
 	new_buffer = TRUE;
 	buf = buflist_new(NULL, NULL, (linenr_T)0, BLN_NEW|BLN_DUMMY|BLN_REUSE);
 	if (buf == NULL)
+	{
+	    win_free_popup(wp);
 	    return NULL;
+	}
 	ml_open(buf);
 
 	win_init_popup_win(wp, buf);
@@ -2611,7 +2661,10 @@ f_popup_hide(typval_T *argvars, typval_T *rettv UNUSED)
     id = (int)tv_get_number(argvars);
     wp = find_popup_win(id);
     if (wp != NULL)
+    {
 	popup_hide(wp);
+	wp->w_popup_flags |= POPF_HIDDEN_FORCE;
+    }
 }
 
     void
@@ -2641,6 +2694,7 @@ f_popup_show(typval_T *argvars, typval_T *rettv UNUSED)
     wp = find_popup_win(id);
     if (wp != NULL)
     {
+	wp->w_popup_flags &= ~POPF_HIDDEN_FORCE;
 	popup_show(wp);
 #ifdef FEAT_QUICKFIX
 	if (wp->w_popup_flags & POPF_INFO)
@@ -2706,7 +2760,6 @@ error_if_popup_window(int also_with_term UNUSED)
     if (WIN_IS_POPUP(curwin)
 # ifdef FEAT_TERMINAL
 	    && (also_with_term || curbuf->b_term == NULL)
-	    && !term_is_finished(curbuf)
 # endif
 	    )
     {
@@ -2930,7 +2983,7 @@ f_popup_list(typval_T *argvars UNUSED, typval_T *rettv)
     win_T	*wp;
     tabpage_T	*tp;
 
-    if (rettv_list_alloc(rettv) != OK)
+    if (rettv_list_alloc(rettv) == FAIL)
 	return;
     FOR_ALL_POPUPWINS(wp)
 	list_append_number(rettv->vval.v_list, wp->w_id);
@@ -3573,8 +3626,9 @@ check_popup_unhidden(win_T *wp)
 	textprop_T  prop;
 	linenr_T    lnum;
 
-	if (find_visible_prop(wp->w_popup_prop_win,
-		    wp->w_popup_prop_type, wp->w_popup_prop_id,
+	if ((wp->w_popup_flags & POPF_HIDDEN_FORCE) == 0
+		&& find_visible_prop(wp->w_popup_prop_win,
+				    wp->w_popup_prop_type, wp->w_popup_prop_id,
 							   &prop, &lnum) == OK)
 	{
 	    wp->w_popup_flags &= ~POPF_HIDDEN;
@@ -3894,7 +3948,7 @@ update_popups(void (*win_update)(win_T *wp))
 	    wp->w_flags |= WFLAG_WROW_OFF_ADDED;
 	}
 
-	total_width = popup_width(wp);
+	total_width = popup_width(wp) - wp->w_popup_rightoff;
 	total_height = popup_height(wp);
 	popup_attr = get_wcr_attr(wp);
 
@@ -3989,7 +4043,7 @@ update_popups(void (*win_update)(win_T *wp))
 					     ? border_char[4] : border_char[0],
 			border_char[0], border_attr[0]);
 	    }
-	    if (wp->w_popup_border[1] > 0 && wp->w_popup_rightoff == 0)
+	    if (wp->w_popup_border[1] > 0)
 	    {
 		buf[mb_char2bytes(border_char[5], buf)] = NUL;
 		screen_puts(buf, wp->w_winrow,
@@ -4032,6 +4086,7 @@ update_popups(void (*win_update)(win_T *wp))
 	{
 	    linenr_T	linecount = wp->w_buffer->b_ml.ml_line_count;
 	    int		height = wp->w_height;
+	    int		last;
 
 	    sb_thumb_height = ((linenr_T)height * height + linecount / 2)
 								   / linecount;
@@ -4039,7 +4094,7 @@ update_popups(void (*win_update)(win_T *wp))
 		--sb_thumb_height;  // scrolled, no full thumb
 	    if (sb_thumb_height == 0)
 		sb_thumb_height = 1;
-	    if (linecount <= wp->w_height)
+	    if (linecount <= wp->w_height || wp->w_height == 0)
 		// it just fits, avoid divide by zero
 		sb_thumb_top = 0;
 	    else
@@ -4049,6 +4104,10 @@ update_popups(void (*win_update)(win_T *wp))
 						  / (linecount - wp->w_height);
 	    if (wp->w_topline > 1 && sb_thumb_top == 0 && height > 1)
 		sb_thumb_top = 1;  // show it's scrolled
+	    last = total_height - top_off - wp->w_popup_border[2];
+	    if (sb_thumb_top >= last)
+		// show at least one character
+		sb_thumb_top = last - 1;
 
 	    if (wp->w_scrollbar_highlight != NULL)
 		attr_scroll = syn_name2attr(wp->w_scrollbar_highlight);

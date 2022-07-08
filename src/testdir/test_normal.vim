@@ -4,6 +4,7 @@ source shared.vim
 source check.vim
 source view_util.vim
 import './vim9.vim' as v9
+source screendump.vim
 
 func Setup_NewWindow()
   10new
@@ -2458,9 +2459,9 @@ func Test_normal33_g_cmd2()
   call assert_equal(2, line('.'))
   call assert_fails(':norm! g;', 'E662:')
   call assert_fails(':norm! g,', 'E663:')
-  let &ul=&ul
+  let &ul = &ul
   call append('$', ['a', 'b', 'c', 'd'])
-  let &ul=&ul
+  let &ul = &ul
   call append('$', ['Z', 'Y', 'X', 'W'])
   let a = execute(':changes')
   call assert_match('2\s\+0\s\+2', a)
@@ -2639,6 +2640,15 @@ func Test_normal33_g_cmd2()
 
   " clean up
   bw!
+endfunc
+
+func Test_normal_ex_substitute()
+  " This was hanging on the substitute prompt.
+  new
+  call setline(1, 'a')
+  exe "normal! gggQs/a/b/c\<CR>"
+  call assert_equal('a', getline(1))
+  bwipe!
 endfunc
 
 " Test for g CTRL-G
@@ -2935,12 +2945,6 @@ func Test_normal40_ctrl_bsl()
   call assert_false(&insertmode)
   call assert_beeps("normal! \<C-\>\<C-A>")
 
-  if has('cmdwin')
-    " Using CTRL-\ CTRL-N in cmd window should close the window
-    call feedkeys("q:\<C-\>\<C-N>", 'xt')
-    call assert_equal('', getcmdwintype())
-  endif
-
   " clean up
   bw!
 endfunc
@@ -3219,31 +3223,6 @@ func Test_gr_command()
   enew!
 endfunc
 
-" When splitting a window the changelist position is wrong.
-" Test the changelist position after splitting a window.
-" Test for the bug fixed by 7.4.386
-func Test_changelist()
-  let save_ul = &ul
-  enew!
-  call append('$', ['1', '2'])
-  exe "normal i\<C-G>u"
-  exe "normal Gkylpa\<C-G>u"
-  set ul=100
-  exe "normal Gylpa\<C-G>u"
-  set ul=100
-  normal gg
-  vsplit
-  normal g;
-  call assert_equal([3, 2], [line('.'), col('.')])
-  normal g;
-  call assert_equal([2, 2], [line('.'), col('.')])
-  call assert_fails('normal g;', 'E662:')
-  new
-  call assert_fails('normal g;', 'E664:')
-  %bwipe!
-  let &ul = save_ul
-endfunc
-
 func Test_nv_hat_count()
   %bwipeout!
   let l:nr = bufnr('%') + 1
@@ -3280,6 +3259,20 @@ func Test_message_when_using_ctrl_c()
   call assert_match("Type  :qa!  and press <Enter> to abandon all changes and exit Vim", Screenline(&lines))
 
   bwipe!
+endfunc
+
+func Test_mode_updated_after_ctrl_c()
+  CheckScreendump
+
+  let buf = RunVimInTerminal('', {'rows': 5})
+  call term_sendkeys(buf, "i")
+  call term_sendkeys(buf, "\<C-O>")
+  " wait a moment so that the "-- (insert) --" message is displayed
+  call TermWait(buf, 50)
+  call term_sendkeys(buf, "\<C-C>")
+  call VerifyScreenDump(buf, 'Test_mode_updated_1', {})
+
+  call StopVimInTerminal(buf)
 endfunc
 
 " Test for '[m', ']m', '[M' and ']M'

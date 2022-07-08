@@ -152,7 +152,7 @@ typedef enum {
     ISN_COMPAREANY,
 
     // expression operations
-    ISN_CONCAT,
+    ISN_CONCAT,     // concatenate isn_arg.number strings
     ISN_STRINDEX,   // [expr] string index
     ISN_STRSLICE,   // [expr:expr] string slice
     ISN_LISTAPPEND, // append to a list, like add()
@@ -173,7 +173,6 @@ typedef enum {
     ISN_2STRING_ANY, // like ISN_2STRING but check type
     ISN_NEGATENR,   // apply "-" to number
 
-    ISN_CHECKNR,    // check value can be used as a number
     ISN_CHECKTYPE,  // check value type is isn_arg.type.ct_type
     ISN_CHECKLEN,   // check list length is isn_arg.checklen.cl_min_len
     ISN_SETTYPE,    // set dict type to isn_arg.type.ct_type
@@ -240,7 +239,6 @@ typedef enum {
     JUMP_NEVER,
     JUMP_IF_FALSE,		// pop and jump if false
     JUMP_AND_KEEP_IF_TRUE,	// jump if top of stack is truthy, drop if not
-    JUMP_AND_KEEP_IF_FALSE,	// jump if top of stack is falsy, drop if not
     JUMP_IF_COND_TRUE,		// jump if top of stack is true, drop if not
     JUMP_IF_COND_FALSE,		// jump if top of stack is false, drop if not
 } jumpwhen_T;
@@ -298,6 +296,7 @@ typedef struct {
     type_T	*ct_type;
     int8_T	ct_off;		// offset in stack, -1 is bottom
     int8_T	ct_arg_idx;	// argument index or zero
+    int8_T	ct_is_var;	// when TRUE checking variable instead of arg
 } checktype_T;
 
 // arguments to ISN_STORENR
@@ -502,7 +501,7 @@ struct dfunc_S {
 
 // Number of entries used by stack frame for a function call.
 // - ec_dfunc_idx:   function index
-// - ec_iidx:        instruction index
+// - ec_iidx:	     instruction index
 // - ec_instr:       instruction list pointer
 // - ec_outer:	     stack used for closures
 // - funclocal:	     function-local data

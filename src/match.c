@@ -330,10 +330,6 @@ init_search_hl(win_T *wp, match_T *search_hl)
 	cur->hl.buf = wp->w_buffer;
 	cur->hl.lnum = 0;
 	cur->hl.first_lnum = 0;
-# ifdef FEAT_RELTIME
-	// Set the time limit to 'redrawtime'.
-	profile_setlimit(p_rdt, &(cur->hl.tm));
-# endif
 	cur = cur->next;
     }
     search_hl->buf = wp->w_buffer;
@@ -396,6 +392,7 @@ next_search_hl_pos(
 	shl->rm.endpos[0].lnum = 0;
 	shl->rm.endpos[0].col = end;
 	shl->is_addpos = TRUE;
+	shl->has_cursor = FALSE;
 	posmatch->cur = found + 1;
 	return 1;
     }
@@ -423,6 +420,7 @@ next_search_hl(
     colnr_T	matchcol;
     long	nmatched;
     int		called_emsg_before = called_emsg;
+    int         timed_out = FALSE;
 
     // for :{range}s/pat only highlight inside the range
     if ((lnum < search_first_line || lnum > search_last_line) && cur == NULL)
@@ -448,14 +446,6 @@ next_search_hl(
     // or none is found in this line.
     for (;;)
     {
-# ifdef FEAT_RELTIME
-	// Stop searching after passing the time limit.
-	if (profile_passed_limit(&(shl->tm)))
-	{
-	    shl->lnum = 0;		// no match found in time
-	    break;
-	}
-# endif
 	// Three situations:
 	// 1. No useful previous match: search from start of line.
 	// 2. Not Vi compatible or empty match: continue at next character.
@@ -493,16 +483,9 @@ next_search_hl(
 	    int regprog_is_copy = (shl != search_hl && cur != NULL
 				&& shl == &cur->hl
 				&& cur->match.regprog == cur->hl.rm.regprog);
-	    int timed_out = FALSE;
 
 	    nmatched = vim_regexec_multi(&shl->rm, win, shl->buf, lnum,
-		    matchcol,
-#ifdef FEAT_RELTIME
-		    &(shl->tm), &timed_out
-#else
-		    NULL, NULL
-#endif
-		    );
+							 matchcol, &timed_out);
 	    // Copy the regprog, in case it got freed and recompiled.
 	    if (regprog_is_copy)
 		cur->match.regprog = cur->hl.rm.regprog;
@@ -617,6 +600,26 @@ prepare_search_hl(win_T *wp, match_T *search_hl, linenr_T lnum)
 }
 
 /*
+ * Update "shl->has_cursor" based on the match in "shl" and the cursor
+ * position.
+ */
+    static void
+check_cur_search_hl(win_T *wp, match_T *shl)
+{
+    linenr_T linecount = shl->rm.endpos[0].lnum - shl->rm.startpos[0].lnum;
+
+    if (wp->w_cursor.lnum >= shl->lnum
+	    && wp->w_cursor.lnum <= shl->lnum + linecount
+	    && (wp->w_cursor.lnum > shl->lnum
+				|| wp->w_cursor.col >= shl->rm.startpos[0].col)
+	    && (wp->w_cursor.lnum < shl->lnum + linecount
+				  || wp->w_cursor.col < shl->rm.endpos[0].col))
+	shl->has_cursor = TRUE;
+    else
+	shl->has_cursor = FALSE;
+}
+
+/*
  * Prepare for 'hlsearch' and match highlighting in one window line.
  * Return TRUE if there is such highlighting and set "search_attr" to the
  * current highlight attribute.
@@ -654,6 +657,7 @@ prepare_search_hl_line(
 	shl->endcol = MAXCOL;
 	shl->attr_cur = 0;
 	shl->is_addpos = FALSE;
+	shl->has_cursor = FALSE;
 	if (cur != NULL)
 	    cur->pos.cur = 0;
 	next_search_hl(wp, search_hl, shl, lnum, mincol,
@@ -674,6 +678,11 @@ prepare_search_hl_line(
 		shl->endcol = shl->rm.endpos[0].col;
 	    else
 		shl->endcol = MAXCOL;
+
+	    // check if the cursor is in the match before changing the columns
+	    if (shl == search_hl)
+		check_cur_search_hl(wp, shl);
+
 	    // Highlight one character for an empty match.
 	    if (shl->startcol == shl->endcol)
 	    {
@@ -768,6 +777,15 @@ update_search_hl(
 		else
 		    *has_match_conc = 0;
 # endif
+		// Highlight the match were the cursor is using the CurSearch
+		// group.
+		if (shl == search_hl && shl->has_cursor)
+		{
+		    shl->attr_cur = HL_ATTR(HLF_LC);
+		    if (shl->attr_cur != shl->attr)
+			search_hl_has_cursor_lnum = lnum;
+		}
+
 	    }
 	    else if (col == shl->endcol)
 	    {
@@ -787,6 +805,10 @@ update_search_hl(
 			shl->endcol = shl->rm.endpos[0].col;
 		    else
 			shl->endcol = MAXCOL;
+
+		    // check if the cursor is in the match
+		    if (shl == search_hl)
+			check_cur_search_hl(wp, shl);
 
 		    if (shl->startcol == shl->endcol)
 		    {
@@ -938,7 +960,7 @@ matchadd_dict_arg(typval_T *tv, char_u **conceal_char, win_T **win)
 	return FAIL;
     }
 
-    if (dict_find(tv->vval.v_dict, (char_u *)"conceal", -1) != NULL)
+    if (dict_has_key(tv->vval.v_dict, "conceal"))
 	*conceal_char = dict_get_string(tv->vval.v_dict,
 						   (char_u *)"conceal", FALSE);
 
@@ -1088,11 +1110,11 @@ f_setmatches(typval_T *argvars UNUSED, typval_T *rettv UNUSED)
 		emsg(_(e_invalid_argument));
 		return;
 	    }
-	    if (!(dict_find(d, (char_u *)"group", -1) != NULL
-			&& (dict_find(d, (char_u *)"pattern", -1) != NULL
-			    || dict_find(d, (char_u *)"pos1", -1) != NULL)
-			&& dict_find(d, (char_u *)"priority", -1) != NULL
-			&& dict_find(d, (char_u *)"id", -1) != NULL))
+	    if (!(dict_has_key(d, "group")
+			&& (dict_has_key(d, "pattern")
+			    || dict_has_key(d, "pos1"))
+			&& dict_has_key(d, "priority")
+			&& dict_has_key(d, "id")))
 	    {
 		emsg(_(e_invalid_argument));
 		return;
@@ -1113,7 +1135,7 @@ f_setmatches(typval_T *argvars UNUSED, typval_T *rettv UNUSED)
 	    char_u	*conceal;
 
 	    d = li->li_tv.vval.v_dict;
-	    if (dict_find(d, (char_u *)"pattern", -1) == NULL)
+	    if (!dict_has_key(d, "pattern"))
 	    {
 		if (s == NULL)
 		{
@@ -1142,7 +1164,7 @@ f_setmatches(typval_T *argvars UNUSED, typval_T *rettv UNUSED)
 	    group = dict_get_string(d, (char_u *)"group", TRUE);
 	    priority = (int)dict_get_number(d, (char_u *)"priority");
 	    id = (int)dict_get_number(d, (char_u *)"id");
-	    conceal = dict_find(d, (char_u *)"conceal", -1) != NULL
+	    conceal = dict_has_key(d, "conceal")
 			      ? dict_get_string(d, (char_u *)"conceal", TRUE)
 			      : NULL;
 	    if (i == 0)

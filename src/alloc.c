@@ -180,7 +180,6 @@ alloc_clear(size_t size)
     return p;
 }
 
-#if defined(FEAT_SIGNS) || defined(PROTO)
 /*
  * Same as alloc_clear() but with allocation id for testing
  */
@@ -193,7 +192,6 @@ alloc_clear_id(size_t size, alloc_id_T id UNUSED)
 #endif
     return alloc_clear(size);
 }
-#endif
 
 /*
  * Allocate memory like lalloc() and set all bytes to zero.
@@ -404,6 +402,7 @@ free_all_mem(void)
 # ifdef FEAT_MENU
 	// Clear menus.
 	do_cmdline_cmd((char_u *)"aunmenu *");
+	do_cmdline_cmd((char_u *)"tlunmenu *");
 #  ifdef FEAT_MULTI_LANG
 	do_cmdline_cmd((char_u *)"menutranslate clear");
 #  endif
@@ -588,6 +587,9 @@ free_all_mem(void)
 # ifdef FEAT_QUICKFIX
     check_quickfix_busy();
 # endif
+# ifdef FEAT_EVAL
+    free_resub_eval_result();
+# endif
 }
 #endif
 
@@ -721,6 +723,20 @@ ga_grow(garray_T *gap, int n)
     return OK;
 }
 
+/*
+ * Same as ga_grow() but uses an allocation id for testing.
+ */
+    int
+ga_grow_id(garray_T *gap, int n, alloc_id_T id UNUSED)
+{
+#ifdef FEAT_EVAL
+    if (alloc_fail_id == id && alloc_does_fail(sizeof(list_T)))
+	return FAIL;
+#endif
+
+    return ga_grow(gap, n);
+}
+
     int
 ga_grow_inner(garray_T *gap, int n)
 {
@@ -820,7 +836,7 @@ ga_add_string(garray_T *gap, char_u *p)
 
 /*
  * Concatenate a string to a growarray which contains bytes.
- * When "s" is NULL does not do anything.
+ * When "s" is NULL memory allocation fails does not do anything.
  * Note: Does NOT copy the NUL at the end!
  */
     void
@@ -857,14 +873,14 @@ ga_concat_len(garray_T *gap, char_u *s, size_t len)
 /*
  * Append one byte to a growarray which contains bytes.
  */
-    void
+    int
 ga_append(garray_T *gap, int c)
 {
-    if (ga_grow(gap, 1) == OK)
-    {
-	*((char *)gap->ga_data + gap->ga_len) = c;
-	++gap->ga_len;
-    }
+    if (ga_grow(gap, 1) == FAIL)
+	return FAIL;
+    *((char *)gap->ga_data + gap->ga_len) = c;
+    ++gap->ga_len;
+    return OK;
 }
 
 #if (defined(UNIX) && !defined(USE_SYSTEM)) || defined(MSWIN) \

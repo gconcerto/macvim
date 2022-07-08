@@ -767,6 +767,7 @@ win_line(
     {
 	if (wp->w_lcs_chars.space
 		|| wp->w_lcs_chars.multispace != NULL
+		|| wp->w_lcs_chars.leadmultispace != NULL
 		|| wp->w_lcs_chars.trail
 		|| wp->w_lcs_chars.lead
 		|| wp->w_lcs_chars.nbsp)
@@ -781,7 +782,7 @@ win_line(
 	    trailcol += (colnr_T) (ptr - line);
 	}
 	// find end of leading whitespace
-	if (wp->w_lcs_chars.lead)
+	if (wp->w_lcs_chars.lead || wp->w_lcs_chars.leadmultispace != NULL)
 	{
 	    leadcol = 0;
 	    while (VIM_ISWHITE(ptr[leadcol]))
@@ -969,7 +970,11 @@ win_line(
 		}
 		else
 # endif
+# if defined(FEAT_QUICKFIX)
+		    line_attr = hl_combine_attr(line_attr, cul_attr);
+# else
 		    line_attr = cul_attr;
+# endif
 	    }
 	    else
 	    {
@@ -1263,14 +1268,14 @@ win_line(
 		if (filler_todo > 0)
 		{
 		    // Draw "deleted" diff line(s).
-		    if (char2cells(fill_diff) > 1)
+		    if (char2cells(wp->w_fill_chars.diff) > 1)
 		    {
 			c_extra = '-';
 			c_final = NUL;
 		    }
 		    else
 		    {
-			c_extra = fill_diff;
+			c_extra = wp->w_fill_chars.diff;
 			c_final = NUL;
 		    }
 #  ifdef FEAT_RIGHTLEFT
@@ -1347,7 +1352,7 @@ win_line(
 #endif
 		)
 	{
-	    screen_line(screen_row, wp->w_wincol, col, -wp->w_width,
+	    screen_line(wp, screen_row, wp->w_wincol, col, -wp->w_width,
 							    screen_line_flags);
 	    // Pretend we have finished updating the window.  Except when
 	    // 'cursorcolumn' is set.
@@ -1963,7 +1968,7 @@ win_line(
 			// In Insert mode only highlight a word that
 			// doesn't touch the cursor.
 			if (spell_hlf != HLF_COUNT
-				&& (State & INSERT) != 0
+				&& (State & MODE_INSERT)
 				&& wp->w_cursor.lnum == lnum
 				&& wp->w_cursor.col >=
 						    (colnr_T)(prev_ptr - line)
@@ -2115,11 +2120,28 @@ win_line(
 			mb_utf8 = FALSE;
 		}
 
-		if ((trailcol != MAXCOL && ptr > line + trailcol && c == ' ')
-			|| (leadcol != 0 && ptr < line + leadcol && c == ' '))
+		if (c == ' ' && ((trailcol != MAXCOL && ptr > line + trailcol)
+				    || (leadcol != 0 && ptr < line + leadcol)))
 		{
-		    c = (ptr > line + trailcol) ? wp->w_lcs_chars.trail
-							: wp->w_lcs_chars.lead;
+		    if (leadcol != 0 && in_multispace && ptr < line + leadcol
+			    && wp->w_lcs_chars.leadmultispace != NULL)
+		    {
+			c = wp->w_lcs_chars.leadmultispace[multispace_pos++];
+			if (wp->w_lcs_chars.leadmultispace[multispace_pos]
+									== NUL)
+			    multispace_pos = 0;
+		    }
+
+		    else if (ptr > line + trailcol && wp->w_lcs_chars.trail)
+			c = wp->w_lcs_chars.trail;
+
+		    else if (ptr < line + leadcol && wp->w_lcs_chars.lead)
+			c = wp->w_lcs_chars.lead;
+
+		    else if (leadcol != 0 && wp->w_lcs_chars.space)
+			c = wp->w_lcs_chars.space;
+
+
 		    if (!attr_pri)
 		    {
 			n_attr = 1;
@@ -2477,14 +2499,16 @@ win_line(
 
 #ifdef FEAT_CONCEAL
 	    if (   wp->w_p_cole > 0
-		&& (wp != curwin || lnum != wp->w_cursor.lnum ||
-						       conceal_cursor_line(wp))
+		&& (wp != curwin || lnum != wp->w_cursor.lnum
+						    || conceal_cursor_line(wp))
 		&& ((syntax_flags & HL_CONCEAL) != 0 || has_match_conc > 0)
 		&& !(lnum_in_visual_area
 				    && vim_strchr(wp->w_p_cocu, 'v') == NULL))
 	    {
 		char_attr = conceal_attr;
-		if ((prev_syntax_id != syntax_seqnr || has_match_conc > 1)
+		if (((prev_syntax_id != syntax_seqnr
+					   && (syntax_flags & HL_CONCEAL) != 0)
+			    || has_match_conc > 1)
 			&& (syn_get_sub_char() != NUL
 				|| (has_match_conc && match_conc)
 				|| wp->w_p_cole == 1)
@@ -2597,7 +2621,7 @@ win_line(
 		&& xic != NULL
 # endif
 		&& lnum == wp->w_cursor.lnum
-		&& (State & INSERT)
+		&& (State & MODE_INSERT)
 # ifndef FEAT_GUI_MACVIM
 		&& !p_imdisable
 # endif
@@ -2839,7 +2863,7 @@ win_line(
 	    }
 #endif
 
-	    screen_line(screen_row, wp->w_wincol, col,
+	    screen_line(wp, screen_row, wp->w_wincol, col,
 					  wp->w_width, screen_line_flags);
 	    row++;
 
@@ -3140,11 +3164,11 @@ win_line(
 		)
 	{
 #ifdef FEAT_CONCEAL
-	    screen_line(screen_row, wp->w_wincol, col - boguscols,
+	    screen_line(wp, screen_row, wp->w_wincol, col - boguscols,
 					  wp->w_width, screen_line_flags);
 	    boguscols = 0;
 #else
-	    screen_line(screen_row, wp->w_wincol, col,
+	    screen_line(wp, screen_row, wp->w_wincol, col,
 					  wp->w_width, screen_line_flags);
 #endif
 	    ++row;

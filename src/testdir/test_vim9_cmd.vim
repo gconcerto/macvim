@@ -83,6 +83,16 @@ def Test_vim9cmd()
   v9.CheckScriptSuccess(lines)
 enddef
 
+def Test_defcompile_fails()
+  assert_fails('defcompile NotExists', 'E1061:')
+  assert_fails('defcompile debug debug Test_defcompile_fails', 'E488:')
+  assert_fails('defcompile profile profile Test_defcompile_fails', 'E488:')
+enddef
+
+defcompile Test_defcompile_fails
+defcompile debug Test_defcompile_fails
+defcompile profile Test_defcompile_fails
+
 def Test_cmdmod_execute()
   # "legacy" applies not only to the "exe" argument but also to the commands
   var lines =<< trim END
@@ -651,6 +661,20 @@ def Test_use_register()
   v9.CheckDefAndScriptFailure(lines, 'E1207:', 2)
 
   lines =<< trim END
+      @a = 'echo "text"'
+      @a
+
+  END
+  v9.CheckDefAndScriptFailure(lines, 'E1207:', 2)
+
+  lines =<< trim END
+      @a = 'echo "text"'
+      @a
+          # comment
+  END
+  v9.CheckDefAndScriptFailure(lines, 'E1207:', 2)
+
+  lines =<< trim END
       @/ = 'pattern'
       @/
   END
@@ -683,6 +707,16 @@ def Test_use_register()
   END
   v9.CheckDefAndScriptFailure(lines, 'E1207:', 2)
   $SomeEnv = ''
+
+  lines =<< trim END
+      eval 'value'
+  END
+  v9.CheckDefAndScriptFailure(lines, 'E1207:', 1)
+
+  lines =<< trim END
+      eval "value"
+  END
+  v9.CheckDefAndScriptFailure(lines, 'E1207:', 1)
 enddef
 
 def Test_environment_use_linebreak()
@@ -1363,7 +1397,12 @@ def Test_command_not_recognized()
   var lines =<< trim END
     d.key = 'asdf'
   END
-  v9.CheckDefFailure(lines, 'E1146:', 1)
+  v9.CheckDefFailure(lines, 'E1089: Unknown variable: d', 1)
+
+  lines =<< trim END
+    d['key'] = 'asdf'
+  END
+  v9.CheckDefFailure(lines, 'E1089: Unknown variable: d', 1)
 
   lines =<< trim END
     if 0
@@ -1371,11 +1410,6 @@ def Test_command_not_recognized()
     endif
   END
   v9.CheckDefSuccess(lines)
-
-  lines =<< trim END
-    d['key'] = 'asdf'
-  END
-  v9.CheckDefFailure(lines, 'E1146:', 1)
 enddef
 
 def Test_magic_not_used()
@@ -1538,6 +1572,14 @@ def Test_lockvar()
   d.a = 7
   assert_equal({a: 7, b: 5}, d)
 
+  caught = false
+  try
+    lockvar d.c
+  catch /E716/
+    caught = true
+  endtry
+  assert_true(caught)
+
   var lines =<< trim END
       vim9script
       g:bl = 0z1122
@@ -1642,6 +1684,23 @@ def Test_lockvar()
       LockIt()
   END
   v9.CheckScriptFailure(lines, 'E1246', 1)
+
+  lines =<< trim END
+      vim9script
+      const name = 'john'
+      unlockvar name
+  END
+  v9.CheckScriptFailure(lines, 'E46', 3)
+
+  lines =<< trim END
+      vim9script
+      const name = 'john'
+      def UnLockIt()
+        unlockvar name
+      enddef
+      UnLockIt()
+  END
+  v9.CheckScriptFailure(lines, 'E46', 1)
 enddef
 
 def Test_substitute_expr()
@@ -1665,6 +1724,9 @@ def Test_substitute_expr()
     :1s/abc/\=choice ? 'yes' : 'no'/
   endfor
   assert_equal('yes no abc', getline(1))
+
+  setline(1, 'from')
+  v9.CheckDefExecFailure(['s/from/\=g:notexist/'], 'E121: Undefined variable: g:notexist')
 
   bwipe!
 

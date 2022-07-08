@@ -279,7 +279,8 @@ variable_exists(char_u *name, size_t len, cctx_T *cctx)
 
 /*
  * Return TRUE if "name" is a local variable, argument, script variable,
- * imported or function.
+ * imported or function.  Or commands are being skipped, a declaration may have
+ * been skipped then.
  */
     static int
 item_exists(char_u *name, size_t len, int cmd UNUSED, cctx_T *cctx)
@@ -411,7 +412,8 @@ need_type_where(
     // If the actual type can be the expected type add a runtime check.
     if (!actual_is_const && ret == MAYBE && use_typecheck(actual, expected))
     {
-	generate_TYPECHECK(cctx, expected, offset, where.wt_index);
+	generate_TYPECHECK(cctx, expected, offset,
+					    where.wt_variable, where.wt_index);
 	return OK;
     }
 
@@ -594,6 +596,7 @@ find_imported_in_script(char_u *name, size_t len, int sid)
 
 /*
  * Find "name" in imported items of the current script.
+ * If "len" is 0 use any length that works.
  * If "load" is TRUE and the script was not loaded yet, load it now.
  */
     imported_T *
@@ -967,6 +970,117 @@ theend:
 }
 
 /*
+ * Compile one Vim expression {expr} in string "p".
+ * "p" points to the opening "{".
+ * Return a pointer to the character after "}", NULL for an error.
+ */
+    char_u *
+compile_one_expr_in_str(char_u *p, cctx_T *cctx)
+{
+    char_u	*block_start;
+    char_u	*block_end;
+
+    // Skip the opening {.
+    block_start = skipwhite(p + 1);
+    block_end = block_start;
+    if (*block_start != NUL && skip_expr(&block_end, NULL) == FAIL)
+	return NULL;
+    block_end = skipwhite(block_end);
+    // The block must be closed by a }.
+    if (*block_end != '}')
+    {
+	semsg(_(e_missing_close_curly_str), p);
+	return NULL;
+    }
+    if (compile_expr0(&block_start, cctx) == FAIL)
+	return NULL;
+    may_generate_2STRING(-1, TRUE, cctx);
+
+    return block_end + 1;
+}
+
+/*
+ * Compile a string "str" (either containing a literal string or a mix of
+ * literal strings and Vim expressions of the form `{expr}`).  This is used
+ * when compiling a heredoc assignment to a variable or an interpolated string
+ * in a Vim9 def function.  Vim9 instructions are generated to push strings,
+ * evaluate expressions, concatenate them and create a list of lines.  When
+ * "evalstr" is TRUE, Vim expressions in "str" are evaluated.
+ */
+    int
+compile_all_expr_in_str(char_u *str, int evalstr, cctx_T *cctx)
+{
+    char_u	*p = str;
+    char_u	*val;
+    int		count = 0;
+
+    if (cctx->ctx_skip == SKIP_YES)
+	return OK;
+
+    if (!evalstr || *str == NUL)
+    {
+	// Literal string, possibly empty.
+	val = *str != NUL ? vim_strsave(str) : NULL;
+	return generate_PUSHS(cctx, &val);
+    }
+
+    // Push all the string pieces to the stack, followed by a ISN_CONCAT.
+    while (*p != NUL)
+    {
+	char_u	*lit_start;
+	int	escaped_brace = FALSE;
+
+	// Look for a block start.
+	lit_start = p;
+	while (*p != '{' && *p != '}' && *p != NUL)
+	    ++p;
+
+	if (*p != NUL && *p == p[1])
+	{
+	    // Escaped brace, unescape and continue.
+	    // Include the brace in the literal string.
+	    ++p;
+	    escaped_brace = TRUE;
+	}
+	else if (*p == '}')
+	{
+	    semsg(_(e_stray_closing_curly_str), str);
+	    return FAIL;
+	}
+
+	// Append the literal part.
+	if (p != lit_start)
+	{
+	    val = vim_strnsave(lit_start, (size_t)(p - lit_start));
+	    if (generate_PUSHS(cctx, &val) == FAIL)
+		return FAIL;
+	    ++count;
+	}
+
+	if (*p == NUL)
+	    break;
+
+	if (escaped_brace)
+	{
+	    // Skip the second brace.
+	    ++p;
+	    continue;
+	}
+
+	p = compile_one_expr_in_str(p, cctx);
+	if (p == NULL)
+	    return FAIL;
+	++count;
+    }
+
+    // Small optimization, if there's only a single piece skip the ISN_CONCAT.
+    if (count > 1)
+	return generate_CONCAT(cctx, count);
+
+    return OK;
+}
+
+/*
  * Return the length of an assignment operator, or zero if there isn't one.
  */
     int
@@ -1027,7 +1141,7 @@ generate_loadvar(
 	    break;
 	case dest_script:
 	    compile_load_scriptvar(cctx,
-		    name + (name[1] == ':' ? 2 : 0), NULL, NULL, TRUE);
+				  name + (name[1] == ':' ? 2 : 0), NULL, NULL);
 	    break;
 	case dest_env:
 	    // Include $ in the name here
@@ -1037,7 +1151,7 @@ generate_loadvar(
 	    generate_LOAD(cctx, ISN_LOADREG, name[1], NULL, &t_string);
 	    break;
 	case dest_vimvar:
-	    generate_LOADV(cctx, name + 2, TRUE);
+	    generate_LOADV(cctx, name + 2);
 	    break;
 	case dest_local:
 	    if (lvar->lv_from_outer > 0)
@@ -1109,7 +1223,7 @@ vim9_declare_error(char_u *name)
 get_var_dest(
 	char_u		*name,
 	assign_dest_T	*dest,
-	int		cmdidx,
+	cmdidx_T	cmdidx,
 	int		*option_scope,
 	int		*vimvaridx,
 	type_T		**type,
@@ -1225,7 +1339,7 @@ get_var_dest(
 }
 
     static int
-is_decl_command(int cmdidx)
+is_decl_command(cmdidx_T cmdidx)
 {
     return cmdidx == CMD_let || cmdidx == CMD_var
 				 || cmdidx == CMD_final || cmdidx == CMD_const;
@@ -1238,12 +1352,13 @@ is_decl_command(int cmdidx)
  */
     int
 compile_lhs(
-	char_u	*var_start,
-	lhs_T	*lhs,
-	int	cmdidx,
-	int	heredoc,
-	int	oplen,
-	cctx_T	*cctx)
+	char_u	    *var_start,
+	lhs_T	    *lhs,
+	cmdidx_T    cmdidx,
+	int	    heredoc,
+	int	    has_cmd,	    // "var" before "var_start"
+	int	    oplen,
+	cctx_T	    *cctx)
 {
     char_u	*var_end;
     int		is_decl = is_decl_command(cmdidx);
@@ -1493,7 +1608,8 @@ compile_lhs(
 	    semsg(_(e_cannot_use_operator_on_new_variable), lhs->lhs_name);
 	    return FAIL;
 	}
-	if (!is_decl)
+	if (!is_decl || (lhs->lhs_has_index && !has_cmd
+						&& cctx->ctx_skip != SKIP_YES))
 	{
 	    semsg(_(e_unknown_variable_str), lhs->lhs_name);
 	    return FAIL;
@@ -1520,9 +1636,12 @@ compile_lhs(
 	char_u	*p;
 
 	// Something follows after the variable: "var[idx]" or "var.key".
-	if (is_decl)
+	if (is_decl && cctx->ctx_skip != SKIP_YES)
 	{
-	    emsg(_(e_cannot_use_index_when_declaring_variable));
+	    if (has_cmd)
+		emsg(_(e_cannot_use_index_when_declaring_variable));
+	    else
+		semsg(_(e_unknown_variable_str), lhs->lhs_name);
 	    return FAIL;
 	}
 
@@ -1562,15 +1681,17 @@ compile_lhs(
  */
     int
 compile_assign_lhs(
-	char_u	*var_start,
-	lhs_T	*lhs,
-	int	cmdidx,
-	int	is_decl,
-	int	heredoc,
-	int	oplen,
-	cctx_T	*cctx)
+	char_u	    *var_start,
+	lhs_T	    *lhs,
+	cmdidx_T    cmdidx,
+	int	    is_decl,
+	int	    heredoc,
+	int	    has_cmd,	    // "var" before "var_start"
+	int	    oplen,
+	cctx_T	    *cctx)
 {
-    if (compile_lhs(var_start, lhs, cmdidx, heredoc, oplen, cctx) == FAIL)
+    if (compile_lhs(var_start, lhs, cmdidx, heredoc, has_cmd, oplen, cctx)
+								       == FAIL)
 	return FAIL;
 
     if (!lhs->lhs_has_index && lhs->lhs_lvar == &lhs->lhs_arg_lvar)
@@ -1908,20 +2029,6 @@ compile_assignment(char_u *arg, exarg_T *eap, cmdidx_T cmdidx, cctx_T *cctx)
 
     lhs.lhs_name = NULL;
 
-    sp = p;
-    p = skipwhite(p);
-    op = p;
-    oplen = assignment_len(p, &heredoc);
-
-    if (var_count > 0 && oplen == 0)
-	// can be something like "[1, 2]->func()"
-	return arg;
-
-    if (oplen > 0 && (!VIM_ISWHITE(*sp) || !IS_WHITE_OR_NUL(op[oplen])))
-    {
-	error_white_both(op, oplen);
-	return NULL;
-    }
     if (eap->cmdidx == CMD_increment || eap->cmdidx == CMD_decrement)
     {
 	if (VIM_ISWHITE(eap->cmd[2]))
@@ -1934,29 +2041,35 @@ compile_assignment(char_u *arg, exarg_T *eap, cmdidx_T cmdidx, cctx_T *cctx)
 	oplen = 2;
 	incdec = TRUE;
     }
+    else
+    {
+	sp = p;
+	p = skipwhite(p);
+	op = p;
+	oplen = assignment_len(p, &heredoc);
+
+	if (var_count > 0 && oplen == 0)
+	    // can be something like "[1, 2]->func()"
+	    return arg;
+
+	if (oplen > 0 && (!VIM_ISWHITE(*sp) || !IS_WHITE_OR_NUL(op[oplen])))
+	{
+	    error_white_both(op, oplen);
+	    return NULL;
+	}
+    }
 
     if (heredoc)
     {
 	list_T	   *l;
-	listitem_T *li;
 
 	// [let] varname =<< [trim] {end}
 	eap->getline = exarg_getline;
 	eap->cookie = cctx;
-	l = heredoc_get(eap, op + 3, FALSE);
+	l = heredoc_get(eap, op + 3, FALSE, TRUE);
 	if (l == NULL)
 	    return NULL;
 
-	if (cctx->ctx_skip != SKIP_YES)
-	{
-	    // Push each line and the create the list.
-	    FOR_ALL_LIST_ITEMS(l, li)
-	    {
-		generate_PUSHS(cctx, &li->li_tv.vval.v_string);
-		li->li_tv.vval.v_string = NULL;
-	    }
-	    generate_NEWLIST(cctx, l->lv_len, FALSE);
-	}
 	list_free(l);
 	p += STRLEN(p);
 	end = p;
@@ -2049,7 +2162,8 @@ compile_assignment(char_u *arg, exarg_T *eap, cmdidx_T cmdidx, cctx_T *cctx)
 	 * Figure out the LHS type and other properties.
 	 */
 	if (compile_assign_lhs(var_start, &lhs, cmdidx,
-					is_decl, heredoc, oplen, cctx) == FAIL)
+				is_decl, heredoc, var_start > eap->cmd,
+				oplen, cctx) == FAIL)
 	    goto theend;
 	if (heredoc)
 	{
@@ -2216,39 +2330,41 @@ compile_assignment(char_u *arg, exarg_T *eap, cmdidx_T cmdidx, cctx_T *cctx)
 	    }
 	    else
 	    {
+		int r = OK;
+
 		// variables are always initialized
 		if (GA_GROW_FAILS(instr, 1))
 		    goto theend;
 		switch (lhs.lhs_member_type->tt_type)
 		{
 		    case VAR_BOOL:
-			generate_PUSHBOOL(cctx, VVAL_FALSE);
+			r = generate_PUSHBOOL(cctx, VVAL_FALSE);
 			break;
 		    case VAR_FLOAT:
 #ifdef FEAT_FLOAT
-			generate_PUSHF(cctx, 0.0);
+			r = generate_PUSHF(cctx, 0.0);
 #endif
 			break;
 		    case VAR_STRING:
-			generate_PUSHS(cctx, NULL);
+			r = generate_PUSHS(cctx, NULL);
 			break;
 		    case VAR_BLOB:
-			generate_PUSHBLOB(cctx, blob_alloc());
+			r = generate_PUSHBLOB(cctx, blob_alloc());
 			break;
 		    case VAR_FUNC:
-			generate_PUSHFUNC(cctx, NULL, &t_func_void);
+			r = generate_PUSHFUNC(cctx, NULL, &t_func_void);
 			break;
 		    case VAR_LIST:
-			generate_NEWLIST(cctx, 0, FALSE);
+			r = generate_NEWLIST(cctx, 0, FALSE);
 			break;
 		    case VAR_DICT:
-			generate_NEWDICT(cctx, 0, FALSE);
+			r = generate_NEWDICT(cctx, 0, FALSE);
 			break;
 		    case VAR_JOB:
-			generate_PUSHJOB(cctx);
+			r = generate_PUSHJOB(cctx);
 			break;
 		    case VAR_CHANNEL:
-			generate_PUSHCHANNEL(cctx);
+			r = generate_PUSHCHANNEL(cctx);
 			break;
 		    case VAR_NUMBER:
 		    case VAR_UNKNOWN:
@@ -2266,10 +2382,12 @@ compile_assignment(char_u *arg, exarg_T *eap, cmdidx_T cmdidx, cctx_T *cctx)
 			else
 			{
 			    instr_count = instr->ga_len;
-			    generate_PUSHNR(cctx, 0);
+			    r = generate_PUSHNR(cctx, 0);
 			}
 			break;
 		}
+		if (r == FAIL)
+		    goto theend;
 	    }
 	    if (var_count == 0)
 		end = p;
@@ -2306,7 +2424,7 @@ compile_assignment(char_u *arg, exarg_T *eap, cmdidx_T cmdidx, cctx_T *cctx)
 
 	    if (*op == '.')
 	    {
-		if (generate_instr_drop(cctx, ISN_CONCAT, 1) == NULL)
+		if (generate_CONCAT(cctx, 2) == FAIL)
 		    goto theend;
 	    }
 	    else if (*op == '+')
@@ -2769,6 +2887,7 @@ compile_def_function(
 	CLEAR_FIELD(ea);
 	ea.cmdlinep = &line;
 	ea.cmd = skipwhite(line);
+	ea.skip = cctx.ctx_skip == SKIP_YES;
 
 	if (*ea.cmd == '#')
 	{
@@ -2882,6 +3001,7 @@ compile_def_function(
 	 * 0z1234->func() should not be confused with a zero line number
 	 * "++nr" and "--nr" are eval commands
 	 * in "$ENV->func()" the "$" is not a range
+	 * "123->func()" is a method call
 	 */
 	cmd = ea.cmd;
 	if ((*cmd != '$' || starts_with_colon)
@@ -2889,7 +3009,8 @@ compile_def_function(
 		    || !(*cmd == '\''
 			|| (cmd[0] == '0' && cmd[1] == 'z')
 			|| (cmd[0] != NUL && cmd[0] == cmd[1]
-					    && (*cmd == '+' || *cmd == '-')))))
+					    && (*cmd == '+' || *cmd == '-'))
+			|| number_method(cmd))))
 	{
 	    ea.cmd = skip_range(ea.cmd, TRUE, NULL);
 	    if (ea.cmd > cmd)
@@ -2957,15 +3078,17 @@ compile_def_function(
 
 	if (p == ea.cmd && ea.cmdidx != CMD_SIZE)
 	{
-	    if (cctx.ctx_skip == SKIP_YES && ea.cmdidx != CMD_eval)
+	    // "eval" is used for "val->func()" and "var" for "var = val", then
+	    // "p" is equal to "ea.cmd" for a valid command.
+	    if (ea.cmdidx == CMD_eval || ea.cmdidx == CMD_var)
+		;
+	    else if (cctx.ctx_skip == SKIP_YES)
 	    {
 		line += STRLEN(line);
 		goto nextline;
 	    }
-	    else if (ea.cmdidx != CMD_eval)
+	    else
 	    {
-		// CMD_var cannot happen, compile_assignment() above would be
-		// used.  Most likely an assignment to a non-existing variable.
 		semsg(_(e_command_not_recognized_str), ea.cmd);
 		goto erret;
 	    }
@@ -2995,6 +3118,11 @@ compile_def_function(
 	    {
 		ea.forceit = TRUE;
 		p = skipwhite(p + 1);
+	    }
+	    if ((ea.argt & EX_RANGE) == 0 && ea.addr_count > 0)
+	    {
+		emsg(_(e_no_range_allowed));
+		goto erret;
 	    }
 	}
 

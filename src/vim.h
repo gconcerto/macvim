@@ -17,7 +17,7 @@
 # define MSWIN
 #endif
 
-#ifdef MSWIN
+#if defined(MSWIN) && !defined(PROTO)
 # include <io.h>
 #endif
 
@@ -116,7 +116,6 @@
 
 #if defined(FEAT_GUI_MOTIF) \
     || defined(FEAT_GUI_GTK) \
-    || defined(FEAT_GUI_ATHENA) \
     || defined(FEAT_GUI_HAIKU) \
     || defined(FEAT_GUI_MACVIM) \
     || defined(FEAT_GUI_MSWIN) \
@@ -190,9 +189,6 @@
 # endif
 # ifdef FEAT_GUI_MOTIF
 #  undef FEAT_GUI_MOTIF
-# endif
-# ifdef FEAT_GUI_ATHENA
-#  undef FEAT_GUI_ATHENA
 # endif
 # ifdef FEAT_GUI_GTK
 #  undef FEAT_GUI_GTK
@@ -383,7 +379,7 @@ typedef		 long		long_i;
  * We assume that when fseeko() is available then ftello() is too.
  * Note that Windows has different function names.
  */
-#ifdef MSWIN
+#if defined(MSWIN) && !defined(PROTO)
 typedef __int64 off_T;
 # ifdef __MINGW32__
 #  define vim_lseek lseek64
@@ -642,15 +638,16 @@ extern int (*dyn_libintl_wputenv)(const wchar_t *envstring);
 // Values for w_popup_flags.
 #define POPF_IS_POPUP	0x01	// this is a popup window
 #define POPF_HIDDEN	0x02	// popup is not displayed
-#define POPF_CURSORLINE	0x04	// popup is highlighting at the cursorline
-#define POPF_ON_CMDLINE	0x08	// popup overlaps command line
-#define POPF_DRAG	0x10	// popup can be moved by dragging border
-#define POPF_DRAGALL	0x20	// popup can be moved by dragging everywhere
-#define POPF_RESIZE	0x40	// popup can be resized by dragging
-#define POPF_MAPPING	0x80	// mapping keys
-#define POPF_INFO	0x100	// used for info of popup menu
-#define POPF_INFO_MENU	0x200	// align info popup with popup menu
-#define POPF_POSINVERT	0x400	// vertical position can be inverted
+#define POPF_HIDDEN_FORCE 0x04	// popup is explicitly set to not be displayed
+#define POPF_CURSORLINE	0x08	// popup is highlighting at the cursorline
+#define POPF_ON_CMDLINE	0x10	// popup overlaps command line
+#define POPF_DRAG	0x20	// popup can be moved by dragging border
+#define POPF_DRAGALL	0x40	// popup can be moved by dragging everywhere
+#define POPF_RESIZE	0x80	// popup can be resized by dragging
+#define POPF_MAPPING	0x100	// mapping keys
+#define POPF_INFO	0x200	// used for info of popup menu
+#define POPF_INFO_MENU	0x400	// align info popup with popup menu
+#define POPF_POSINVERT	0x800	// vertical position can be inverted
 
 // flags used in w_popup_handled
 #define POPUP_HANDLED_1	    0x01    // used by mouse_find_win()
@@ -669,58 +666,63 @@ extern int (*dyn_libintl_wputenv)(const wchar_t *envstring);
 #define HL_ITALIC		0x04
 #define HL_UNDERLINE		0x08
 #define HL_UNDERCURL		0x10
-#define HL_STANDOUT		0x20
-#define HL_NOCOMBINE		0x40
-#define HL_STRIKETHROUGH	0x80
+#define HL_UNDERDOUBLE		0x20
+#define HL_UNDERDOTTED		0x40
+#define HL_UNDERDASHED		0x80
+#define HL_STANDOUT		0x100
+#define HL_NOCOMBINE		0x200
+#define HL_STRIKETHROUGH	0x400
 #if defined(FEAT_GUI_MACVIM)
-# define HL_THICKUNDERLINE	0x100
-# define HL_ALL			0x1ff
+#define HL_THICKUNDERLINE	0x1000
+#define HL_ALL			0x1fff
 #else
-# define HL_ALL			0xff
+#define HL_ALL			0x7ff
 #endif
 
 // special attribute addition: Put message in history
 #define MSG_HIST		0x1000
 
 /*
- * values for State
+ * Values for State.
  *
- * The lower bits up to 0x20 are used to distinguish normal/visual/op_pending
- * and cmdline/insert+replace mode.  This is used for mapping.  If none of
- * these bits are set, no mapping is done.
- * The upper bits are used to distinguish between other states.
+ * The lower bits up to 0x80 are used to distinguish normal/visual/op_pending
+ * /cmdline/insert/replace/terminal mode.  This is used for mapping.  If none
+ * of these bits are set, no mapping is done.  See the comment above do_map().
+ * The upper bits are used to distinguish between other states and variants of
+ * the base modes.
  */
-#define NORMAL		0x01	// Normal mode, command expected
-#define VISUAL		0x02	// Visual mode - use get_real_state()
-#define OP_PENDING	0x04	// Normal mode, operator is pending - use
+#define MODE_NORMAL	0x01	// Normal mode, command expected
+#define MODE_VISUAL	0x02	// Visual mode - use get_real_state()
+#define MODE_OP_PENDING	0x04	// Normal mode, operator is pending - use
 				// get_real_state()
-#define CMDLINE		0x08	// Editing command line
-#define INSERT		0x10	// Insert mode
-#define LANGMAP		0x20	// Language mapping, can be combined with
-				// INSERT and CMDLINE
+#define MODE_CMDLINE	0x08	// Editing the command line
+#define MODE_INSERT	0x10	// Insert mode, also for Replace mode
+#define MODE_LANGMAP	0x20	// Language mapping, can be combined with
+				// MODE_INSERT and MODE_CMDLINE
+#define MODE_SELECT	0x40	// Select mode, use get_real_state()
+#define MODE_TERMINAL	0x80	// Terminal mode
 
-#define REPLACE_FLAG	0x40	// Replace mode flag
-#define REPLACE		(REPLACE_FLAG + INSERT)
-#define VREPLACE_FLAG	0x80	// Virtual-replace mode flag
-#define VREPLACE	(REPLACE_FLAG + VREPLACE_FLAG + INSERT)
-#define LREPLACE	(REPLACE_FLAG + LANGMAP)
+#define MAP_ALL_MODES	0xff    // all mode bits used for mapping
 
-#define NORMAL_BUSY	(0x100 + NORMAL) // Normal mode, busy with a command
-#define HITRETURN	(0x200 + NORMAL) // waiting for return or command
-#define ASKMORE		0x300	// Asking if you want --more--
-#define SETWSIZE	0x400	// window size has changed
-#define ABBREV		0x500	// abbreviation instead of mapping
-#define EXTERNCMD	0x600	// executing an external command
-#define SHOWMATCH	(0x700 + INSERT) // show matching paren
-#define CONFIRM		0x800	// ":confirm" prompt
-#define SELECTMODE	0x1000	// Select mode, only for mappings
-#define TERMINAL        0x2000  // Terminal mode
+#define REPLACE_FLAG	0x100	// Replace mode flag
+#define MODE_REPLACE	(REPLACE_FLAG | MODE_INSERT)
+#define VREPLACE_FLAG	0x200	// Virtual-replace mode flag
+#define MODE_VREPLACE	(REPLACE_FLAG | VREPLACE_FLAG | MODE_INSERT)
+#define MODE_LREPLACE	(REPLACE_FLAG | MODE_LANGMAP)
+
+#define MODE_NORMAL_BUSY (0x1000 | MODE_NORMAL)
+				// Normal mode, busy with a command
+#define MODE_HITRETURN	(0x2000 | MODE_NORMAL)
+				// waiting for return or command
+#define MODE_ASKMORE	0x3000	// Asking if you want --more--
+#define MODE_SETWSIZE	0x4000	// window size has changed
+#define MODE_EXTERNCMD	0x5000	// executing an external command
+#define MODE_SHOWMATCH	(0x6000 | MODE_INSERT) // show matching paren
+#define MODE_CONFIRM	0x7000	// ":confirm" prompt
 #define MODE_ALL	0xffff
 
-#define MODE_MAX_LENGTH	4	// max mode length returned in mode()
-
-// all mode bits used for mapping
-#define MAP_ALL_MODES	(0x3f | SELECTMODE | TERMINAL)
+#define MODE_MAX_LENGTH	4	// max mode length used by get_mode(),
+				// including the terminating NUL
 
 // directions
 #define FORWARD			1
@@ -981,6 +983,11 @@ extern int (*dyn_libintl_wputenv)(const wchar_t *envstring);
 #define KEY_OPEN_BACK	0x102
 #define KEY_COMPLETE	0x103	// end of completion
 
+// Used for the first argument of do_map()
+#define MAPTYPE_MAP	0
+#define MAPTYPE_UNMAP	1
+#define MAPTYPE_NOREMAP	2
+
 // Values for "noremap" argument of ins_typebuf().  Also used for
 // map->m_noremap and menu->noremap[].
 #define REMAP_YES	0	// allow remapping
@@ -1132,11 +1139,12 @@ extern int (*dyn_libintl_wputenv)(const wchar_t *envstring);
 #define INSCHAR_COM_LIST 16	// format comments with list/2nd line indent
 
 // flags for open_line()
-#define OPENLINE_DELSPACES  1	// delete spaces after cursor
-#define OPENLINE_DO_COM	    2	// format comments
-#define OPENLINE_KEEPTRAIL  4	// keep trailing spaces
-#define OPENLINE_MARKFIX    8	// fix mark positions
-#define OPENLINE_COM_LIST  16	// format comments with list/2nd line indent
+#define OPENLINE_DELSPACES  0x01    // delete spaces after cursor
+#define OPENLINE_DO_COM	    0x02    // format comments
+#define OPENLINE_KEEPTRAIL  0x04    // keep trailing spaces
+#define OPENLINE_MARKFIX    0x08    // fix mark positions
+#define OPENLINE_COM_LIST   0x10    // format comments with list/2nd line indent
+#define OPENLINE_FORMAT	    0x20    // formatting long comment
 
 // There are five history tables:
 #define HIST_CMD	0	// colon commands
@@ -1267,6 +1275,7 @@ extern int (*dyn_libintl_wputenv)(const wchar_t *envstring);
 #define SEA_DIALOG	1	// use dialog when possible
 #define SEA_QUIT	2	// quit editing the file
 #define SEA_RECOVER	3	// recover the file
+#define SEA_READONLY	4	// no dialog, mark buffer as read-only
 
 /*
  * Minimal size for block 0 of a swap file.
@@ -1389,8 +1398,8 @@ enum auto_event
 				// entering its window
     EVENT_TERMRESPONSE,		// after setting "v:termresponse"
     EVENT_TEXTCHANGED,		// text was modified not in Insert mode
-    EVENT_TEXTCHANGEDI,         // text was modified in Insert mode
-    EVENT_TEXTCHANGEDP,         // TextChangedI with popup menu visible
+    EVENT_TEXTCHANGEDI,		// text was modified in Insert mode
+    EVENT_TEXTCHANGEDP,		// TextChangedI with popup menu visible
     EVENT_TEXTYANKPOST,		// after some text was yanked
     EVENT_USER,			// user defined autocommand
     EVENT_VIMENTER,		// after starting Vim
@@ -1403,6 +1412,7 @@ enum auto_event
     EVENT_WINCLOSED,		// after closing a window
     EVENT_VIMSUSPEND,		// before Vim is suspended
     EVENT_VIMRESUME,		// after Vim is resumed
+    EVENT_WINSCROLLED,		// after Vim window was scrolled
 
     NUM_EVENTS			// MUST be the last one
 };
@@ -1426,6 +1436,7 @@ typedef enum
     , HLF_H	    // obsolete, ignored
     , HLF_I	    // incremental search
     , HLF_L	    // last search string
+    , HLF_LC	    // last search string under cursor
     , HLF_M	    // "--More--" message
     , HLF_CM	    // Mode (e.g., "-- INSERT --")
     , HLF_N	    // line number for ":number" and ":#" commands
@@ -1473,7 +1484,7 @@ typedef enum
 
 // The HL_FLAGS must be in the same order as the HLF_ enums!
 // When changing this also adjust the default for 'highlight'.
-#define HL_FLAGS {'8', '~', '@', 'd', 'e', 'h', 'i', 'l', 'm', 'M', \
+#define HL_FLAGS {'8', '~', '@', 'd', 'e', 'h', 'i', 'l', 'y', 'm', 'M', \
 		  'n', 'a', 'b', 'N', 'G', 'O', 'r', 's', 'S', 'c', 't', 'v', 'V', \
 		  'w', 'W', 'f', 'F', 'A', 'C', 'D', 'T', '-', '>', \
 		  'B', 'P', 'R', 'L', \
@@ -1489,6 +1500,17 @@ typedef enum
 #endif
 
 #define MAYBE	2	    // sometimes used for a variant on TRUE
+
+#define LOG_ALWAYS 9	    // must be different from TRUE and FALSE
+
+#ifdef FEAT_JOB_CHANNEL
+// If "--log logfile" was used or ch_logfile() was called then log some or all
+// terminal output.
+# define MAY_WANT_TO_LOG_THIS if (ch_log_output == FALSE) ch_log_output = TRUE;
+#else
+// no logging support
+# define MAY_WANT_TO_LOG_THIS
+#endif
 
 #ifndef UINT32_T
 typedef UINT32_TYPEDEF UINT32_T;
@@ -1648,7 +1670,7 @@ void *vim_memset(void *, int, size_t);
 
 /*
  * defines to avoid typecasts from (char_u *) to (char *) and back
- * (vim_strchr() and vim_strrchr() are now in alloc.c)
+ * (vim_strchr() and vim_strrchr() are now in strings.c)
  */
 #define STRLEN(s)	    strlen((char *)(s))
 #define STRCPY(d, s)	    strcpy((char *)(d), (char *)(s))
@@ -2237,7 +2259,8 @@ typedef enum {
 typedef enum {
     ESTACK_NONE,
     ESTACK_SFILE,
-    ESTACK_STACK
+    ESTACK_STACK,
+    ESTACK_SCRIPT,
 } estack_arg_T;
 
 // Flags for assignment functions.
@@ -2500,7 +2523,6 @@ typedef enum {
   /*
    * Avoid clashes between Perl and Vim namespace.
    */
-# undef NORMAL
 # undef STRLEN
 # undef FF
 # undef OP_DELETE
@@ -2648,6 +2670,7 @@ typedef enum {
 #define TFN_NO_DECL	0x20	// only used for GLV_NO_DECL
 #define TFN_COMPILING	0x40	// only used for GLV_COMPILING
 #define TFN_NEW_FUNC	0x80	// defining a new function
+#define TFN_ASSIGN_WITH_OP	0x100	// only for GLV_ASSIGN_WITH_OP
 
 // Values for get_lval() flags argument:
 #define GLV_QUIET	TFN_QUIET	// no error messages
@@ -2655,6 +2678,7 @@ typedef enum {
 #define GLV_READ_ONLY	TFN_READ_ONLY	// will not change the var
 #define GLV_NO_DECL	TFN_NO_DECL	// assignment without :var or :let
 #define GLV_COMPILING	TFN_COMPILING	// variable may be defined later
+#define GLV_ASSIGN_WITH_OP TFN_ASSIGN_WITH_OP // assignment with operator
 
 #define DO_NOT_FREE_CNT 99999	// refcount for dict or list that should not
 				// be freed.
@@ -2820,4 +2844,5 @@ long elapsed(DWORD start_tick);
 #define FFED_IS_GLOBAL	1	// "g:" was used
 #define FFED_NO_GLOBAL	2	// only check for script-local functions
 
+#define MAX_LSHIFT_BITS (varnumber_T)((sizeof(uvarnumber_T) * 8) - 1)
 #endif // VIM__H

@@ -185,7 +185,7 @@ update_topline(void)
 #endif
     int		check_topline = FALSE;
     int		check_botline = FALSE;
-    long        *so_ptr = curwin->w_p_so >= 0 ? &curwin->w_p_so : &p_so;
+    long	*so_ptr = curwin->w_p_so >= 0 ? &curwin->w_p_so : &p_so;
     int		save_so = *so_ptr;
 
     // If there is no valid screen and when the window height is zero just use
@@ -315,7 +315,7 @@ update_topline(void)
 	    if (curwin->w_cursor.lnum < curwin->w_botline)
 	    {
 	      if (((long)curwin->w_cursor.lnum
-					     >= (long)curwin->w_botline - *so_ptr
+					   >= (long)curwin->w_botline - *so_ptr
 #ifdef FEAT_FOLDING
 			|| hasAnyFolding(curwin)
 #endif
@@ -378,7 +378,7 @@ update_topline(void)
 		else
 #endif
 		    line_count = curwin->w_cursor.lnum - curwin->w_botline
-								   + 1 + *so_ptr;
+								 + 1 + *so_ptr;
 		if (line_count <= curwin->w_height + 1)
 		    scroll_cursor_bot(scrolljump_value(), FALSE);
 		else
@@ -435,7 +435,7 @@ check_top_offset(void)
 {
     lineoff_T	loff;
     int		n;
-    long        so = get_scrolloff_value();
+    long	so = get_scrolloff_value();
 
     if (curwin->w_cursor.lnum < curwin->w_topline + so
 #ifdef FEAT_FOLDING
@@ -489,7 +489,8 @@ check_cursor_moved(win_T *wp)
     if (wp->w_cursor.lnum != wp->w_valid_cursor.lnum)
     {
 	wp->w_valid &= ~(VALID_WROW|VALID_WCOL|VALID_VIRTCOL
-				     |VALID_CHEIGHT|VALID_CROW|VALID_TOPLINE);
+				      |VALID_CHEIGHT|VALID_CROW|VALID_TOPLINE
+				      |VALID_BOTLINE|VALID_BOTLINE_AP);
 	wp->w_valid_cursor = wp->w_cursor;
 	wp->w_valid_leftcol = wp->w_leftcol;
     }
@@ -950,8 +951,8 @@ curs_columns(
     colnr_T	startcol;
     colnr_T	endcol;
     colnr_T	prev_skipcol;
-    long        so = get_scrolloff_value();
-    long        siso = get_sidescrolloff_value();
+    long	so = get_scrolloff_value();
+    long	siso = get_sidescrolloff_value();
 
     /*
      * First make sure that w_topline is valid (after moving the cursor).
@@ -1297,7 +1298,7 @@ f_screenpos(typval_T *argvars UNUSED, typval_T *rettv)
     int		row = 0;
     int		scol = 0, ccol = 0, ecol = 0;
 
-    if (rettv_dict_alloc(rettv) != OK)
+    if (rettv_dict_alloc(rettv) == FAIL)
 	return;
     dict = rettv->vval.v_dict;
 
@@ -1320,6 +1321,39 @@ f_screenpos(typval_T *argvars UNUSED, typval_T *rettv)
     dict_add_number(dict, "col", scol);
     dict_add_number(dict, "curscol", ccol);
     dict_add_number(dict, "endcol", ecol);
+}
+
+/*
+ * "virtcol2col({winid}, {lnum}, {col})" function
+ */
+    void
+f_virtcol2col(typval_T *argvars UNUSED, typval_T *rettv)
+{
+    win_T	*wp;
+    linenr_T	lnum;
+    int		screencol;
+    int		error = FALSE;
+
+    rettv->vval.v_number = -1;
+
+    if (check_for_number_arg(argvars, 0) == FAIL
+	    || check_for_number_arg(argvars, 1) == FAIL
+	    || check_for_number_arg(argvars, 2) == FAIL)
+	return;
+
+    wp = find_win_by_nr_or_id(&argvars[0]);
+    if (wp == NULL)
+	return;
+
+    lnum = tv_get_number_chk(&argvars[1], &error);
+    if (error || lnum < 0 || lnum > wp->w_buffer->b_ml.ml_line_count)
+	return;
+
+    screencol = tv_get_number_chk(&argvars[2], &error);
+    if (error || screencol < 0)
+	return;
+
+    rettv->vval.v_number = vcol2col(wp, lnum, screencol);
 }
 #endif
 
@@ -1952,7 +1986,7 @@ set_empty_rows(win_T *wp, int used)
 
 /*
  * Recompute topline to put the cursor at the bottom of the window.
- * Scroll at least "min_scroll" lines.
+ * When scrolling scroll at least "min_scroll" lines.
  * If "set_topbot" is TRUE, set topline and botline first (for "zb").
  * This is messy stuff!!!
  */
@@ -1975,7 +2009,7 @@ scroll_cursor_bot(int min_scroll, int set_topbot)
     linenr_T	old_valid = curwin->w_valid;
     int		old_empty_rows = curwin->w_empty_rows;
     linenr_T	cln;		    // Cursor Line Number
-    long        so = get_scrolloff_value();
+    long	so = get_scrolloff_value();
 
     cln = curwin->w_cursor.lnum;
     if (set_topbot)
@@ -2269,7 +2303,7 @@ cursor_correct(void)
     int		above_wanted, below_wanted;
     linenr_T	cln;		    // Cursor Line Number
     int		max_off;
-    long        so = get_scrolloff_value();
+    long	so = get_scrolloff_value();
 
     /*
      * How many lines we would like to have above/below the cursor depends on
@@ -2389,7 +2423,7 @@ onepage(int dir, long count)
     int		retval = OK;
     lineoff_T	loff;
     linenr_T	old_topline = curwin->w_topline;
-    long        so = get_scrolloff_value();
+    long	so = get_scrolloff_value();
 
     if (curbuf->b_ml.ml_line_count == 1)    // nothing to do
     {
@@ -2918,10 +2952,12 @@ do_check_cursorbind(void)
 	    restart_edit_save = restart_edit;
 	    restart_edit = TRUE;
 	    check_cursor();
-# ifdef FEAT_SYN_HL
-	    if (curwin->w_p_cul || curwin->w_p_cuc)
+
+	    // Avoid a scroll here for the cursor position, 'scrollbind' is
+	    // more important.
+	    if (!curwin->w_p_scb)
 		validate_cursor();
-# endif
+
 	    restart_edit = restart_edit_save;
 	    // Correct cursor for multi-byte character.
 	    if (has_mbyte)

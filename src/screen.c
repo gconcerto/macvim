@@ -68,13 +68,13 @@ conceal_cursor_line(win_T *wp)
 
     if (*wp->w_p_cocu == NUL)
 	return FALSE;
-    if (get_real_state() & VISUAL)
+    if (get_real_state() & MODE_VISUAL)
 	c = 'v';
-    else if (State & INSERT)
+    else if (State & MODE_INSERT)
 	c = 'i';
-    else if (State & NORMAL)
+    else if (State & MODE_NORMAL)
 	c = 'n';
-    else if (State & CMDLINE)
+    else if (State & MODE_CMDLINE)
 	c = 'c';
     else
 	return FALSE;
@@ -285,9 +285,9 @@ fill_foldcolumn(
     {
 	if (win_foldinfo.fi_lnum == lnum
 		&& first_level + i >= win_foldinfo.fi_low_level)
-	    symbol = fill_foldopen;
+	    symbol = wp->w_fill_chars.foldopen;
 	else if (first_level == 1)
-	    symbol = fill_foldsep;
+	    symbol = wp->w_fill_chars.foldsep;
 	else if (first_level + i <= 9)
 	    symbol = '0' + first_level + i;
 	else
@@ -312,7 +312,7 @@ fill_foldcolumn(
 		// for a multibyte character, erase all the bytes
 		vim_memset(p + byte_counter, ' ', len);
 	}
-	symbol = fill_foldclosed;
+	symbol = wp->w_fill_chars.foldclosed;
 	len = utf_char2bytes(symbol, &p[byte_counter]);
 	byte_counter += len;
     }
@@ -430,11 +430,12 @@ reset_screen_attr(void)
  */
     void
 screen_line(
-    int	    row,
-    int	    coloff,
-    int	    endcol,
-    int	    clear_width,
-    int	    flags UNUSED)
+	win_T	*wp,
+	int	row,
+	int	coloff,
+	int	endcol,
+	int	clear_width,
+	int	flags UNUSED)
 {
     unsigned	    off_from;
     unsigned	    off_to;
@@ -806,7 +807,7 @@ screen_line(
 	    {
 		int c;
 
-		c = fillchar_vsep(&hl);
+		c = fillchar_vsep(&hl, wp);
 		if (ScreenLines[off_to] != (schar_T)c
 			|| (enc_utf8 && (int)ScreenLinesUC[off_to]
 							!= (c >= 0x80 ? c : 0))
@@ -865,7 +866,7 @@ draw_vsep_win(win_T *wp, int row)
     if (wp->w_vsep_width)
     {
 	// draw the vertical separator right of this window
-	c = fillchar_vsep(&hl);
+	c = fillchar_vsep(&hl, wp);
 	screen_fill(W_WINROW(wp) + row, W_WINROW(wp) + wp->w_height,
 		W_ENDCOL(wp), W_ENDCOL(wp) + 1,
 		c, ' ', hl);
@@ -1776,10 +1777,6 @@ start_search_hl(void)
 	end_search_hl();  // just in case it wasn't called before
 	last_pat_prog(&screen_search_hl.rm);
 	screen_search_hl.attr = HL_ATTR(HLF_L);
-# ifdef FEAT_RELTIME
-	// Set the time limit to 'redrawtime'.
-	profile_setlimit(p_rdt, &screen_search_hl.tm);
-# endif
     }
 }
 
@@ -1875,8 +1872,17 @@ screen_start_highlight(int attr)
 		out_str(T_SO);
 	    if ((attr & HL_UNDERCURL) && *T_UCS != NUL) // undercurl
 		out_str(T_UCS);
-	    if (((attr & HL_UNDERLINE)	    // underline or undercurl
-			|| ((attr & HL_UNDERCURL) && *T_UCS == NUL))
+	    if ((attr & HL_UNDERDOUBLE) && *T_USS != NUL) // double underline
+		out_str(T_USS);
+	    if ((attr & HL_UNDERDOTTED) && *T_DS != NUL) // dotted underline
+		out_str(T_DS);
+	    if ((attr & HL_UNDERDASHED) && *T_CDS != NUL) // dashed underline
+		out_str(T_CDS);
+	    if (((attr & HL_UNDERLINE)	    // underline or undercurl, etc.
+			|| ((attr & HL_UNDERCURL) && *T_UCS == NUL)
+			|| ((attr & HL_UNDERDOUBLE) && *T_USS == NUL)
+			|| ((attr & HL_UNDERDOTTED) && *T_DS == NUL)
+			|| ((attr & HL_UNDERDASHED) && *T_CDS == NUL))
 		    && *T_US != NUL)
 		out_str(T_US);
 	    if ((attr & HL_ITALIC) && *T_CZH != NUL)	// italic
@@ -1971,6 +1977,8 @@ screen_stop_highlight(void)
 	else
 #endif
 	{
+	    int is_under;
+
 	    if (screen_attr > HL_ALL)			// special HL attr.
 	    {
 		attrentry_T *aep;
@@ -2050,15 +2058,16 @@ screen_stop_highlight(void)
 		else
 		    out_str(T_SE);
 	    }
-	    if ((screen_attr & HL_UNDERCURL) && *T_UCE != NUL)
+	    is_under = (screen_attr & (HL_UNDERCURL
+			  | HL_UNDERDOUBLE | HL_UNDERDOTTED | HL_UNDERDASHED));
+	    if (is_under && *T_UCE != NUL)
 	    {
 		if (STRCMP(T_UCE, T_ME) == 0)
 		    do_ME = TRUE;
 		else
 		    out_str(T_UCE);
 	    }
-	    if ((screen_attr & HL_UNDERLINE)
-			    || ((screen_attr & HL_UNDERCURL) && *T_UCE == NUL))
+	    if ((screen_attr & HL_UNDERLINE) || (is_under && *T_UCE == NUL))
 	    {
 		if (STRCMP(T_UE, T_ME) == 0)
 		    do_ME = TRUE;
@@ -2356,9 +2365,9 @@ space_to_screenline(int off, int attr)
 }
 
 /*
- * Fill the screen from 'start_row' to 'end_row', from 'start_col' to 'end_col'
- * with character 'c1' in first column followed by 'c2' in the other columns.
- * Use attributes 'attr'.
+ * Fill the screen from "start_row" to "end_row" (exclusive), from "start_col"
+ * to "end_col" (exclusive) with character "c1" in first column followed by
+ * "c2" in the other columns.  Use attributes "attr".
  */
     void
 screen_fill(
@@ -3440,7 +3449,12 @@ win_ins_lines(
     if (invalid)
 	wp->w_lines_valid = 0;
 
+    // with only a few lines it's not worth the effort
     if (wp->w_height < 5)
+	return FAIL;
+
+    // with the popup menu visible this might not work correctly
+    if (pum_visible())
 	return FAIL;
 
     if (line_count > wp->w_height - row)
@@ -3675,9 +3689,9 @@ win_rest_invalid(win_T *wp)
 
 /*
  * insert lines on the screen and update ScreenLines[]
- * 'end' is the line after the scrolled part. Normally it is Rows.
- * When scrolling region used 'off' is the offset from the top for the region.
- * 'row' and 'end' are relative to the start of the region.
+ * "end" is the line after the scrolled part. Normally it is Rows.
+ * When scrolling region used "off" is the offset from the top for the region.
+ * "row" and "end" are relative to the start of the region.
  *
  * return FAIL for failure, OK for success.
  */
@@ -3702,14 +3716,15 @@ screen_ins_lines(
     /*
      * FAIL if
      * - there is no valid screen
-     * - the screen has to be redrawn completely
      * - the line count is less than one
      * - the line count is more than 'ttyscroll'
+     * - "end" is more than "Rows" (safety check, should not happen)
      * - redrawing for a callback and there is a modeless selection
      * - there is a popup window
      */
      if (!screen_valid(TRUE)
 	     || line_count <= 0 || line_count > p_ttyscroll
+	     || end > Rows
 #ifdef FEAT_CLIPBOARD
 	     || (clip_star.state != SELECT_CLEARED
 						 && redrawing_for_callback > 0)
@@ -3747,7 +3762,15 @@ screen_ins_lines(
      */
     result_empty = (row + line_count >= end);
     if (wp != NULL && wp->w_width != Columns && *T_CSV == NUL)
+    {
+	// Avoid that lines are first cleared here and then redrawn, which
+	// results in many characters updated twice.  This happens with CTRL-F
+	// in a vertically split window.  With line-by-line scrolling
+	// USE_REDRAW should be faster.
+	if (line_count > 3)
+	    return FAIL;
 	type = USE_REDRAW;
+    }
     else if (can_clear(T_CD) && result_empty)
 	type = USE_T_CD;
     else if (*T_CAL != NUL && (line_count > 1 || *T_AL == NUL))
@@ -3919,7 +3942,7 @@ screen_del_lines(
     int		end,
     int		force,		// even when line_count > p_ttyscroll
     int		clear_attr,	// used for clearing lines
-    win_T	*wp UNUSED)	// NULL or window to use width from
+    win_T	*wp)		// NULL or window to use width from
 {
     int		j;
     int		i;
@@ -3937,13 +3960,15 @@ screen_del_lines(
      * - the screen has to be redrawn completely
      * - the line count is less than one
      * - the line count is more than 'ttyscroll'
+     * - "end" is more than "Rows" (safety check, should not happen)
      * - redrawing for a callback and there is a modeless selection
      */
-    if (!screen_valid(TRUE) || line_count <= 0
-					|| (!force && line_count > p_ttyscroll)
+    if (!screen_valid(TRUE)
+	    || line_count <= 0
+	    || (!force && line_count > p_ttyscroll)
+	    || end > Rows
 #ifdef FEAT_CLIPBOARD
-	     || (clip_star.state != SELECT_CLEARED
-						 && redrawing_for_callback > 0)
+	    || (clip_star.state != SELECT_CLEARED && redrawing_for_callback > 0)
 #endif
        )
 	return FAIL;
@@ -3972,7 +3997,15 @@ screen_del_lines(
      * 6. redraw the characters from ScreenLines[].
      */
     if (wp != NULL && wp->w_width != Columns && *T_CSV == NUL)
+    {
+	// Avoid that lines are first cleared here and then redrawn, which
+	// results in many characters updated twice.  This happens with CTRL-F
+	// in a vertically split window.  With line-by-line scrolling
+	// USE_REDRAW should be faster.
+	if (line_count > 3)
+	    return FAIL;
 	type = USE_REDRAW;
+    }
     else if (can_clear(T_CD) && result_empty)
 	type = USE_T_CD;
     else if (row == 0 && (
@@ -4154,7 +4187,7 @@ screen_del_lines(
 skip_showmode()
 {
     // Call char_avail() only when we are going to show something, because it
-    // takes a bit of time.  redrawing() may also call char_avail_avail().
+    // takes a bit of time.  redrawing() may also call char_avail().
     if (global_busy
 	    || msg_silent != 0
 	    || !redrawing()
@@ -4186,7 +4219,7 @@ showmode(void)
     int		sub_attr;
 
     do_mode = ((p_smd && msg_silent == 0)
-	    && ((State & INSERT)
+	    && ((State & MODE_INSERT)
 		|| restart_edit != NUL
 		|| VIsual_active));
     if (do_mode || reg_recording != 0)
@@ -4260,7 +4293,7 @@ showmode(void)
 		    msg_puts_attr(_(" VREPLACE"), attr);
 		else if (State & REPLACE_FLAG)
 		    msg_puts_attr(_(" REPLACE"), attr);
-		else if (State & INSERT)
+		else if (State & MODE_INSERT)
 		{
 #ifdef FEAT_RIGHTLEFT
 		    if (p_ri)
@@ -4280,7 +4313,7 @@ showmode(void)
 		    msg_puts_attr(_(" Hebrew"), attr);
 #endif
 #ifdef FEAT_KEYMAP
-		if (State & LANGMAP)
+		if (State & MODE_LANGMAP)
 		{
 # ifdef FEAT_ARABIC
 		    if (curwin->w_p_arab)
@@ -4292,7 +4325,7 @@ showmode(void)
 			    msg_puts_attr((char *)NameBuff, attr);
 		}
 #endif
-		if ((State & INSERT) && p_paste)
+		if ((State & MODE_INSERT) && p_paste)
 		    msg_puts_attr(_(" (paste)"), attr);
 
 		if (VIsual_active)
@@ -4628,12 +4661,12 @@ fillchar_status(int *attr, win_T *wp)
 	if (wp == curwin)
 	{
 	    *attr = HL_ATTR(HLF_ST);
-	    fill = fill_stl;
+	    fill = wp->w_fill_chars.stl;
 	}
 	else
 	{
 	    *attr = HL_ATTR(HLF_STNC);
-	    fill = fill_stlnc;
+	    fill = wp->w_fill_chars.stlnc;
 	}
     }
     else
@@ -4641,19 +4674,19 @@ fillchar_status(int *attr, win_T *wp)
     if (wp == curwin)
     {
 	*attr = HL_ATTR(HLF_S);
-	fill = fill_stl;
+	fill = wp->w_fill_chars.stl;
     }
     else
     {
 	*attr = HL_ATTR(HLF_SNC);
-	fill = fill_stlnc;
+	fill = wp->w_fill_chars.stlnc;
     }
     // Use fill when there is highlighting, and highlighting of current
     // window differs, or the fillchars differ, or this is not the
     // current window
     if (*attr != 0 && ((HL_ATTR(HLF_S) != HL_ATTR(HLF_SNC)
 			|| wp != curwin || ONE_WINDOW)
-		    || (fill_stl != fill_stlnc)))
+		    || (wp->w_fill_chars.stl != wp->w_fill_chars.stlnc)))
 	return fill;
     if (wp == curwin)
 	return '^';
@@ -4665,13 +4698,13 @@ fillchar_status(int *attr, win_T *wp)
  * Get its attributes in "*attr".
  */
     int
-fillchar_vsep(int *attr)
+fillchar_vsep(int *attr, win_T *wp)
 {
     *attr = HL_ATTR(HLF_C);
-    if (*attr == 0 && fill_vert == ' ')
+    if (*attr == 0 && wp->w_fill_chars.vert == ' ')
 	return '|';
     else
-	return fill_vert;
+	return wp->w_fill_chars.vert;
 }
 
 /*
@@ -4851,34 +4884,45 @@ get_encoded_char_adv(char_u **p)
 
 /*
  * Handle setting 'listchars' or 'fillchars'.
+ * "varp" points to either the global or the window-local value.
+ * When "apply" is FALSE do not store the flags, only check for errors.
  * Assume monocell characters.
  * Returns error message, NULL if it's OK.
  */
     char *
-set_chars_option(win_T *wp, char_u **varp)
+set_chars_option(win_T *wp, char_u **varp, int apply)
 {
-    int		round, i, len, entries;
-    char_u	*p, *s;
-    int		c1 = 0, c2 = 0, c3 = 0;
-    char_u	*last_multispace = NULL; // Last occurrence of "multispace:"
-    int		multispace_len = 0;	 // Length of lcs-multispace string
+    int	    round, i, len, len2, entries;
+    char_u  *p, *s;
+    int	    c1 = 0, c2 = 0, c3 = 0;
+    char_u  *last_multispace = NULL;  // Last occurrence of "multispace:"
+    char_u  *last_lmultispace = NULL; // Last occurrence of "leadmultispace:"
+    int	    multispace_len = 0;	      // Length of lcs-multispace string
+    int	    lead_multispace_len = 0;  // Length of lcs-leadmultispace string
+    int	    is_listchars = (varp == &p_lcs || varp == &wp->w_p_lcs);
+    char_u  *value = *varp;
+
     struct charstab
     {
 	int	*cp;
 	char	*name;
     };
+    struct charstab *tab;
+
+    static fill_chars_T fill_chars;
     static struct charstab filltab[] =
     {
-	{&fill_stl,		"stl"},
-	{&fill_stlnc,		"stlnc"},
-	{&fill_vert,		"vert"},
-	{&fill_fold,		"fold"},
-	{&fill_foldopen,	"foldopen"},
-	{&fill_foldclosed,	"foldclose"},
-	{&fill_foldsep,		"foldsep"},
-	{&fill_diff,		"diff"},
-	{&fill_eob,		"eob"},
+	{&fill_chars.stl,	"stl"},
+	{&fill_chars.stlnc,	"stlnc"},
+	{&fill_chars.vert,	"vert"},
+	{&fill_chars.fold,	"fold"},
+	{&fill_chars.foldopen,	"foldopen"},
+	{&fill_chars.foldclosed, "foldclose"},
+	{&fill_chars.foldsep,	"foldsep"},
+	{&fill_chars.diff,	"diff"},
+	{&fill_chars.eob,	"eob"},
     };
+
     static lcs_chars_T lcs_chars;
     struct charstab lcstab[] =
     {
@@ -4896,20 +4940,21 @@ set_chars_option(win_T *wp, char_u **varp)
 	{NULL,			"conceal"},
 #endif
     };
-    struct charstab *tab;
 
-    if (varp == &p_lcs || varp == &wp->w_p_lcs)
+    if (is_listchars)
     {
 	tab = lcstab;
 	CLEAR_FIELD(lcs_chars);
 	entries = ARRAY_LENGTH(lcstab);
 	if (varp == &wp->w_p_lcs && wp->w_p_lcs[0] == NUL)
-	    varp = &p_lcs;
+	    value = p_lcs;  // local value is empty, us the global value
     }
     else
     {
 	tab = filltab;
 	entries = ARRAY_LENGTH(filltab);
+	if (varp == &wp->w_p_fcs && wp->w_p_fcs[0] == NUL)
+	    value = p_fcs;  // local value is empty, us the global value
     }
 
     // first round: check for valid value, second round: assign values
@@ -4917,35 +4962,47 @@ set_chars_option(win_T *wp, char_u **varp)
     {
 	if (round > 0)
 	{
-	    // After checking that the value is valid: set defaults: space for
-	    // 'fillchars', NUL for 'listchars'
-	    for (i = 0; i < entries; ++i)
-		if (tab[i].cp != NULL)
-		    *(tab[i].cp) =
-			((varp == &p_lcs || varp == &wp->w_p_lcs) ? NUL : ' ');
-
-	    if (varp == &p_lcs || varp == &wp->w_p_lcs)
+	    // After checking that the value is valid: set defaults.
+	    if (is_listchars)
 	    {
+		for (i = 0; i < entries; ++i)
+		    if (tab[i].cp != NULL)
+			*(tab[i].cp) = NUL;
 		lcs_chars.tab1 = NUL;
 		lcs_chars.tab3 = NUL;
+
 		if (multispace_len > 0)
 		{
 		    lcs_chars.multispace = ALLOC_MULT(int, multispace_len + 1);
-		    lcs_chars.multispace[multispace_len] = NUL;
+		    if (lcs_chars.multispace != NULL)
+			lcs_chars.multispace[multispace_len] = NUL;
 		}
 		else
 		    lcs_chars.multispace = NULL;
+
+		if (lead_multispace_len > 0)
+		{
+		    lcs_chars.leadmultispace =
+				      ALLOC_MULT(int, lead_multispace_len + 1);
+		    lcs_chars.leadmultispace[lead_multispace_len] = NUL;
+		}
+		else
+		    lcs_chars.leadmultispace = NULL;
 	    }
 	    else
 	    {
-		fill_diff = '-';
-		fill_foldopen = '-';
-		fill_foldclosed = '+';
-		fill_foldsep = '|';
-		fill_eob = '~';
+		fill_chars.stl = ' ';
+		fill_chars.stlnc = ' ';
+		fill_chars.vert = ' ';
+		fill_chars.fold = '-';
+		fill_chars.foldopen = '-';
+		fill_chars.foldclosed = '+';
+		fill_chars.foldsep = '|';
+		fill_chars.diff = '-';
+		fill_chars.eob = '~';
 	    }
 	}
-	p = *varp;
+	p = value;
 	while (*p)
 	{
 	    for (i = 0; i < entries; ++i)
@@ -4998,7 +5055,8 @@ set_chars_option(win_T *wp, char_u **varp)
 	    if (i == entries)
 	    {
 		len = (int)STRLEN("multispace");
-		if ((varp == &p_lcs || varp == &wp->w_p_lcs)
+		len2 = (int)STRLEN("leadmultispace");
+		if (is_listchars
 			&& STRNCMP(p, "multispace", len) == 0
 			&& p[len] == ':'
 			&& p[len + 1] != NUL)
@@ -5034,6 +5092,44 @@ set_chars_option(win_T *wp, char_u **varp)
 			p = s;
 		    }
 		}
+
+		else if (is_listchars
+			&& STRNCMP(p, "leadmultispace", len2) == 0
+			&& p[len2] == ':'
+			&& p[len2 + 1] != NUL)
+		{
+		    s = p + len2 + 1;
+		    if (round == 0)
+		    {
+			// get length of lcs-leadmultispace string in first
+			// round
+			last_lmultispace = p;
+			lead_multispace_len = 0;
+			while (*s != NUL && *s != ',')
+			{
+			    c1 = get_encoded_char_adv(&s);
+			    if (char2cells(c1) > 1)
+				return e_invalid_argument;
+			    ++lead_multispace_len;
+			}
+			if (lead_multispace_len == 0)
+			    // lcs-leadmultispace cannot be an empty string
+			    return e_invalid_argument;
+			p = s;
+		    }
+		    else
+		    {
+			int multispace_pos = 0;
+
+			while (*s != NUL && *s != ',')
+			{
+			    c1 = get_encoded_char_adv(&s);
+			    if (p == last_lmultispace)
+				lcs_chars.leadmultispace[multispace_pos++] = c1;
+			}
+			p = s;
+		    }
+		}
 		else
 		    return e_invalid_argument;
 	    }
@@ -5042,13 +5138,25 @@ set_chars_option(win_T *wp, char_u **varp)
 		++p;
 	}
     }
-    if (tab == lcstab)
+
+    if (apply)
     {
-	if (wp->w_lcs_chars.multispace != NULL)
+	if (is_listchars)
+	{
 	    vim_free(wp->w_lcs_chars.multispace);
-	wp->w_lcs_chars = lcs_chars;
+	    vim_free(wp->w_lcs_chars.leadmultispace);
+	    wp->w_lcs_chars = lcs_chars;
+	}
+	else
+	{
+	    wp->w_fill_chars = fill_chars;
+	}
+    }
+    else if (is_listchars)
+    {
+	vim_free(lcs_chars.multispace);
+	vim_free(lcs_chars.leadmultispace);
     }
 
     return NULL;	// no error
 }
-

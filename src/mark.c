@@ -871,6 +871,10 @@ ex_jumps(exarg_T *eap UNUSED)
 	{
 	    name = fm_getname(&curwin->w_jumplist[i].fmark, 16);
 
+	    // Make sure to output the current indicator, even when on an wiped
+	    // out buffer.  ":filter" may still skip it.
+	    if (name == NULL && i == curwin->w_jumplistidx)
+		name = vim_strsave((char_u *)"-invalid-");
 	    // apply :filter /pat/ or file name not available
 	    if (name == NULL || message_filtered(name))
 	    {
@@ -1480,7 +1484,7 @@ f_getmarklist(typval_T *argvars, typval_T *rettv)
 {
     buf_T	*buf = NULL;
 
-    if (rettv_list_alloc(rettv) != OK)
+    if (rettv_list_alloc(rettv) == FAIL)
 	return;
 
     if (in_vim9script() && check_for_opt_buffer_arg(argvars, 0) == FAIL)

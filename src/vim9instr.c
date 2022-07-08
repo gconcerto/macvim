@@ -355,11 +355,6 @@ get_compare_isn(
     vartype_T	vartype1 = tv1 != NULL ? tv1->v_type : type1->tt_type;
     vartype_T	vartype2 = tv2 != NULL ? tv2->v_type : type2->tt_type;
 
-    if (vartype1 == VAR_UNKNOWN)
-	vartype1 = VAR_ANY;
-    if (vartype2 == VAR_UNKNOWN)
-	vartype2 = VAR_ANY;
-
     if (vartype1 == vartype2)
     {
 	switch (vartype1)
@@ -462,11 +457,32 @@ generate_COMPARE(cctx_T *cctx, exprtype_T exprtype, int ic)
     isn->isn_arg.op.op_ic = ic;
 
     // takes two arguments, puts one bool back
-    if (stack->ga_len >= 2)
-    {
-	--stack->ga_len;
-	set_type_on_stack(cctx, &t_bool, 0);
-    }
+    --stack->ga_len;
+    set_type_on_stack(cctx, &t_bool, 0);
+
+    return OK;
+}
+
+/*
+ * Generate an ISN_CONCAT instruction.
+ * "count" is the number of stack elements to join together and it must be
+ * greater or equal to one.
+ * The caller ensures all the "count" elements on the stack have the right type.
+ */
+    int
+generate_CONCAT(cctx_T *cctx, int count)
+{
+    isn_T	*isn;
+    garray_T	*stack = &cctx->ctx_type_stack;
+
+    RETURN_OK_IF_SKIP(cctx);
+
+    if ((isn = generate_instr(cctx, ISN_CONCAT)) == NULL)
+	return FAIL;
+    isn->isn_arg.number = count;
+
+    // drop the argument types
+    stack->ga_len -= count - 1;
 
     return OK;
 }
@@ -515,6 +531,7 @@ generate_TYPECHECK(
 	cctx_T	    *cctx,
 	type_T	    *expected,
 	int	    offset,
+	int	    is_var,
 	int	    argidx)
 {
     isn_T	*isn;
@@ -524,6 +541,7 @@ generate_TYPECHECK(
 	return FAIL;
     isn->isn_arg.type.ct_type = alloc_type(expected);
     isn->isn_arg.type.ct_off = (int8_T)offset;
+    isn->isn_arg.type.ct_is_var = is_var;
     isn->isn_arg.type.ct_arg_idx = (int8_T)argidx;
 
     // type becomes expected
@@ -549,80 +567,74 @@ generate_SETTYPE(
 /*
  * Generate a PUSH instruction for "tv".
  * "tv" will be consumed or cleared.
- * Nothing happens if "tv" is NULL or of type VAR_UNKNOWN;
  */
     int
 generate_tv_PUSH(cctx_T *cctx, typval_T *tv)
 {
-    if (tv != NULL)
+    switch (tv->v_type)
     {
-	switch (tv->v_type)
-	{
-	    case VAR_UNKNOWN:
-		break;
-	    case VAR_BOOL:
-		generate_PUSHBOOL(cctx, tv->vval.v_number);
-		break;
-	    case VAR_SPECIAL:
-		generate_PUSHSPEC(cctx, tv->vval.v_number);
-		break;
-	    case VAR_NUMBER:
-		generate_PUSHNR(cctx, tv->vval.v_number);
-		break;
+	case VAR_BOOL:
+	    generate_PUSHBOOL(cctx, tv->vval.v_number);
+	    break;
+	case VAR_SPECIAL:
+	    generate_PUSHSPEC(cctx, tv->vval.v_number);
+	    break;
+	case VAR_NUMBER:
+	    generate_PUSHNR(cctx, tv->vval.v_number);
+	    break;
 #ifdef FEAT_FLOAT
-	    case VAR_FLOAT:
-		generate_PUSHF(cctx, tv->vval.v_float);
-		break;
+	case VAR_FLOAT:
+	    generate_PUSHF(cctx, tv->vval.v_float);
+	    break;
 #endif
-	    case VAR_BLOB:
-		generate_PUSHBLOB(cctx, tv->vval.v_blob);
-		tv->vval.v_blob = NULL;
-		break;
-	    case VAR_LIST:
-		if (tv->vval.v_list != NULL)
-		    iemsg("non-empty list constant not supported");
-		generate_NEWLIST(cctx, 0, TRUE);
-		break;
-	    case VAR_DICT:
-		if (tv->vval.v_dict != NULL)
-		    iemsg("non-empty dict constant not supported");
-		generate_NEWDICT(cctx, 0, TRUE);
-		break;
+	case VAR_BLOB:
+	    generate_PUSHBLOB(cctx, tv->vval.v_blob);
+	    tv->vval.v_blob = NULL;
+	    break;
+	case VAR_LIST:
+	    if (tv->vval.v_list != NULL)
+		iemsg("non-empty list constant not supported");
+	    generate_NEWLIST(cctx, 0, TRUE);
+	    break;
+	case VAR_DICT:
+	    if (tv->vval.v_dict != NULL)
+		iemsg("non-empty dict constant not supported");
+	    generate_NEWDICT(cctx, 0, TRUE);
+	    break;
 #ifdef FEAT_JOB_CHANNEL
-	    case VAR_JOB:
-		if (tv->vval.v_job != NULL)
-		    iemsg("non-null job constant not supported");
-		generate_PUSHJOB(cctx);
-		break;
-	    case VAR_CHANNEL:
-		if (tv->vval.v_channel != NULL)
-		    iemsg("non-null channel constant not supported");
-		generate_PUSHCHANNEL(cctx);
-		break;
+	case VAR_JOB:
+	    if (tv->vval.v_job != NULL)
+		iemsg("non-null job constant not supported");
+	    generate_PUSHJOB(cctx);
+	    break;
+	case VAR_CHANNEL:
+	    if (tv->vval.v_channel != NULL)
+		iemsg("non-null channel constant not supported");
+	    generate_PUSHCHANNEL(cctx);
+	    break;
 #endif
-	    case VAR_FUNC:
-		if (tv->vval.v_string != NULL)
-		    iemsg("non-null function constant not supported");
-		generate_PUSHFUNC(cctx, NULL, &t_func_unknown);
-		break;
-	    case VAR_PARTIAL:
-		if (tv->vval.v_partial != NULL)
-		    iemsg("non-null partial constant not supported");
-		if (generate_instr_type(cctx, ISN_NEWPARTIAL, &t_func_unknown)
-								       == NULL)
-		    return FAIL;
-		break;
-	    case VAR_STRING:
-		generate_PUSHS(cctx, &tv->vval.v_string);
-		tv->vval.v_string = NULL;
-		break;
-	    default:
-		iemsg("constant type not supported");
-		clear_tv(tv);
+	case VAR_FUNC:
+	    if (tv->vval.v_string != NULL)
+		iemsg("non-null function constant not supported");
+	    generate_PUSHFUNC(cctx, NULL, &t_func_unknown);
+	    break;
+	case VAR_PARTIAL:
+	    if (tv->vval.v_partial != NULL)
+		iemsg("non-null partial constant not supported");
+	    if (generate_instr_type(cctx, ISN_NEWPARTIAL, &t_func_unknown)
+								   == NULL)
 		return FAIL;
-	}
-	tv->v_type = VAR_UNKNOWN;
+	    break;
+	case VAR_STRING:
+	    generate_PUSHS(cctx, &tv->vval.v_string);
+	    tv->vval.v_string = NULL;
+	    break;
+	default:
+	    siemsg("constant type %d not supported", tv->v_type);
+	    clear_tv(tv);
+	    return FAIL;
     }
+    tv->v_type = VAR_UNKNOWN;
     return OK;
 }
 
@@ -699,27 +711,28 @@ generate_PUSHF(cctx_T *cctx, float_T fnumber)
 /*
  * Generate an ISN_PUSHS instruction.
  * Consumes "*str".  When freed *str is set to NULL, unless "str" is NULL.
+ * Note that if "str" is used in the instruction OK is returned and "*str" is
+ * not set to NULL.
  */
     int
 generate_PUSHS(cctx_T *cctx, char_u **str)
 {
     isn_T	*isn;
+    int		ret = OK;
 
-    if (cctx->ctx_skip == SKIP_YES)
+    if (cctx->ctx_skip != SKIP_YES)
     {
-	if (str != NULL)
-	    VIM_CLEAR(*str);
-	return OK;
+	if ((isn = generate_instr_type(cctx, ISN_PUSHS, &t_string)) == NULL)
+	    ret = FAIL;
+	else
+	{
+	    isn->isn_arg.string = str == NULL ? NULL : *str;
+	    return OK;
+	}
     }
-    if ((isn = generate_instr_type(cctx, ISN_PUSHS, &t_string)) == NULL)
-    {
-	if (str != NULL)
-	    VIM_CLEAR(*str);
-	return FAIL;
-    }
-    isn->isn_arg.string = str == NULL ? NULL : *str;
-
-    return OK;
+    if (str != NULL)
+	VIM_CLEAR(*str);
+    return ret;
 }
 
 /*
@@ -728,12 +741,19 @@ generate_PUSHS(cctx_T *cctx, char_u **str)
     int
 generate_PUSHCHANNEL(cctx_T *cctx)
 {
+#ifdef FEAT_JOB_CHANNEL
     isn_T	*isn;
+#endif
 
     RETURN_OK_IF_SKIP(cctx);
+#ifdef FEAT_JOB_CHANNEL
     if ((isn = generate_instr_type(cctx, ISN_PUSHCHANNEL, &t_channel)) == NULL)
 	return FAIL;
     return OK;
+#else
+    emsg(_(e_channel_job_feature_not_available));
+    return FAIL;
+#endif
 }
 
 /*
@@ -742,12 +762,19 @@ generate_PUSHCHANNEL(cctx_T *cctx)
     int
 generate_PUSHJOB(cctx_T *cctx)
 {
+#ifdef FEAT_JOB_CHANNEL
     isn_T	*isn;
+#endif
 
     RETURN_OK_IF_SKIP(cctx);
+#ifdef FEAT_JOB_CHANNEL
     if ((isn = generate_instr_type(cctx, ISN_PUSHJOB, &t_job)) == NULL)
 	return FAIL;
     return OK;
+#else
+    emsg(_(e_channel_job_feature_not_available));
+    return FAIL;
+#endif
 }
 
 /*
@@ -819,6 +846,7 @@ generate_AUTOLOAD(cctx_T *cctx, char_u *name, type_T *type)
  * Generate an ISN_GETITEM instruction with "index".
  * "with_op" is TRUE for "+=" and other operators, the stack has the current
  * value below the list with values.
+ * Caller must check the type is a list.
  */
     int
 generate_GETITEM(cctx_T *cctx, int index, int with_op)
@@ -829,12 +857,6 @@ generate_GETITEM(cctx_T *cctx, int index, int with_op)
 
     RETURN_OK_IF_SKIP(cctx);
 
-    if (type->tt_type != VAR_LIST)
-    {
-	// cannot happen, caller has checked the type
-	emsg(_(e_list_required));
-	return FAIL;
-    }
     item_type = type->tt_member;
     if ((isn = generate_instr(cctx, ISN_GETITEM)) == NULL)
 	return FAIL;
@@ -1003,8 +1025,7 @@ generate_LOADOUTER(
     int
 generate_LOADV(
 	cctx_T	    *cctx,
-	char_u	    *name,
-	int	    error)
+	char_u	    *name)
 {
     int	    di_flags;
     int	    vidx = find_vim_var(name, &di_flags);
@@ -1013,8 +1034,7 @@ generate_LOADV(
     RETURN_OK_IF_SKIP(cctx);
     if (vidx < 0)
     {
-	if (error)
-	    semsg(_(e_variable_not_found_str), name);
+	semsg(_(e_variable_not_found_str), name);
 	return FAIL;
     }
     type = get_vim_var_type(vidx, cctx->ctx_type_list);
@@ -1213,23 +1233,22 @@ generate_FUNCREF(cctx_T *cctx, ufunc_T *ufunc, isn_T **isnp)
 generate_NEWFUNC(cctx_T *cctx, char_u *lambda_name, char_u *func_name)
 {
     isn_T	*isn;
+    int		ret = OK;
 
-    if (cctx->ctx_skip == SKIP_YES)
+    if (cctx->ctx_skip != SKIP_YES)
     {
-	vim_free(lambda_name);
-	vim_free(func_name);
-	return OK;
+	if ((isn = generate_instr(cctx, ISN_NEWFUNC)) == NULL)
+	    ret = FAIL;
+	else
+	{
+	    isn->isn_arg.newfunc.nf_lambda = lambda_name;
+	    isn->isn_arg.newfunc.nf_global = func_name;
+	    return OK;
+	}
     }
-    if ((isn = generate_instr(cctx, ISN_NEWFUNC)) == NULL)
-    {
-	vim_free(lambda_name);
-	vim_free(func_name);
-	return FAIL;
-    }
-    isn->isn_arg.newfunc.nf_lambda = lambda_name;
-    isn->isn_arg.newfunc.nf_global = func_name;
-
-    return OK;
+    vim_free(lambda_name);
+    vim_free(func_name);
+    return ret;
 }
 
 /*
@@ -1394,7 +1413,7 @@ generate_BCALL(cctx_T *cctx, int func_idx, int argcount, int method_call)
     if (maptype != NULL && maptype[0].type_decl->tt_member != NULL
 				  && maptype[0].type_decl->tt_member != &t_any)
 	// Check that map() didn't change the item types.
-	generate_TYPECHECK(cctx, maptype[0].type_decl, -1, 1);
+	generate_TYPECHECK(cctx, maptype[0].type_decl, -1, FALSE, 1);
 
     return OK;
 }
@@ -1782,19 +1801,20 @@ generate_EXEC_copy(cctx_T *cctx, isntype_T isntype, char_u *line)
 generate_EXEC(cctx_T *cctx, isntype_T isntype, char_u *str)
 {
     isn_T	*isn;
+    int		ret = OK;
 
-    if (cctx->ctx_skip == SKIP_YES)
+    if (cctx->ctx_skip != SKIP_YES)
     {
-	vim_free(str);
-	return OK;
+	if ((isn = generate_instr(cctx, isntype)) == NULL)
+	    ret = FAIL;
+	else
+	{
+	    isn->isn_arg.string = str;
+	    return OK;
+	}
     }
-    if ((isn = generate_instr(cctx, isntype)) == NULL)
-    {
-	vim_free(str);
-	return FAIL;
-    }
-    isn->isn_arg.string = str;
-    return OK;
+    vim_free(str);
+    return ret;
 }
 
     int
@@ -2204,7 +2224,6 @@ delete_instr(isn_T *isn)
 	case ISN_CATCH:
 	case ISN_CEXPR_AUCMD:
 	case ISN_CHECKLEN:
-	case ISN_CHECKNR:
 	case ISN_CLEARDICT:
 	case ISN_CMDMOD_REV:
 	case ISN_COMPAREANY:

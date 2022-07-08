@@ -15,7 +15,6 @@
 
 static int	cmd_showtail;	// Only show path tail in lists ?
 
-static void	set_expand_context(expand_T *xp);
 static int      ExpandGeneric(char_u *pat, expand_T *xp, regmatch_T *regmatch,
 			      char_u ***matches, int *numMatches,
 			      char_u *((*func)(expand_T *, int)), int escaped);
@@ -378,6 +377,7 @@ int cmdline_pum_active(void)
 void cmdline_pum_remove(void)
 {
     int save_p_lz = p_lz;
+    int	save_KeyTyped = KeyTyped;
 
     pum_undisplay();
     VIM_CLEAR(compl_match_array);
@@ -385,6 +385,10 @@ void cmdline_pum_remove(void)
     update_screen(0);
     p_lz = save_p_lz;
     redrawcmd();
+
+    // When a function is called (e.g. for 'foldtext') KeyTyped might be reset
+    // as a side effect.
+    KeyTyped = save_KeyTyped;
 }
 
 void cmdline_pum_cleanup(cmdline_info_T *cclp)
@@ -1225,7 +1229,7 @@ addstar(
  *  EXPAND_ENV_VARS	    Complete environment variable names
  *  EXPAND_USER		    Complete user names
  */
-    static void
+    void
 set_expand_context(expand_T *xp)
 {
     cmdline_info_T	*ccline = get_cmdline_info();
@@ -2795,7 +2799,7 @@ ExpandFromContext(
 
     if (xp->xp_context == EXPAND_SETTINGS
 	    || xp->xp_context == EXPAND_BOOL_SETTINGS)
-	ret = ExpandSettings(xp, &regmatch, pat, numMatches, matches);
+	ret = ExpandSettings(xp, &regmatch, pat, numMatches, matches, fuzzy);
     else if (xp->xp_context == EXPAND_MAPPINGS)
 	ret = ExpandMappings(pat, &regmatch, numMatches, matches);
 # if defined(FEAT_EVAL)
@@ -2889,13 +2893,7 @@ ExpandGeneric(
 		ga_clear_strings(&ga);
 		return FAIL;
 	    }
-
-	    for (i = 0; i < ga.ga_len; ++i)
-	    {
-		fuzmatch = &((fuzmatch_str_T *)ga.ga_data)[i];
-		vim_free(fuzmatch->str);
-	    }
-	    ga_clear(&ga);
+	    fuzmatch_str_free(ga.ga_data, ga.ga_len);
 	    return FAIL;
 	}
 
@@ -3768,7 +3766,7 @@ f_getcompletion(typval_T *argvars, typval_T *rettv)
     else
        pat = addstar(xpc.xp_pattern, xpc.xp_pattern_len, xpc.xp_context);
 
-    if ((rettv_list_alloc(rettv) != FAIL) && (pat != NULL))
+    if (rettv_list_alloc(rettv) == OK && pat != NULL)
     {
 	int	i;
 

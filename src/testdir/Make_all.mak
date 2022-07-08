@@ -87,6 +87,7 @@ NEW_TESTS = \
 	test_clientserver \
 	test_close_count \
 	test_cmdline \
+	test_cmdwin \
 	test_command_count \
 	test_comments \
 	test_comparators \
@@ -170,7 +171,6 @@ NEW_TESTS = \
 	test_join \
 	test_json \
 	test_jumplist \
-	test_jumps \
 	test_lambda \
 	test_langmap \
 	test_largefile \
@@ -186,7 +186,7 @@ NEW_TESTS = \
 	test_macvim \
 	test_makeencoding \
 	test_man \
-	test_maparg \
+	test_map_functions \
 	test_mapping \
 	test_marks \
 	test_match \
@@ -347,6 +347,7 @@ NEW_TESTS_RES = \
 	test_clientserver.res \
 	test_close_count.res \
 	test_cmdline.res \
+	test_cmdwin.res \
 	test_command_count.res \
 	test_comments.res \
 	test_comparators.res \
@@ -428,7 +429,7 @@ NEW_TESTS_RES = \
 	test_macvim.res \
 	test_makeencoding.res \
 	test_man.res \
-	test_maparg.res \
+	test_map_functions.res \
 	test_mapping.res \
 	test_marks.res \
 	test_match.res \

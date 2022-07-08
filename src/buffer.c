@@ -150,7 +150,8 @@ buffer_ensure_loaded(buf_T *buf)
 	aco_save_T	aco;
 
 	aucmd_prepbuf(&aco, buf);
-	swap_exists_action = SEA_NONE;
+	if (swap_exists_action != SEA_READONLY)
+	    swap_exists_action = SEA_NONE;
 	open_buffer(FALSE, NULL, 0);
 	aucmd_restbuf(&aco);
     }
@@ -289,9 +290,7 @@ open_buffer(
     if (curbuf->b_flags & BF_NEVERLOADED)
     {
 	(void)buf_init_chartab(curbuf, FALSE);
-#ifdef FEAT_CINDENT
 	parse_cino(curbuf);
-#endif
     }
 
     // Set/reset the Changed flag first, autocmds may change the buffer.
@@ -1009,8 +1008,8 @@ free_buffer_stuff(
 #ifdef FEAT_NETBEANS_INTG
     netbeans_file_killed(buf);
 #endif
-    map_clear_int(buf, MAP_ALL_MODES, TRUE, FALSE);  // clear local mappings
-    map_clear_int(buf, MAP_ALL_MODES, TRUE, TRUE);   // clear local abbrevs
+    map_clear_mode(buf, MAP_ALL_MODES, TRUE, FALSE);  // clear local mappings
+    map_clear_mode(buf, MAP_ALL_MODES, TRUE, TRUE);   // clear local abbrevs
     VIM_CLEAR(buf->b_start_fenc);
 }
 
@@ -1057,10 +1056,12 @@ goto_buffer(
     int		count)
 {
     bufref_T	old_curbuf;
+    int		save_sea = swap_exists_action;
 
     set_bufref(&old_curbuf, curbuf);
 
-    swap_exists_action = SEA_DIALOG;
+    if (swap_exists_action == SEA_NONE)
+	swap_exists_action = SEA_DIALOG;
     (void)do_buffer(*eap->cmd == 's' ? DOBUF_SPLIT : DOBUF_GOTO,
 					     start, dir, count, eap->forceit);
     if (swap_exists_action == SEA_QUIT && *eap->cmd == 's')
@@ -1075,7 +1076,7 @@ goto_buffer(
 
 	// Quitting means closing the split window, nothing else.
 	win_close(curwin, TRUE);
-	swap_exists_action = SEA_NONE;
+	swap_exists_action = save_sea;
 	swap_exists_did_quit = TRUE;
 
 #if defined(FEAT_EVAL)
@@ -1775,7 +1776,7 @@ set_curbuf(buf_T *buf, int action)
 	    // another window, might be a timer doing something in another
 	    // window.
 	    if (prevbuf == curbuf
-			 && ((State & INSERT) == 0 || curbuf->b_nwindows <= 1))
+		    && ((State & MODE_INSERT) == 0 || curbuf->b_nwindows <= 1))
 		u_sync(FALSE);
 	    close_buffer(prevbuf == curwin->w_buffer ? curwin : NULL, prevbuf,
 		    unload ? action : (action == DOBUF_GOTO
@@ -2069,10 +2070,9 @@ buflist_new(
 	buf = curbuf;
 	// It's like this buffer is deleted.  Watch out for autocommands that
 	// change curbuf!  If that happens, allocate a new buffer anyway.
-	if (curbuf->b_p_bl)
-	    apply_autocmds(EVENT_BUFDELETE, NULL, NULL, FALSE, curbuf);
-	if (buf == curbuf)
-	    apply_autocmds(EVENT_BUFWIPEOUT, NULL, NULL, FALSE, curbuf);
+	buf_freeall(buf, BFA_WIPE | BFA_DEL);
+	if (buf != curbuf)   // autocommands deleted the buffer!
+	    return NULL;
 #ifdef FEAT_EVAL
 	if (aborting())		// autocmds may abort script processing
 	{
@@ -2080,12 +2080,6 @@ buflist_new(
 	    return NULL;
 	}
 #endif
-	if (buf == curbuf)
-	{
-	    // Make sure 'bufhidden' and 'buftype' are empty
-	    clear_string_option(&buf->b_p_bh);
-	    clear_string_option(&buf->b_p_bt);
-	}
     }
     if (buf != curbuf || curbuf == NULL)
     {
@@ -2097,7 +2091,7 @@ buflist_new(
 	}
 #ifdef FEAT_EVAL
 	// init b: variables
-	buf->b_vars = dict_alloc();
+	buf->b_vars = dict_alloc_id(aid_newbuf_bvars);
 	if (buf->b_vars == NULL)
 	{
 	    vim_free(ffname);
@@ -2133,14 +2127,6 @@ buflist_new(
 
     if (buf == curbuf)
     {
-	// free all things allocated for this buffer
-	buf_freeall(buf, 0);
-	if (buf != curbuf)	 // autocommands deleted the buffer!
-	    return NULL;
-#if defined(FEAT_EVAL)
-	if (aborting())		// autocmds may abort script processing
-	    return NULL;
-#endif
 	free_buffer_stuff(buf, FALSE);	// delete local variables et al.
 
 	// Init the options.
@@ -2290,7 +2276,7 @@ free_buf_options(
     clear_string_option(&buf->b_p_inex);
 # endif
 #endif
-#if defined(FEAT_CINDENT) && defined(FEAT_EVAL)
+#if defined(FEAT_EVAL)
     clear_string_option(&buf->b_p_inde);
     clear_string_option(&buf->b_p_indk);
 #endif
@@ -2351,13 +2337,10 @@ free_buf_options(
     clear_string_option(&buf->b_p_sua);
 #endif
     clear_string_option(&buf->b_p_ft);
-#ifdef FEAT_CINDENT
     clear_string_option(&buf->b_p_cink);
     clear_string_option(&buf->b_p_cino);
-#endif
-#if defined(FEAT_CINDENT) || defined(FEAT_SMARTINDENT)
+    clear_string_option(&buf->b_p_cinsd);
     clear_string_option(&buf->b_p_cinw);
-#endif
     clear_string_option(&buf->b_p_cpt);
 #ifdef FEAT_COMPL_FUNC
     clear_string_option(&buf->b_p_cfu);
@@ -2387,9 +2370,7 @@ free_buf_options(
 #endif
     buf->b_p_ar = -1;
     buf->b_p_ul = NO_LOCAL_UNDOLEVEL;
-#ifdef FEAT_LISP
     clear_string_option(&buf->b_p_lw);
-#endif
     clear_string_option(&buf->b_p_bkc);
     clear_string_option(&buf->b_p_menc);
 }
@@ -2430,12 +2411,7 @@ buflist_getfile(
     if (buf == curbuf)
 	return OK;
 
-    if (text_locked())
-    {
-	text_locked_msg();
-	return FAIL;
-    }
-    if (curbuf_locked())
+    if (text_or_buf_locked())
 	return FAIL;
 
     // altfpos may be changed by getfile(), get it now
@@ -2657,13 +2633,15 @@ buflist_findpat(
 		if (*p == '^' && !(attempt & 1))	 // add/remove '^'
 		    ++p;
 		regmatch.regprog = vim_regcomp(p, magic_isset() ? RE_MAGIC : 0);
-		if (regmatch.regprog == NULL)
-		{
-		    vim_free(pat);
-		    return -1;
-		}
 
 		FOR_ALL_BUFS_FROM_LAST(buf)
+		{
+		    if (regmatch.regprog == NULL)
+		    {
+			// invalid pattern, possibly after switching engine
+			vim_free(pat);
+			return -1;
+		    }
 		    if (buf->b_p_bl == find_listed
 #ifdef FEAT_DIFF
 			    && (!diffmode || diff_mode_buf(buf))
@@ -2689,6 +2667,7 @@ buflist_findpat(
 			}
 			match = buf->b_fnum;	// remember first match
 		    }
+		}
 
 		vim_regfree(regmatch.regprog);
 		if (match >= 0)			// found one match
@@ -2781,12 +2760,6 @@ ExpandBufnames(
 	    if (attempt > 0 && patc == pat)
 		break;	// there was no anchor, no need to try again
 	    regmatch.regprog = vim_regcomp(patc + attempt * 11, RE_MAGIC);
-	    if (regmatch.regprog == NULL)
-	    {
-		if (patc != pat)
-		    vim_free(patc);
-		return FAIL;
-	    }
 	}
 
 	// round == 1: Count the matches.
@@ -2807,7 +2780,16 @@ ExpandBufnames(
 #endif
 
 		if (!fuzzy)
+		{
+		    if (regmatch.regprog == NULL)
+		    {
+			// invalid pattern, possibly after recompiling
+			if (patc != pat)
+			    vim_free(patc);
+			return FAIL;
+		    }
 		    p = buflist_match(&regmatch, buf, p_wic);
+		}
 		else
 		{
 		    p = NULL;
@@ -2936,6 +2918,7 @@ ExpandBufnames(
 
 /*
  * Check for a match on the file name for buffer "buf" with regprog "prog".
+ * Note that rmp->regprog may become NULL when switching regexp engine.
  */
     static char_u *
 buflist_match(
@@ -2947,14 +2930,15 @@ buflist_match(
 
     // First try the short file name, then the long file name.
     match = fname_match(rmp, buf->b_sfname, ignore_case);
-    if (match == NULL)
+    if (match == NULL && rmp->regprog != NULL)
 	match = fname_match(rmp, buf->b_ffname, ignore_case);
 
     return match;
 }
 
 /*
- * Try matching the regexp in "prog" with file name "name".
+ * Try matching the regexp in "rmp->regprog" with file name "name".
+ * Note that rmp->regprog may become NULL when switching regexp engine.
  * Return "name" when there is a match, NULL when not.
  */
     static char_u *
@@ -2966,13 +2950,14 @@ fname_match(
     char_u	*match = NULL;
     char_u	*p;
 
-    if (name != NULL)
+    // extra check for valid arguments
+    if (name != NULL && rmp->regprog != NULL)
     {
 	// Ignore case when 'fileignorecase' or the argument is set.
 	rmp->rm_ic = p_fic || ignore_case;
 	if (vim_regexec(rmp, name, (colnr_T)0))
 	    match = name;
-	else
+	else if (rmp->regprog != NULL)
 	{
 	    // Replace $(HOME) with '~' and try matching again.
 	    p = home_replace_save(NULL, name);
@@ -3076,6 +3061,8 @@ buflist_setfpos(
 	wip->wi_fpos.lnum = lnum;
 	wip->wi_fpos.col = col;
     }
+    if (win != NULL)
+	wip->wi_changelistidx = win->w_changelistidx;
     if (copy_options && win != NULL)
     {
 	// Save the window-specific option values.
@@ -3210,6 +3197,8 @@ get_winopts(buf_T *buf)
     }
     else
 	copy_winopt(&curwin->w_allbuf_opt, &curwin->w_onebuf_opt);
+    if (wip != NULL)
+	curwin->w_changelistidx = wip->wi_changelistidx;
 
 #ifdef FEAT_FOLDING
     // Set 'foldlevel' to 'foldlevelstart' if it's not negative.
@@ -3292,7 +3281,7 @@ buflist_list(exarg_T *eap)
     {
 #ifdef FEAT_TERMINAL
 	job_running = term_job_running(buf->b_term);
-	job_none_open = job_running && term_none_open(buf->b_term);
+	job_none_open = term_none_open(buf->b_term);
 #endif
 	// skip unlisted buffers, unless ! was used
 	if ((!buf->b_p_bl && !eap->forceit && !vim_strchr(eap->arg, 'u'))
@@ -3328,9 +3317,9 @@ buflist_list(exarg_T *eap)
 	changed_char = (buf->b_flags & BF_READERR) ? 'x'
 					     : (bufIsChanged(buf) ? '+' : ' ');
 #ifdef FEAT_TERMINAL
-	if (term_job_running(buf->b_term))
+	if (job_running)
 	{
-	    if (term_none_open(buf->b_term))
+	    if (job_none_open)
 		ro_char = '?';
 	    else
 		ro_char = 'R';
@@ -4463,7 +4452,8 @@ build_stl_str_hl(
 		// correct the start of the items for the truncation
 		for (l = stl_groupitem[groupdepth] + 1; l < curitem; l++)
 		{
-		    stl_items[l].stl_start -= n;
+		    // Minus one for the leading '<' added above.
+		    stl_items[l].stl_start -= n - 1;
 		    if (stl_items[l].stl_start < t)
 			stl_items[l].stl_start = t;
 		}
@@ -4717,8 +4707,8 @@ build_stl_str_hl(
 	    break;
 
 	case STL_COLUMN:
-	    num = !(State & INSERT) && empty_line
-		  ? 0 : (int)wp->w_cursor.col + 1;
+	    num = (State & MODE_INSERT) == 0 && empty_line
+					       ? 0 : (int)wp->w_cursor.col + 1;
 	    break;
 
 	case STL_VIRTCOL:
@@ -4726,8 +4716,8 @@ build_stl_str_hl(
 	    virtcol = wp->w_virtcol + 1;
 	    // Don't display %V if it's the same as %c.
 	    if (opt == STL_VIRTCOL_ALT
-		    && (virtcol == (colnr_T)(!(State & INSERT) && empty_line
-			    ? 0 : (int)wp->w_cursor.col + 1)))
+		    && (virtcol == (colnr_T)((State & MODE_INSERT) == 0
+			       && empty_line ? 0 : (int)wp->w_cursor.col + 1)))
 		break;
 	    num = (long)virtcol;
 	    break;
@@ -4772,9 +4762,9 @@ build_stl_str_hl(
 	case STL_OFFSET:
 #ifdef FEAT_BYTEOFF
 	    l = ml_find_line_or_offset(wp->w_buffer, wp->w_cursor.lnum, NULL);
-	    num = (wp->w_buffer->b_ml.ml_flags & ML_EMPTY) || l < 0 ?
-		  0L : l + 1 + (!(State & INSERT) && empty_line ?
-				0 : (int)wp->w_cursor.col);
+	    num = (wp->w_buffer->b_ml.ml_flags & ML_EMPTY) || l < 0
+		       ? 0L : l + 1 + ((State & MODE_INSERT) == 0 && empty_line
+				? 0 : (int)wp->w_cursor.col);
 #endif
 	    break;
 

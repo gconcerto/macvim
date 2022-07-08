@@ -362,7 +362,39 @@ func Test_Debugger_breakadd()
   call assert_fails('breakadd file Xtest.vim /\)/', 'E55:')
 endfunc
 
-def Test_Debugger_breakadd_expr()
+" Test for expression breakpoint set using ":breakadd expr <expr>"
+func Test_Debugger_breakadd_expr()
+  let lines =<< trim END
+    let g:Xtest_var += 1
+  END
+  call writefile(lines, 'Xtest.vim')
+
+  " Start Vim in a terminal
+  let buf = RunVimInTerminal('Xtest.vim', {})
+  call RunDbgCmd(buf, ':let g:Xtest_var = 10')
+  call RunDbgCmd(buf, ':breakadd expr g:Xtest_var')
+  call RunDbgCmd(buf, ':source %')
+  let expected =<< eval trim END
+    Oldval = "10"
+    Newval = "11"
+    {fnamemodify('Xtest.vim', ':p')}
+    line 1: let g:Xtest_var += 1
+  END
+  call RunDbgCmd(buf, ':source %', expected)
+  call RunDbgCmd(buf, 'cont')
+  let expected =<< eval trim END
+    Oldval = "11"
+    Newval = "12"
+    {fnamemodify('Xtest.vim', ':p')}
+    line 1: let g:Xtest_var += 1
+  END
+  call RunDbgCmd(buf, ':source %', expected)
+
+  call StopVimInTerminal(buf)
+  call delete('Xtest.vim')
+endfunc
+
+def Test_Debugger_breakadd_vim9_expr()
   var lines =<< trim END
       vim9script
       func g:EarlyFunc()
@@ -376,7 +408,7 @@ def Test_Debugger_breakadd_expr()
 
   # Start Vim in a terminal
   var buf = g:RunVimInTerminal('-S Xtest.vim', {wait_for_ruler: 0})
-  call g:TermWait(buf)
+  call g:TermWait(buf, g:RunningWithValgrind() ? 1000 : 50)
 
   # Despite the failure the functions are defined
   g:RunDbgCmd(buf, ':function g:EarlyFunc',
@@ -402,7 +434,7 @@ def Test_Debugger_break_at_return()
 
   # Start Vim in a terminal
   var buf = g:RunVimInTerminal('-S Xtest.vim', {wait_for_ruler: 0})
-  call g:TermWait(buf)
+  call g:TermWait(buf, g:RunningWithValgrind() ? 1000 : 50)
 
   g:RunDbgCmd(buf, ':call GetNum()',
      ['line 1: return 1  + 2  + 3'], {match: 'pattern'})

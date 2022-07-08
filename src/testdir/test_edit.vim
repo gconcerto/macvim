@@ -391,15 +391,13 @@ endfunc
 
 func Test_edit_13()
   " Test smartindenting
-  if exists("+smartindent")
-    new
-    set smartindent autoindent
-    call setline(1, ["\tabc"])
-    call feedkeys("A {\<cr>more\<cr>}\<esc>", 'tnix')
-    call assert_equal(["\tabc {", "\t\tmore", "\t}"], getline(1, '$'))
-    set smartindent& autoindent&
-    bwipe!
-  endif
+  new
+  set smartindent autoindent
+  call setline(1, ["\tabc"])
+  call feedkeys("A {\<cr>more\<cr>}\<esc>", 'tnix')
+  call assert_equal(["\tabc {", "\t\tmore", "\t}"], getline(1, '$'))
+  set smartindent& autoindent&
+  bwipe!
 
   " Test autoindent removing indent of blank line.
   new
@@ -1043,7 +1041,7 @@ func Test_edit_completefunc_delete()
   set completefunc=CompleteFunc
   call setline(1, ['', 'abcd', ''])
   2d
-  call assert_fails("normal 2G$a\<C-X>\<C-U>", 'E578:')
+  call assert_fails("normal 2G$a\<C-X>\<C-U>", 'E565:')
   bwipe!
 endfunc
 
@@ -1209,27 +1207,37 @@ endfunc
 
 func Test_edit_MOUSE()
   " This is a simple test, since we not really using the mouse here
-  if (has("gui_macvim") && has("gui_running"))
-    return
+  if has("gui_macvim")
+    CheckNotGui
   endif
   CheckFeature mouse
   10new
   call setline(1, range(1, 100))
   call cursor(1, 1)
+  call assert_equal(1, line('w0'))
+  call assert_equal(10, line('w$'))
   set mouse=a
+  " One scroll event moves three lines.
   call feedkeys("A\<ScrollWheelDown>\<esc>", 'tnix')
-  call assert_equal([0, 4, 1, 0], getpos('.'))
-  " This should move by one pageDown, but only moves
-  " by one line when the test is run...
+  call assert_equal(4, line('w0'))
+  call assert_equal(13, line('w$'))
+  " This should move by one page down.
   call feedkeys("A\<S-ScrollWheelDown>\<esc>", 'tnix')
-  call assert_equal([0, 5, 1, 0], getpos('.'))
+  call assert_equal(14, line('w0'))
   set nostartofline
+  " Another page down.
   call feedkeys("A\<C-ScrollWheelDown>\<esc>", 'tnix')
-  call assert_equal([0, 6, 1, 0], getpos('.'))
+  call assert_equal(24, line('w0'))
+
+  call assert_equal([0, 24, 2, 0], getpos('.'))
+  call test_setmouse(4, 3)
   call feedkeys("A\<LeftMouse>\<esc>", 'tnix')
-  call assert_equal([0, 6, 1, 0], getpos('.'))
-  call feedkeys("A\<RightMouse>\<esc>", 'tnix')
-  call assert_equal([0, 6, 1, 0], getpos('.'))
+  call assert_equal([0, 27, 2, 0], getpos('.'))
+  set mousemodel=extend
+  call test_setmouse(5, 3)
+  call feedkeys("A\<RightMouse>\<esc>\<esc>", 'tnix')
+  call assert_equal([0, 28, 2, 0], getpos('.'))
+  set mousemodel&
   call cursor(1, 100)
   norm! zt
   " this should move by a screen up, but when the test
@@ -1843,15 +1851,41 @@ func Test_edit_file_no_read_perm()
   call delete('Xfile')
 endfunc
 
+" Using :edit without leaving 'insertmode' should not cause Insert mode to be
+" re-entered immediately after <C-L>
+func Test_edit_insertmode_ex_edit()
+  CheckRunVimInTerminal
+
+  let lines =<< trim END
+    set insertmode noruler
+    inoremap <C-B> <Cmd>edit Xfoo<CR>
+  END
+  call writefile(lines, 'Xtest_edit_insertmode_ex_edit')
+
+  let buf = RunVimInTerminal('-S Xtest_edit_insertmode_ex_edit', #{rows: 6})
+  " Somehow this can be very slow with valgrind. A separate TermWait() works
+  " better than a longer time with WaitForAssert() (why?)
+  call TermWait(buf, 1000)
+  call WaitForAssert({-> assert_match('^-- INSERT --\s*$', term_getline(buf, 6))})
+  call term_sendkeys(buf, "\<C-B>\<C-L>")
+  call WaitForAssert({-> assert_notmatch('^-- INSERT --\s*$', term_getline(buf, 6))})
+
+  " clean up
+  call StopVimInTerminal(buf)
+  call delete('Xtest_edit_insertmode_ex_edit')
+endfunc
+
 " Pressing escape in 'insertmode' should beep
-func Test_edit_insertmode_esc_beeps()
+" FIXME: Execute this later, when using valgrind it makes the next test
+" Test_edit_insertmode_ex_edit() fail.
+func Test_z_edit_insertmode_esc_beeps()
   new
   set insertmode
   call assert_beeps("call feedkeys(\"one\<Esc>\", 'xt')")
   set insertmode&
-  " unsupported CTRL-G command should beep in insert mode.
+  " unsupported "CTRL-G l" command should beep in insert mode.
   call assert_beeps("normal i\<C-G>l")
-  close!
+  bwipe!
 endfunc
 
 " Test for 'hkmap' and 'hkmapp'
@@ -2097,7 +2131,7 @@ endfunc
 func Test_edit_CTRL_hat()
   CheckFeature xim
 
-  " FIXME: test fails with Athena and Motif GUI.
+  " FIXME: test fails with Motif GUI.
   "        test also fails when running in the GUI.
   CheckFeature gui_gtk
   CheckNotGui
@@ -2128,5 +2162,31 @@ func Test_edit_overlong_file_name()
   bwipe!
 endfunc
 
+func Test_edit_shift_bs()
+  CheckMSWindows
+
+  " FIXME: this works interactively, but the test fails
+  throw 'Skipped: Shift-Backspace Test not working correctly :('
+
+  " Need to run this in Win32 Terminal, do not use CheckRunVimInTerminal
+  if !has("terminal")
+    return
+  endif
+
+  " Shift Backspace should work like Backspace in insert mode
+  let lines =<< trim END
+    call setline(1, ['abc'])
+  END
+  call writefile(lines, 'Xtest_edit_shift_bs')
+
+  let buf = RunVimInTerminal('-S Xtest_edit_shift_bs', #{rows: 3})
+  call term_sendkeys(buf, "A\<S-BS>-\<esc>")
+  call TermWait(buf, 50)
+  call assert_equal('ab-', term_getline(buf, 1))
+
+  " clean up
+  call StopVimInTerminal(buf)
+  call delete('Xtest_edit_shift_bs')
+endfunc
 
 " vim: shiftwidth=2 sts=2 expandtab

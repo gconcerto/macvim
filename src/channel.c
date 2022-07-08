@@ -44,11 +44,18 @@
 # define sock_write(sd, buf, len) send((SOCKET)sd, buf, len, 0)
 # define sock_read(sd, buf, len) recv((SOCKET)sd, buf, len, 0)
 # define sock_close(sd) closesocket((SOCKET)sd)
+// Support for Unix-domain sockets was added in Windows SDK 17061.
+# define UNIX_PATH_MAX 108
+typedef struct sockaddr_un {
+    ADDRESS_FAMILY sun_family;
+    char sun_path[UNIX_PATH_MAX];
+} SOCKADDR_UN, *PSOCKADDR_UN;
 #else
 # include <netdb.h>
 # include <netinet/in.h>
 # include <arpa/inet.h>
 # include <sys/socket.h>
+# include <sys/un.h>
 # ifdef HAVE_LIBGEN_H
 #  include <libgen.h>
 # endif
@@ -145,7 +152,8 @@ static proftime_T log_start;
     void
 ch_logfile(char_u *fname, char_u *opt)
 {
-    FILE   *file = NULL;
+    FILE	*file = NULL;
+    char	*mode = "a";
 
     if (log_fd != NULL)
     {
@@ -156,9 +164,14 @@ ch_logfile(char_u *fname, char_u *opt)
 	fclose(log_fd);
     }
 
+    // The "a" flag overrules the "w" flag.
+    if (vim_strchr(opt, 'a') == NULL && vim_strchr(opt, 'w') != NULL)
+	mode = "w";
+    ch_log_output = vim_strchr(opt, 'o') != NULL ? LOG_ALWAYS : FALSE;
+
     if (*fname != NUL)
     {
-	file = fopen((char *)fname, *opt == 'w' ? "w" : "a");
+	file = fopen((char *)fname, mode);
 	if (file == NULL)
 	{
 	    semsg(_(e_cant_open_file_str), fname);
@@ -171,7 +184,10 @@ ch_logfile(char_u *fname, char_u *opt)
 
     if (log_fd != NULL)
     {
-	fprintf(log_fd, "==== start log session ====\n");
+	fprintf(log_fd, "==== start log session %s ====\n",
+						 get_ctime(time(NULL), FALSE));
+	// flush now, if fork/exec follows it could be written twice
+	fflush(log_fd);
 #ifdef FEAT_RELTIME
 	profile_start(&log_start);
 #endif
@@ -948,6 +964,67 @@ channel_connect(
 }
 
 /*
+ * Open a socket channel to the UNIX socket at "path".
+ * Returns the channel for success.
+ * Returns NULL for failure.
+ */
+    static channel_T *
+channel_open_unix(
+	const char *path,
+	void (*nb_close_cb)(void))
+{
+    channel_T		*channel = NULL;
+    int			sd = -1;
+    size_t		path_len = STRLEN(path);
+    struct sockaddr_un	server;
+    size_t		server_len;
+    int			waittime = -1;
+
+    if (*path == NUL || path_len >= sizeof(server.sun_path))
+    {
+	semsg(_(e_invalid_argument_str), path);
+	return NULL;
+    }
+
+    channel = add_channel();
+    if (channel == NULL)
+    {
+	ch_error(NULL, "Cannot allocate channel.");
+	return NULL;
+    }
+
+    CLEAR_FIELD(server);
+    server.sun_family = AF_UNIX;
+    STRNCPY(server.sun_path, path, sizeof(server.sun_path) - 1);
+
+    ch_log(channel, "Trying to connect to %s", path);
+
+    server_len = offsetof(struct sockaddr_un, sun_path) + path_len + 1;
+    sd = channel_connect(channel, (struct sockaddr *)&server, (int)server_len,
+								   &waittime);
+
+    if (sd < 0)
+    {
+	channel_free(channel);
+	return NULL;
+    }
+
+    ch_log(channel, "Connection made");
+
+    channel->CH_SOCK_FD = (sock_T)sd;
+    channel->ch_nb_close_cb = nb_close_cb;
+    channel->ch_hostname = (char *)vim_strsave((char_u *)path);
+    channel->ch_port = 0;
+    channel->ch_to_be_closed |= (1U << PART_SOCK);
+
+#ifdef FEAT_GUI
+    channel_gui_register_one(channel, PART_SOCK);
+#endif
+
+    return channel;
+}
+
+/*
  * Open a socket channel to "hostname":"port".
  * "waittime" is the time in msec to wait for the connection.
  * When negative wait forever.
@@ -1131,8 +1208,9 @@ prepare_buffer(buf_T *buf)
     buf_copy_options(buf, BCO_ENTER);
     curbuf = buf;
 #ifdef FEAT_QUICKFIX
-    set_option_value((char_u *)"bt", 0L, (char_u *)"nofile", OPT_LOCAL);
-    set_option_value((char_u *)"bh", 0L, (char_u *)"hide", OPT_LOCAL);
+    set_option_value_give_err((char_u *)"bt",
+					    0L, (char_u *)"nofile", OPT_LOCAL);
+    set_option_value_give_err((char_u *)"bh", 0L, (char_u *)"hide", OPT_LOCAL);
 #endif
     if (curbuf->b_ml.ml_mfp == NULL)
 	ml_open(curbuf);
@@ -1221,7 +1299,7 @@ channel_set_options(channel_T *channel, jobopt_T *opt)
 
 	// writing output to a buffer. Default mode is NL.
 	if (!(opt->jo_set & JO_OUT_MODE))
-	    channel->ch_part[PART_OUT].ch_mode = MODE_NL;
+	    channel->ch_part[PART_OUT].ch_mode = CH_MODE_NL;
 	if (opt->jo_set & JO_OUT_BUF)
 	{
 	    buf = buflist_findnr(opt->jo_io_buf[PART_OUT]);
@@ -1267,7 +1345,7 @@ channel_set_options(channel_T *channel, jobopt_T *opt)
 
 	// writing err to a buffer. Default mode is NL.
 	if (!(opt->jo_set & JO_ERR_MODE))
-	    channel->ch_part[PART_ERR].ch_mode = MODE_NL;
+	    channel->ch_part[PART_ERR].ch_mode = CH_MODE_NL;
 	if (opt->jo_io[PART_ERR] == JIO_OUT)
 	    buf = channel->ch_part[PART_OUT].ch_bufref.br_buf;
 	else if (opt->jo_set & JO_ERR_BUF)
@@ -1320,8 +1398,9 @@ channel_open_func(typval_T *argvars)
     char_u	*address;
     char_u	*p;
     char	*rest;
-    int		port;
+    int		port = 0;
     int		is_ipv6 = FALSE;
+    int		is_unix = FALSE;
     jobopt_T    opt;
     channel_T	*channel = NULL;
 
@@ -1338,8 +1417,18 @@ channel_open_func(typval_T *argvars)
 	return NULL;
     }
 
-    // parse address
-    if (*address == '[')
+    if (*address == NUL)
+    {
+	semsg(_(e_invalid_argument_str), address);
+	return NULL;
+    }
+
+    if (!STRNCMP(address, "unix:", 5))
+    {
+	is_unix = TRUE;
+	address += 5;
+    }
+    else if (*address == '[')
     {
 	// ipv6 address
 	is_ipv6 = TRUE;
@@ -1352,6 +1441,7 @@ channel_open_func(typval_T *argvars)
     }
     else
     {
+	// ipv4 address
 	p = vim_strchr(address, ':');
 	if (p == NULL)
 	{
@@ -1359,27 +1449,32 @@ channel_open_func(typval_T *argvars)
 	    return NULL;
 	}
     }
-    port = strtol((char *)(p + 1), &rest, 10);
-    if (*address == NUL || port <= 0 || port >= 65536 || *rest != NUL)
+
+    if (!is_unix)
     {
-	semsg(_(e_invalid_argument_str), address);
-	return NULL;
+	port = strtol((char *)(p + 1), &rest, 10);
+	if (port <= 0 || port >= 65536 || *rest != NUL)
+	{
+	    semsg(_(e_invalid_argument_str), address);
+	    return NULL;
+	}
+	if (is_ipv6)
+	{
+	    // strip '[' and ']'
+	    ++address;
+	    *(p - 1) = NUL;
+	}
+	else
+	    *p = NUL;
     }
-    if (is_ipv6)
-    {
-	// strip '[' and ']'
-	++address;
-	*(p - 1) = NUL;
-    }
-    else
-	*p = NUL;
 
     // parse options
     clear_job_options(&opt);
-    opt.jo_mode = MODE_JSON;
+    opt.jo_mode = CH_MODE_JSON;
     opt.jo_timeout = 2000;
     if (get_job_options(&argvars[1], &opt,
-	    JO_MODE_ALL + JO_CB_ALL + JO_WAITTIME + JO_TIMEOUT_ALL, 0) == FAIL)
+	    JO_MODE_ALL + JO_CB_ALL + JO_TIMEOUT_ALL
+		+ (is_unix? 0 : JO_WAITTIME), 0) == FAIL)
 	goto theend;
     if (opt.jo_timeout < 0)
     {
@@ -1387,7 +1482,10 @@ channel_open_func(typval_T *argvars)
 	goto theend;
     }
 
-    channel = channel_open((char *)address, port, opt.jo_waittime, NULL);
+    if (is_unix)
+	channel = channel_open_unix((char *)address, NULL);
+    else
+	channel = channel_open((char *)address, port, opt.jo_waittime, NULL);
     if (channel != NULL)
     {
 	opt.jo_set = JO_ALL;
@@ -1930,7 +2028,7 @@ channel_get_all(channel_T *channel, ch_part_T part, int *outlen)
 		    && p[3] == ';')
 	    {
 		// '\a' becomes a NL
-	        while (p < res + (len - 1) && *p != '\a')
+		while (p < res + (len - 1) && *p != '\a')
 		    ++p;
 		// BEL is zero width characters, suppress display mistake
 		// ConPTY (after 10.0.18317) requires advance checking
@@ -1963,28 +2061,32 @@ channel_consume(channel_T *channel, ch_part_T part, int len)
 
 /*
  * Collapses the first and second buffer for "channel"/"part".
- * Returns FAIL if that is not possible.
+ * Returns FAIL if nothing was done.
  * When "want_nl" is TRUE collapse more buffers until a NL is found.
+ * When the channel part mode is "lsp", collapse all the buffers as the http
+ * header and the JSON content can be present in multiple buffers.
  */
     int
 channel_collapse(channel_T *channel, ch_part_T part, int want_nl)
 {
-    readq_T *head = &channel->ch_part[part].ch_head;
-    readq_T *node = head->rq_next;
-    readq_T *last_node;
-    readq_T *n;
-    char_u  *newbuf;
-    char_u  *p;
-    long_u len;
+    ch_mode_T	mode = channel->ch_part[part].ch_mode;
+    readq_T	*head = &channel->ch_part[part].ch_head;
+    readq_T	*node = head->rq_next;
+    readq_T	*last_node;
+    readq_T	*n;
+    char_u	*newbuf;
+    char_u	*p;
+    long_u	len;
 
     if (node == NULL || node->rq_next == NULL)
 	return FAIL;
 
     last_node = node->rq_next;
     len = node->rq_buflen + last_node->rq_buflen;
-    if (want_nl)
+    if (want_nl || mode == CH_MODE_LSP)
 	while (last_node->rq_next != NULL
-		&& channel_first_nl(last_node) == NULL)
+		&& (mode == CH_MODE_LSP
+		    || channel_first_nl(last_node) == NULL))
 	{
 	    last_node = last_node->rq_next;
 	    len += last_node->rq_buflen;
@@ -2048,7 +2150,7 @@ channel_save(channel_T *channel, ch_part_T part, char_u *buf, int len,
 	return FAIL;	    // out of memory
     }
 
-    if (channel->ch_part[part].ch_mode == MODE_NL)
+    if (channel->ch_part[part].ch_mode == CH_MODE_NL)
     {
 	// Drop any CR before a NL.
 	p = node->rq_buffer;
@@ -2239,7 +2341,7 @@ channel_parse_json(channel_T *channel, ch_part_T part)
     reader.js_cookie = channel;
     reader.js_cookie_arg = part;
 
-    if (chanpart->ch_mode == MODE_LSP)
+    if (chanpart->ch_mode == CH_MODE_LSP)
 	status = channel_process_lsp_http_hdr(&reader);
 
     // When a message is incomplete we wait for a short while for more to
@@ -2250,20 +2352,20 @@ channel_parse_json(channel_T *channel, ch_part_T part)
     {
 	++emsg_silent;
 	status = json_decode(&reader, &listtv,
-				chanpart->ch_mode == MODE_JS ? JSON_JS : 0);
+				chanpart->ch_mode == CH_MODE_JS ? JSON_JS : 0);
 	--emsg_silent;
     }
     if (status == OK)
     {
 	// Only accept the response when it is a list with at least two
 	// items.
-	if (chanpart->ch_mode == MODE_LSP && listtv.v_type != VAR_DICT)
+	if (chanpart->ch_mode == CH_MODE_LSP && listtv.v_type != VAR_DICT)
 	{
 	    ch_error(channel, "Did not receive a LSP dict, discarding");
 	    clear_tv(&listtv);
 	}
-	else if (chanpart->ch_mode != MODE_LSP &&
-		(listtv.v_type != VAR_LIST || listtv.vval.v_list->lv_len < 2))
+	else if (chanpart->ch_mode != CH_MODE_LSP
+	      && (listtv.v_type != VAR_LIST || listtv.vval.v_list->lv_len < 2))
 	{
 	    if (listtv.v_type != VAR_LIST)
 		ch_error(channel, "Did not receive a list, discarding");
@@ -2493,7 +2595,7 @@ channel_get_json(
 	list_T	    *l;
 	typval_T    *tv;
 
-	if (channel->ch_part[part].ch_mode != MODE_LSP)
+	if (channel->ch_part[part].ch_mode != CH_MODE_LSP)
 	{
 	    l = item->jq_value->vval.v_list;
 	    CHECK_LIST_MATERIALIZE(l);
@@ -2614,7 +2716,8 @@ channel_exe_cmd(channel_T *channel, ch_part_T part, typval_T *argv)
 {
     char_u  *cmd = argv[0].vval.v_string;
     char_u  *arg;
-    int	    options = channel->ch_part[part].ch_mode == MODE_JS ? JSON_JS : 0;
+    int	    options = channel->ch_part[part].ch_mode == CH_MODE_JS
+								 ? JSON_JS : 0;
 
     if (argv[1].v_type != VAR_STRING)
     {
@@ -2887,6 +2990,18 @@ drop_messages(channel_T *channel, ch_part_T part)
 }
 
 /*
+ * Return TRUE if for "channel" / "part" ch_json_head should be used.
+ */
+    static int
+channel_use_json_head(channel_T *channel, ch_part_T part)
+{
+    ch_mode_T	ch_mode = channel->ch_part[part].ch_mode;
+
+    return ch_mode == CH_MODE_JSON || ch_mode == CH_MODE_JS
+						     || ch_mode == CH_MODE_LSP;
+}
+
+/*
  * Invoke a callback for "channel"/"part" if needed.
  * This does not redraw but sets channel_need_redraw when redraw is needed.
  * Return TRUE when a message was handled, there might be another one.
@@ -2932,7 +3047,7 @@ may_invoke_callback(channel_T *channel, ch_part_T part)
 	buffer = NULL;
     }
 
-    if (ch_mode == MODE_JSON || ch_mode == MODE_JS || ch_mode == MODE_LSP)
+    if (channel_use_json_head(channel, part))
     {
 	listitem_T	*item;
 	int		argc = 0;
@@ -2940,13 +3055,19 @@ may_invoke_callback(channel_T *channel, ch_part_T part)
 	// Get any json message in the queue.
 	if (channel_get_json(channel, part, -1, FALSE, &listtv) == FAIL)
 	{
+	    if (ch_mode == CH_MODE_LSP)
+		// In the "lsp" mode, the http header and the json payload may
+		// be received in multiple messages. So concatenate all the
+		// received messages.
+		(void)channel_collapse(channel, part, FALSE);
+
 	    // Parse readahead, return when there is still no message.
 	    channel_parse_json(channel, part);
 	    if (channel_get_json(channel, part, -1, FALSE, &listtv) == FAIL)
 		return FALSE;
 	}
 
-	if (ch_mode == MODE_LSP)
+	if (ch_mode == CH_MODE_LSP)
 	{
 	    dict_T	*d = listtv->vval.v_dict;
 	    dictitem_T	*di;
@@ -3005,7 +3126,7 @@ may_invoke_callback(channel_T *channel, ch_part_T part)
 	    return FALSE;
 	}
 
-	if (ch_mode == MODE_NL)
+	if (ch_mode == CH_MODE_NL)
 	{
 	    char_u  *nl = NULL;
 	    char_u  *buf;
@@ -3082,7 +3203,7 @@ may_invoke_callback(channel_T *channel, ch_part_T part)
 	    }
     }
 
-    if (seq_nr > 0 && (ch_mode != MODE_LSP || called_otc))
+    if (seq_nr > 0 && (ch_mode != CH_MODE_LSP || called_otc))
     {
 	if (!called_otc)
 	{
@@ -3172,14 +3293,13 @@ channel_is_open(channel_T *channel)
 }
 
 /*
- * Return TRUE if "channel" has JSON or other typeahead.
+ * Return a pointer indicating the readahead.  Can only be compared between
+ * calls.  Returns NULL if there is no readahead.
  */
-    static int
-channel_has_readahead(channel_T *channel, ch_part_T part)
+    static void *
+channel_readahead_pointer(channel_T *channel, ch_part_T part)
 {
-    ch_mode_T	ch_mode = channel->ch_part[part].ch_mode;
-
-    if (ch_mode == MODE_JSON || ch_mode == MODE_JS || ch_mode == MODE_LSP)
+    if (channel_use_json_head(channel, part))
     {
 	jsonq_T   *head = &channel->ch_part[part].ch_json_head;
 
@@ -3188,9 +3308,18 @@ channel_has_readahead(channel_T *channel, ch_part_T part)
 	    // process.
 	    channel_parse_json(channel, part);
 
-	return head->jq_next != NULL;
+	return head->jq_next;
     }
-    return channel_peek(channel, part) != NULL;
+    return channel_peek(channel, part);
+}
+
+/*
+ * Return TRUE if "channel" has JSON or other typeahead.
+ */
+    static int
+channel_has_readahead(channel_T *channel, ch_part_T part)
+{
+    return channel_readahead_pointer(channel, part) != NULL;
 }
 
 /*
@@ -3261,11 +3390,11 @@ channel_part_info(channel_T *channel, dict_T *dict, char *name, ch_part_T part)
     STRCPY(namebuf + tail, "mode");
     switch (chanpart->ch_mode)
     {
-	case MODE_NL: s = "NL"; break;
-	case MODE_RAW: s = "RAW"; break;
-	case MODE_JSON: s = "JSON"; break;
-	case MODE_JS: s = "JS"; break;
-	case MODE_LSP: s = "LSP"; break;
+	case CH_MODE_NL: s = "NL"; break;
+	case CH_MODE_RAW: s = "RAW"; break;
+	case CH_MODE_JSON: s = "JSON"; break;
+	case CH_MODE_JS: s = "JS"; break;
+	case CH_MODE_LSP: s = "LSP"; break;
     }
     dict_add_string(dict, namebuf, (char_u *)s);
 
@@ -3294,8 +3423,14 @@ channel_info(channel_T *channel, dict_T *dict)
 
     if (channel->ch_hostname != NULL)
     {
-	dict_add_string(dict, "hostname", (char_u *)channel->ch_hostname);
-	dict_add_number(dict, "port", channel->ch_port);
+	if (channel->ch_port)
+	{
+	    dict_add_string(dict, "hostname", (char_u *)channel->ch_hostname);
+	    dict_add_number(dict, "port", channel->ch_port);
+	}
+	else
+	    // Unix-domain socket.
+	    dict_add_string(dict, "path", (char_u *)channel->ch_hostname);
 	channel_part_info(channel, dict, "sock", PART_SOCK);
     }
     else
@@ -3800,18 +3935,18 @@ channel_read_block(
     readq_T	*node;
 
     ch_log(channel, "Blocking %s read, timeout: %d msec",
-				     mode == MODE_RAW ? "RAW" : "NL", timeout);
+				  mode == CH_MODE_RAW ? "RAW" : "NL", timeout);
 
     while (TRUE)
     {
 	node = channel_peek(channel, part);
 	if (node != NULL)
 	{
-	    if (mode == MODE_RAW || (mode == MODE_NL
+	    if (mode == CH_MODE_RAW || (mode == CH_MODE_NL
 					   && channel_first_nl(node) != NULL))
 		// got a complete message
 		break;
-	    if (channel_collapse(channel, part, mode == MODE_NL) == OK)
+	    if (channel_collapse(channel, part, mode == CH_MODE_NL) == OK)
 		continue;
 	    // If not blocking or nothing more is coming then return what we
 	    // have.
@@ -3831,7 +3966,7 @@ channel_read_block(
     }
 
     // We have a complete message now.
-    if (mode == MODE_RAW || outlen != NULL)
+    if (mode == CH_MODE_RAW || outlen != NULL)
     {
 	msg = channel_get_all(channel, part, outlen);
     }
@@ -3902,6 +4037,7 @@ channel_read_json_block(
     sock_T	fd;
     int		timeout;
     chanpart_T	*chanpart = &channel->ch_part[part];
+    ch_mode_T	mode = channel->ch_part[part].ch_mode;
     int		retval = FAIL;
 
     ch_log(channel, "Blocking read JSON for id %d", id);
@@ -3912,6 +4048,12 @@ channel_read_json_block(
 
     for (;;)
     {
+	if (mode == CH_MODE_LSP)
+	    // In the "lsp" mode, the http header and the json payload may be
+	    // received in multiple messages. So concatenate all the received
+	    // messages.
+	    (void)channel_collapse(channel, part, FALSE);
+
 	more = channel_parse_json(channel, part);
 
 	// search for message "id"
@@ -3924,9 +4066,19 @@ channel_read_json_block(
 
 	if (!more)
 	{
+	    void *prev_readahead_ptr = channel_readahead_pointer(channel, part);
+	    void *readahead_ptr;
+
 	    // Handle any other messages in the queue.  If done some more
 	    // messages may have arrived.
 	    if (channel_parse_messages())
+		continue;
+
+	    // channel_parse_messages() may fill the queue with new data to
+	    // process.  Only loop when the readahead changed, otherwise we
+	    // would busy-loop.
+	    readahead_ptr = channel_readahead_pointer(channel, part);
+	    if (readahead_ptr != NULL && readahead_ptr != prev_readahead_ptr)
 		continue;
 
 	    // Wait for up to the timeout.  If there was an incomplete message
@@ -4083,7 +4235,7 @@ common_channel_read(typval_T *argvars, typval_T *rettv, int raw, int blob)
 		vim_free(p);
 	    }
 	}
-	else if (raw || mode == MODE_RAW || mode == MODE_NL)
+	else if (raw || mode == CH_MODE_RAW || mode == CH_MODE_NL)
 	    rettv->vval.v_string = channel_read_block(channel, part,
 							 timeout, raw, NULL);
 	else
@@ -4480,6 +4632,7 @@ ch_expr_common(typval_T *argvars, typval_T *rettv, int eval)
     ch_part_T	part_read;
     jobopt_T    opt;
     int		timeout;
+    int		callback_present = FALSE;
 
     // return an empty string by default
     rettv->v_type = VAR_STRING;
@@ -4496,17 +4649,20 @@ ch_expr_common(typval_T *argvars, typval_T *rettv, int eval)
     part_send = channel_part_send(channel);
 
     ch_mode = channel_get_mode(channel, part_send);
-    if (ch_mode == MODE_RAW || ch_mode == MODE_NL)
+    if (ch_mode == CH_MODE_RAW || ch_mode == CH_MODE_NL)
     {
 	emsg(_(e_cannot_use_evalexpr_sendexpr_with_raw_or_nl_channel));
 	return;
     }
 
-    if (ch_mode == MODE_LSP)
+    if (ch_mode == CH_MODE_LSP)
     {
 	dict_T		*d;
 	dictitem_T	*di;
-	int		callback_present = FALSE;
+
+	// return an empty dict by default
+	if (rettv_dict_alloc(rettv) == FAIL)
+	    return;
 
 	if (argvars[1].v_type != VAR_DICT)
 	{
@@ -4523,8 +4679,7 @@ ch_expr_common(typval_T *argvars, typval_T *rettv, int eval)
 	}
 
 	if (argvars[2].v_type == VAR_DICT)
-	    if (dict_find(argvars[2].vval.v_dict, (char_u *)"callback", -1)
-									!= NULL)
+	    if (dict_has_key(argvars[2].vval.v_dict, "callback"))
 		callback_present = TRUE;
 
 	if (eval || callback_present)
@@ -4545,7 +4700,7 @@ ch_expr_common(typval_T *argvars, typval_T *rettv, int eval)
 	    if (di != NULL)
 		id = di->di_tv.vval.v_number;
 	}
-	if (dict_find(d, (char_u *)"jsonrpc", -1) == NULL)
+	if (!dict_has_key(d, "jsonrpc"))
 	    dict_add_string(d, "jsonrpc", (char_u *)"2.0");
 	text = json_encode_lsp_msg(&argvars[1]);
     }
@@ -4553,7 +4708,7 @@ ch_expr_common(typval_T *argvars, typval_T *rettv, int eval)
     {
 	id = ++channel->ch_last_msg_id;
 	text = json_encode_nr_expr(id, &argvars[1],
-				(ch_mode == MODE_JS ? JSON_JS : 0) | JSON_NL);
+			      (ch_mode == CH_MODE_JS ? JSON_JS : 0) | JSON_NL);
     }
     if (text == NULL)
 	return;
@@ -4570,7 +4725,7 @@ ch_expr_common(typval_T *argvars, typval_T *rettv, int eval)
 	if (channel_read_json_block(channel, part_read, timeout, id, &listtv)
 									== OK)
 	{
-	    if (ch_mode == MODE_LSP)
+	    if (ch_mode == CH_MODE_LSP)
 	    {
 		*rettv = *listtv;
 		// Change the type to avoid the value being freed.
@@ -4590,6 +4745,14 @@ ch_expr_common(typval_T *argvars, typval_T *rettv, int eval)
 	}
     }
     free_job_options(&opt);
+    if (ch_mode == CH_MODE_LSP && !eval && callback_present)
+    {
+	// if ch_sendexpr() is used to send a LSP message and a callback
+	// function is specified, then return the generated identifier for the
+	// message.  The user can use this to cancel the request (if needed).
+	if (rettv->vval.v_dict != NULL)
+	    dict_add_number(rettv->vval.v_dict, "id", id);
+    }
 }
 
 /*
@@ -5034,13 +5197,13 @@ channel_part_read(channel_T *channel)
 
 /*
  * Return the mode of "channel"/"part"
- * If "channel" is invalid returns MODE_JSON.
+ * If "channel" is invalid returns CH_MODE_JSON.
  */
     static ch_mode_T
 channel_get_mode(channel_T *channel, ch_part_T part)
 {
     if (channel == NULL)
-	return MODE_JSON;
+	return CH_MODE_JSON;
     return channel->ch_part[part].ch_mode;
 }
 
@@ -5175,7 +5338,7 @@ f_ch_info(typval_T *argvars, typval_T *rettv UNUSED)
 	return;
 
     channel = get_channel_arg(&argvars[0], FALSE, FALSE, 0);
-    if (channel != NULL && rettv_dict_alloc(rettv) != FAIL)
+    if (channel != NULL && rettv_dict_alloc(rettv) == OK)
 	channel_info(channel, rettv->vval.v_dict);
 }
 

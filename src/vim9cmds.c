@@ -139,7 +139,7 @@ compile_unlet(
 	//
 	// Figure out the LHS type and other properties.
 	//
-	ret = compile_lhs(p, &lhs, CMD_unlet, FALSE, 0, cctx);
+	ret = compile_lhs(p, &lhs, CMD_unlet, FALSE, FALSE, 0, cctx);
 
 	// Use the info in "lhs" to unlet the item at the index in the
 	// list or dict.
@@ -2125,7 +2125,7 @@ compile_redir(char_u *line, exarg_T *eap, cctx_T *cctx)
 	    generate_instr_type(cctx, ISN_REDIREND, &t_string);
 
 	    if (lhs->lhs_append)
-		generate_instr_drop(cctx, ISN_CONCAT, 1);
+		generate_CONCAT(cctx, 2);
 
 	    if (lhs->lhs_has_index)
 	    {
@@ -2160,7 +2160,7 @@ compile_redir(char_u *line, exarg_T *eap, cctx_T *cctx)
 	arg = skipwhite(arg);
 
 	if (compile_assign_lhs(arg, lhs, CMD_redir,
-						FALSE, FALSE, 1, cctx) == FAIL)
+					 FALSE, FALSE, FALSE, 1, cctx) == FAIL)
 	    return NULL;
 	if (need_type(&t_string, lhs->lhs_member_type,
 					    -1, 0, cctx, FALSE, FALSE) == FAIL)

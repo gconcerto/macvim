@@ -232,6 +232,8 @@ typedef struct
 #define w_p_list w_onebuf_opt.wo_list	// 'list'
     char_u	*wo_lcs;
 #define w_p_lcs w_onebuf_opt.wo_lcs	// 'listchars'
+    char_u	*wo_fcs;
+#define w_p_fcs w_onebuf_opt.wo_fcs	// 'fillchars'
     int		wo_nu;
 #define w_p_nu w_onebuf_opt.wo_nu	// 'number'
     int		wo_rnu;
@@ -343,6 +345,7 @@ struct wininfo_S
     int		wi_fold_manual;	// copy of w_fold_manual
     garray_T	wi_folds;	// clone of w_folds
 #endif
+    int		wi_changelistidx; // copy of w_changelistidx
 };
 
 /*
@@ -661,7 +664,8 @@ typedef struct
     regmatch_T	cmod_filter_regmatch;	// set by :filter /pat/
     int		cmod_filter_force;	// set for :filter!
 
-    int		cmod_verbose;		// non-zero to set 'verbose'
+    int		cmod_verbose;		// 0 if not set, > 0 to set 'verbose'
+					// to cmod_verbose - 1
 
     // values for undo_cmdmod()
     char_u	*cmod_save_ei;		// saved value of 'eventignore'
@@ -754,10 +758,11 @@ typedef struct memline
     int		ml_stack_top;	// current top of ml_stack
     int		ml_stack_size;	// total number of entries in ml_stack
 
-#define ML_EMPTY	1	// empty buffer
-#define ML_LINE_DIRTY	2	// cached line was changed and allocated
-#define ML_LOCKED_DIRTY	4	// ml_locked was changed
-#define ML_LOCKED_POS	8	// ml_locked needs positive block number
+#define ML_EMPTY	0x01	// empty buffer
+#define ML_LINE_DIRTY	0x02	// cached line was changed and allocated
+#define ML_LOCKED_DIRTY	0x04	// ml_locked was changed
+#define ML_LOCKED_POS	0x08	// ml_locked needs positive block number
+#define ML_ALLOCATED	0x10	// ml_line_ptr is an allocated copy
     int		ml_flags;
 
     colnr_T	ml_line_len;	// length of the cached line, including NUL
@@ -1648,7 +1653,7 @@ typedef struct
 # if defined(FEAT_LUA)
     cfunc_T     uf_cb;		// callback function for cfunc
     cfunc_free_T uf_cb_free;    // callback function to free cfunc
-    void        *uf_cb_state;   // state of uf_cb
+    void	*uf_cb_state;   // state of uf_cb
 # endif
 
     garray_T	uf_lines;	// function lines
@@ -1807,6 +1812,10 @@ struct sallvar_S {
 #define HIKEY2SAV(p)  ((sallvar_T *)(p - offsetof(sallvar_T, sav_key)))
 #define HI2SAV(hi)     HIKEY2SAV((hi)->hi_key)
 
+#define SVFLAG_TYPE_ALLOCATED	1  // call free_type() for "sv_type"
+#define SVFLAG_EXPORTED		2  // "export let var = val"
+#define SVFLAG_ASSIGNED		4  // assigned a value
+
 /*
  * Entry for "sn_var_vals".  Used for script-local variables.
  */
@@ -1814,9 +1823,8 @@ struct svar_S {
     char_u	*sv_name;	// points into "sn_all_vars" di_key
     typval_T	*sv_tv;		// points into "sn_vars" or "sn_all_vars" di_tv
     type_T	*sv_type;
-    int		sv_type_allocated;  // call free_type() for sv_type
+    int		sv_flags;	// SVFLAG_ values above
     int		sv_const;	// 0, ASSIGN_CONST or ASSIGN_FINAL
-    int		sv_export;	// "export let var = val"
 };
 
 typedef struct {
@@ -2068,22 +2076,22 @@ struct partial_S
     dict_T	*pt_dict;	// dict for "self"
 };
 
-typedef struct AutoPatCmd_S AutoPatCmd;
+typedef struct AutoPatCmd_S AutoPatCmd_T;
 
 /*
  * Entry in the execution stack "exestack".
  */
 typedef enum {
     ETYPE_TOP,		    // toplevel
-    ETYPE_SCRIPT,           // sourcing script, use es_info.sctx
-    ETYPE_UFUNC,            // user function, use es_info.ufunc
-    ETYPE_AUCMD,            // autocomand, use es_info.aucmd
-    ETYPE_MODELINE,         // modeline, use es_info.sctx
-    ETYPE_EXCEPT,           // exception, use es_info.exception
-    ETYPE_ARGS,             // command line argument
-    ETYPE_ENV,              // environment variable
-    ETYPE_INTERNAL,         // internal operation
-    ETYPE_SPELL,            // loading spell file
+    ETYPE_SCRIPT,	    // sourcing script, use es_info.sctx
+    ETYPE_UFUNC,	    // user function, use es_info.ufunc
+    ETYPE_AUCMD,	    // autocomand, use es_info.aucmd
+    ETYPE_MODELINE,	    // modeline, use es_info.sctx
+    ETYPE_EXCEPT,	    // exception, use es_info.exception
+    ETYPE_ARGS,		    // command line argument
+    ETYPE_ENV,		    // environment variable
+    ETYPE_INTERNAL,	    // internal operation
+    ETYPE_SPELL,	    // loading spell file
 } etype_T;
 
 typedef struct {
@@ -2095,7 +2103,7 @@ typedef struct {
 #if defined(FEAT_EVAL)
 	ufunc_T *ufunc;     // function info
 #endif
-	AutoPatCmd *aucmd;  // autocommand info
+	AutoPatCmd_T *aucmd;  // autocommand info
 	except_T   *except; // exception info
     } es_info;
 #if defined(FEAT_EVAL)
@@ -2193,11 +2201,11 @@ struct cbq_S
 // mode for a channel
 typedef enum
 {
-    MODE_NL = 0,
-    MODE_RAW,
-    MODE_JSON,
-    MODE_JS,
-    MODE_LSP			// Language Server Protocol (http + json)
+    CH_MODE_NL = 0,
+    CH_MODE_RAW,
+    CH_MODE_JSON,
+    CH_MODE_JS,
+    CH_MODE_LSP		// Language Server Protocol (http + json)
 } ch_mode_T;
 
 typedef enum {
@@ -2877,14 +2885,11 @@ struct file_buffer
     int		b_has_qf_entry;
 #endif
     int		b_p_bl;		// 'buflisted'
-#ifdef FEAT_CINDENT
     int		b_p_cin;	// 'cindent'
     char_u	*b_p_cino;	// 'cinoptions'
     char_u	*b_p_cink;	// 'cinkeys'
-#endif
-#if defined(FEAT_CINDENT) || defined(FEAT_SMARTINDENT)
+    char_u	*b_p_cinsd;	// 'cinscopedecls'
     char_u	*b_p_cinw;	// 'cinwords'
-#endif
     char_u	*b_p_com;	// 'comments'
 #ifdef FEAT_FOLDING
     char_u	*b_p_cms;	// 'commentstring'
@@ -2923,7 +2928,7 @@ struct file_buffer
     long_u	b_p_inex_flags;	// flags for 'includeexpr'
 # endif
 #endif
-#if defined(FEAT_CINDENT) && defined(FEAT_EVAL)
+#if defined(FEAT_EVAL)
     char_u	*b_p_inde;	// 'indentexpr'
     long_u	b_p_inde_flags;	// flags for 'indentexpr'
     char_u	*b_p_indk;	// 'indentkeys'
@@ -2937,9 +2942,7 @@ struct file_buffer
     char_u	*b_p_key;	// 'key'
 #endif
     char_u	*b_p_kp;	// 'keywordprg'
-#ifdef FEAT_LISP
     int		b_p_lisp;	// 'lisp'
-#endif
     char_u	*b_p_menc;	// 'makeencoding'
     char_u	*b_p_mps;	// 'matchpairs'
     int		b_p_ml;		// 'modeline'
@@ -2953,9 +2956,7 @@ struct file_buffer
     int		b_p_ro;		// 'readonly'
     long	b_p_sw;		// 'shiftwidth'
     int		b_p_sn;		// 'shortname'
-#ifdef FEAT_SMARTINDENT
     int		b_p_si;		// 'smartindent'
-#endif
     long	b_p_sts;	// 'softtabstop'
     long	b_p_sts_nopaste; // b_p_sts saved for paste mode
 #ifdef FEAT_SEARCHPATH
@@ -3012,9 +3013,7 @@ struct file_buffer
 #ifdef FEAT_GUI_MACVIM
     int		b_p_mmta;	/* 'macmeta' local value */
 #endif
-#ifdef FEAT_LISP
     char_u	*b_p_lw;	// 'lispwords' local value
-#endif
 #ifdef FEAT_TERMINAL
     long	b_p_twsl;	// 'termwinscroll'
 #endif
@@ -3023,7 +3022,6 @@ struct file_buffer
      * end of buffer options
      */
 
-#ifdef FEAT_CINDENT
     // values set from b_p_cino
     int		b_ind_level;
     int		b_ind_open_imag;
@@ -3062,7 +3060,6 @@ struct file_buffer
     int		b_ind_if_for_while;
     int		b_ind_cpp_extern_c;
     int		b_ind_pragma;
-#endif
 
     linenr_T	b_no_eol_lnum;	// non-zero lnum when last line of next binary
 				// write should not have an end-of-line
@@ -3221,7 +3218,7 @@ struct diffblock_S
 #endif
 
 #define SNAP_HELP_IDX	0
-#define SNAP_AUCMD_IDX 1
+#define SNAP_AUCMD_IDX	1
 #define SNAP_COUNT	2
 
 /*
@@ -3318,7 +3315,8 @@ struct frame_S
 				// for first
     // fr_child and fr_win are mutually exclusive
     frame_T	*fr_child;	// first contained frame
-    win_T	*fr_win;	// window that fills this frame
+    win_T	*fr_win;	// window that fills this frame; for a snapshot
+				// set to the current window
 };
 
 #define FR_LEAF	0	// frame is a leaf
@@ -3342,11 +3340,10 @@ typedef struct
     linenr_T	first_lnum; // first lnum to search for multi-line pat
     colnr_T	startcol;   // in win_line() points to char where HL starts
     colnr_T	endcol;	    // in win_line() points to char where HL ends
-    int		is_addpos;  // position specified directly by
+    char	is_addpos;  // position specified directly by
 			    // matchaddpos(). TRUE/FALSE
-#ifdef FEAT_RELTIME
-    proftime_T	tm;	    // for a time limit
-#endif
+    char	has_cursor; // TRUE if the cursor is inside the match, used for
+			    // CurSearch
 } match_T;
 
 // number of positions supported by matchaddpos()
@@ -3429,10 +3426,27 @@ typedef struct
     int		trail;
     int		lead;
     int		*multispace;
+    int		*leadmultispace;
 #ifdef FEAT_CONCEAL
     int		conceal;
 #endif
 } lcs_chars_T;
+
+/*
+ * Characters from the 'fillchars' option
+ */
+typedef struct
+{
+    int	stl;
+    int	stlnc;
+    int	vert;
+    int	fold;
+    int	foldopen;
+    int	foldclosed;
+    int	foldsep;
+    int	diff;
+    int	eob;
+} fill_chars_T;
 
 /*
  * Structure which contains all information that belongs to a window
@@ -3486,6 +3500,7 @@ struct window_S
 					 // redrawn
 
     lcs_chars_T	w_lcs_chars;	    // 'listchars' characters
+    fill_chars_T w_fill_chars;	    // 'fillchars' characters
 
     /*
      * "w_topline", "w_leftcol" and "w_skipcol" specify the offsets for
@@ -3517,6 +3532,12 @@ struct window_S
     int		w_filler_rows;	    // number of filler rows at the end of the
 				    // window
 #endif
+
+    // four fields that are only used when there is a WinScrolled autocommand
+    linenr_T	w_last_topline;	    // last known value for w_topline
+    colnr_T	w_last_leftcol;	    // last known value for w_leftcol
+    int		w_last_width;	    // last known value for w_width
+    int		w_last_height;	    // last known value for w_height
 
     /*
      * Layout of the window in the screen.
@@ -3740,6 +3761,7 @@ struct window_S
     int		w_briopt_shift;	    // additional shift for breakindent
     int		w_briopt_sbr;	    // sbr in 'briopt'
     int		w_briopt_list;      // additional indent for lists
+    int		w_briopt_vcol;	    // indent for specific column
 #endif
 
     long	w_scbind_pos;
@@ -4015,9 +4037,6 @@ struct VimMenu
     char	**xpm;		    // pixmap data
     char	*xpm_fname;	    // file with pixmap data
 #endif
-#ifdef FEAT_GUI_ATHENA
-    Pixmap	image;		    // Toolbar image
-#endif
 #ifdef FEAT_BEVAL_TIP
     BalloonEval *tip;		    // tooltip for this menu item
 #endif
@@ -4170,6 +4189,8 @@ typedef enum
     EXPR_MULT,		// *
     EXPR_DIV,		// /
     EXPR_REM,		// %
+    EXPR_LSHIFT,	// <<
+    EXPR_RSHIFT,	// >>
     // used with ISN_ADDLIST
     EXPR_COPY,		// create new list
     EXPR_APPEND,	// append to first list
@@ -4225,6 +4246,9 @@ typedef struct
 
     int		want_full_screen;
     int		not_a_term;		// no warning for missing term?
+#ifdef FEAT_GUI
+    char_u	*gui_dialog_file;	// file to write dialog text in
+#endif
     int		tty_fail;		// exit if not a tty
     char_u	*term;			// specified terminal name
 #ifdef FEAT_CRYPT
@@ -4320,6 +4344,7 @@ typedef struct {
     int		save_finish_op;
     int		save_opcount;
     int		save_reg_executing;
+    int		save_pending_end_reg_executing;
     int		save_script_version;
     tasave_T	tabuf;
 } save_state_T;
@@ -4434,7 +4459,7 @@ typedef struct
 {
     linenr_T	sa_stop_lnum;	// stop after this line number when != 0
 #ifdef FEAT_RELTIME
-    proftime_T	*sa_tm;		// timeout limit or NULL
+    long	sa_tm;		// timeout limit or zero
     int		sa_timed_out;	// set when timed out
 #endif
     int		sa_wrapped;	// search wrapped around

@@ -592,6 +592,36 @@ func Test_cursorline_with_visualmode()
   call delete('Xtest_cursorline_with_visualmode')
 endfunc
 
+func Test_cursorcolumn_insert_on_tab()
+  CheckScreendump
+
+  let lines =<< trim END
+    call setline(1, ['123456789', "a\tb"])
+    set cursorcolumn
+    call cursor(2, 2)
+  END
+  call writefile(lines, 'Xcuc_insert_on_tab')
+
+  let buf = RunVimInTerminal('-S Xcuc_insert_on_tab', #{rows: 8})
+  call TermWait(buf)
+  call VerifyScreenDump(buf, 'Test_cursorcolumn_insert_on_tab_1', {})
+
+  call term_sendkeys(buf, 'i')
+  call TermWait(buf)
+  call VerifyScreenDump(buf, 'Test_cursorcolumn_insert_on_tab_2', {})
+
+  call term_sendkeys(buf, "\<C-O>")
+  call TermWait(buf)
+  call VerifyScreenDump(buf, 'Test_cursorcolumn_insert_on_tab_3', {})
+
+  call term_sendkeys(buf, 'i')
+  call TermWait(buf)
+  call VerifyScreenDump(buf, 'Test_cursorcolumn_insert_on_tab_2', {})
+
+  call StopVimInTerminal(buf)
+  call delete('Xcuc_insert_on_tab')
+endfunc
+
 func Test_cursorcolumn_callback()
   CheckScreendump
   CheckFeature timers
@@ -737,7 +767,7 @@ func Test_1_highlight_Normalgroup_exists()
   elseif has('gui_gtk2') || has('gui_gnome') || has('gui_gtk3')
     " expect is DEFAULT_FONT of gui_gtk_x11.c
     call assert_match('hi Normal\s*font=Monospace 10', hlNormal)
-  elseif has('gui_motif') || has('gui_athena')
+  elseif has('gui_motif')
     " expect is DEFAULT_FONT of gui_x11.c
     call assert_match('hi Normal\s*font=7x13', hlNormal)
   elseif has('win32')
@@ -858,8 +888,8 @@ endfunc
 
 " Test for setting various 'term' attributes
 func Test_highlight_term_attr()
-  hi HlGrp3 term=bold,underline,undercurl,strikethrough,reverse,italic,standout
-  call assert_equal('hi HlGrp3          term=bold,standout,underline,undercurl,italic,reverse,strikethrough', HighlightArgs('HlGrp3'))
+  hi HlGrp3 term=bold,underline,undercurl,underdouble,underdotted,underdashed,strikethrough,reverse,italic,standout
+  call assert_equal('hi HlGrp3          term=bold,standout,underline,undercurl,underdouble,underdotted,underdashed,italic,reverse,strikethrough', HighlightArgs('HlGrp3'))
   hi HlGrp3 term=NONE
   call assert_equal('hi HlGrp3          cleared', HighlightArgs('HlGrp3'))
   hi clear
@@ -1144,12 +1174,14 @@ func Test_hlset()
   " Test for setting all the 'term', 'cterm' and 'gui' attributes of a
   " highlight group
   let lines =<< trim END
-    VAR attr = {'bold': v:true, 'underline': v:true, 'undercurl': v:true,
+    VAR attr = {'bold': v:true, 'underline': v:true,
+                \ 'undercurl': v:true, 'underdouble': v:true,
+                \ 'underdotted': v:true, 'underdashed': v:true,
                 \ 'strikethrough': v:true, 'reverse': v:true, 'italic': v:true,
                 \ 'standout': v:true, 'nocombine': v:true}
     call hlset([{'name': 'myhlg2', 'term': attr, 'cterm': attr, 'gui': attr}])
     VAR id2 = hlID('myhlg2')
-    VAR expected = "myhlg2 xxx term=bold,standout,underline,undercurl,italic,reverse,nocombine,strikethrough cterm=bold,standout,underline,undercurl,italic,reverse,nocombine,strikethrough gui=bold,standout,underline,undercurl,italic,reverse,nocombine,strikethrough"
+    VAR expected = "myhlg2 xxx term=bold,standout,underline,undercurl,underdouble,underdotted,underdashed,italic,reverse,nocombine,strikethrough cterm=bold,standout,underline,undercurl,underdouble,underdotted,underdashed,italic,reverse,nocombine,strikethrough gui=bold,standout,underline,undercurl,underdouble,underdotted,underdashed,italic,reverse,nocombine,strikethrough"
     VAR output = execute('highlight myhlg2')
     LET output = output->split("\n")->join()->substitute('\s\+', ' ', 'g')
     call assert_equal(expected, output)

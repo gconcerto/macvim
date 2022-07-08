@@ -2511,7 +2511,7 @@ do_ecmd(
 #endif
     int		readfile_flags = 0;
     int		did_inc_redrawing_disabled = FALSE;
-    long        *so_ptr = curwin->w_p_so >= 0 ? &curwin->w_p_so : &p_so;
+    long	*so_ptr = curwin->w_p_so >= 0 ? &curwin->w_p_so : &p_so;
 
 #ifdef FEAT_PROP_POPUP
     if (ERROR_IF_TERM_POPUP_WINDOW)
@@ -3182,7 +3182,7 @@ do_ecmd(
 	redraw_curbuf_later(NOT_VALID);	// redraw this buffer later
     }
 
-    if (p_im)
+    if (p_im && (State & MODE_INSERT) == 0)
 	need_start_insertmode = TRUE;
 
 #ifdef FEAT_AUTOCHDIR
@@ -3271,9 +3271,9 @@ ex_append(exarg_T *eap)
     if (empty && lnum == 1)
 	lnum = 0;
 
-    State = INSERT;		    // behave like in Insert mode
+    State = MODE_INSERT;		    // behave like in Insert mode
     if (curbuf->b_p_iminsert == B_IMODE_LMAP)
-	State |= LANGMAP;
+	State |= MODE_LANGMAP;
 
     for (;;)
     {
@@ -3308,9 +3308,9 @@ ex_append(exarg_T *eap)
 	{
 	    int save_State = State;
 
-	    // Set State to avoid the cursor shape to be set to INSERT mode
-	    // when getline() returns.
-	    State = CMDLINE;
+	    // Set State to avoid the cursor shape to be set to MODE_INSERT
+	    // state when getline() returns.
+	    State = MODE_CMDLINE;
 	    theline = eap->getline(
 #ifdef FEAT_EVAL
 		    eap->cstack->cs_looplevel > 0 ? -1 :
@@ -3366,7 +3366,7 @@ ex_append(exarg_T *eap)
 	    empty = FALSE;
 	}
     }
-    State = NORMAL;
+    State = MODE_NORMAL;
 
     if (eap->forceit)
 	curbuf->b_p_ai = !curbuf->b_p_ai;
@@ -3701,6 +3701,7 @@ ex_substitute(exarg_T *eap)
     int		start_nsubs;
 #ifdef FEAT_EVAL
     int		save_ma = 0;
+    int		save_sandbox = 0;
 #endif
 
     cmd = eap->arg;
@@ -4006,7 +4007,7 @@ ex_substitute(exarg_T *eap)
 		); ++lnum)
     {
 	nmatch = vim_regexec_multi(&regmatch, curwin, curbuf, lnum,
-						       (colnr_T)0, NULL, NULL);
+						       (colnr_T)0, NULL);
 	if (nmatch)
 	{
 	    colnr_T	copycol;
@@ -4183,10 +4184,10 @@ ex_substitute(exarg_T *eap)
 		{
 		    int typed = 0;
 
-		    // change State to CONFIRM, so that the mouse works
+		    // change State to MODE_CONFIRM, so that the mouse works
 		    // properly
 		    save_State = State;
-		    State = CONFIRM;
+		    State = MODE_CONFIRM;
 		    setmouse();		// disable mouse in xterm
 		    curwin->w_cursor.col = regmatch.startpos[0].col;
 		    if (curwin->w_p_crb)
@@ -4233,6 +4234,11 @@ ex_substitute(exarg_T *eap)
 			    {
 				typed = *resp;
 				vim_free(resp);
+				// When ":normal" runs out of characters we get
+				// an empty line.  Use "q" to get out of the
+				// loop.
+				if (ex_normal_busy && typed == NUL)
+				    typed = 'q';
 			    }
 			}
 			else
@@ -4398,6 +4404,7 @@ ex_substitute(exarg_T *eap)
 		 */
 #ifdef FEAT_EVAL
 		save_ma = curbuf->b_p_ma;
+		save_sandbox = sandbox;
 		if (subflags.do_count)
 		{
 		    // prevent accidentally changing the buffer by a function
@@ -4407,21 +4414,28 @@ ex_substitute(exarg_T *eap)
 		// Save flags for recursion.  They can change for e.g.
 		// :s/^/\=execute("s#^##gn")
 		subflags_save = subflags;
+
+		// Disallow changing text or switching window in an expression.
+		++textlock;
 #endif
-		// get length of substitution part
+		// Get length of substitution part, including the NUL.
+		// When it fails sublen is zero.
 		sublen = vim_regsub_multi(&regmatch,
 				    sub_firstlnum - regmatch.startpos[0].lnum,
-			       sub, sub_firstline, FALSE, magic_isset(), TRUE);
+			       sub, sub_firstline, 0,
+			       REGSUB_BACKSLASH
+				    | (magic_isset() ? REGSUB_MAGIC : 0));
 #ifdef FEAT_EVAL
+		--textlock;
+
 		// If getting the substitute string caused an error, don't do
 		// the replacement.
 		// Don't keep flags set by a recursive call.
 		subflags = subflags_save;
-		if (aborting() || subflags.do_count)
+		if (sublen == 0 || aborting() || subflags.do_count)
 		{
 		    curbuf->b_p_ma = save_ma;
-		    if (sandbox > 0)
-			sandbox--;
+		    sandbox = save_sandbox;
 		    goto skip;
 		}
 #endif
@@ -4513,9 +4527,17 @@ ex_substitute(exarg_T *eap)
 		mch_memmove(new_end, sub_firstline + copycol, (size_t)copy_len);
 		new_end += copy_len;
 
+#ifdef FEAT_EVAL
+		++textlock;
+#endif
 		(void)vim_regsub_multi(&regmatch,
 				    sub_firstlnum - regmatch.startpos[0].lnum,
-				      sub, new_end, TRUE, magic_isset(), TRUE);
+				      sub, new_end, sublen,
+				      REGSUB_COPY | REGSUB_BACKSLASH
+					 | (magic_isset() ? REGSUB_MAGIC : 0));
+#ifdef FEAT_EVAL
+		--textlock;
+#endif
 		sub_nsubs++;
 		did_sub = TRUE;
 
@@ -4643,7 +4665,7 @@ skip:
 			|| nmatch_tl > 0
 			|| (nmatch = vim_regexec_multi(&regmatch, curwin,
 							curbuf, sub_firstlnum,
-						    matchcol, NULL, NULL)) == 0
+						    matchcol, NULL)) == 0
 			|| regmatch.startpos[0].lnum > 0)
 		{
 		    if (new_start != NULL)
@@ -4708,7 +4730,7 @@ skip:
 		    }
 		    if (nmatch == -1 && !lastone)
 			nmatch = vim_regexec_multi(&regmatch, curwin, curbuf,
-					  sub_firstlnum, matchcol, NULL, NULL);
+					  sub_firstlnum, matchcol, NULL);
 
 		    /*
 		     * 5. break if there isn't another match in this line
@@ -4955,8 +4977,7 @@ ex_global(exarg_T *eap)
     else
     {
 	delim = *cmd;		// get the delimiter
-	if (delim)
-	    ++cmd;		// skip delimiter if there is one
+	++cmd;			// skip delimiter if there is one
 	pat = cmd;		// remember start of pattern
 	cmd = skip_regexp_ex(cmd, delim, magic_isset(), &eap->arg, NULL, NULL);
 	if (cmd[0] == delim)		    // end delimiter found
@@ -4973,7 +4994,7 @@ ex_global(exarg_T *eap)
     {
 	lnum = curwin->w_cursor.lnum;
 	match = vim_regexec_multi(&regmatch, curwin, curbuf, lnum,
-						       (colnr_T)0, NULL, NULL);
+						       (colnr_T)0, NULL);
 	if ((type == 'g' && match) || (type == 'v' && !match))
 	    global_exe_one(cmd, lnum);
     }
@@ -4986,7 +5007,7 @@ ex_global(exarg_T *eap)
 	{
 	    // a match on this line?
 	    match = vim_regexec_multi(&regmatch, curwin, curbuf, lnum,
-						       (colnr_T)0, NULL, NULL);
+						       (colnr_T)0, NULL);
 	    if (regmatch.regprog == NULL)
 		break;  // re-compiling regprog failed
 	    if ((type == 'g' && match) || (type == 'v' && !match))

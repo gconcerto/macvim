@@ -13,6 +13,25 @@
 
 #include "vim.h"
 
+/*
+ * Horiziontal and vertical steps used when scrolling.
+ * When negative scroll by a whole page.
+ */
+static long mouse_hor_step = 6;
+static long mouse_vert_step = 3;
+
+    void
+mouse_set_vert_scroll_step(long step)
+{
+    mouse_vert_step = step;
+}
+
+    void
+mouse_set_hor_scroll_step(long step)
+{
+    mouse_hor_step = step;
+}
+
 #ifdef CHECK_DOUBLE_CLICK
 /*
  * Return the duration from t1 to t2 in milliseconds.
@@ -115,7 +134,7 @@ find_end_of_word(pos_T *pos)
 }
 
 #if defined(FEAT_GUI_MOTIF) || defined(FEAT_GUI_GTK) \
-	    || defined(FEAT_GUI_ATHENA) || defined(FEAT_GUI_MSWIN) \
+	    || defined(FEAT_GUI_MSWIN) \
 	    || defined(FEAT_GUI_MACVIM) \
 	    || defined(FEAT_GUI_PHOTON) \
 	    || defined(FEAT_TERM_POPUP_MENU)
@@ -251,7 +270,7 @@ do_mouse(
 		if (!mouse_has(MOUSE_VISUAL))
 		    return FALSE;
 	    }
-	    else if (State == NORMAL && !mouse_has(MOUSE_NORMAL))
+	    else if (State == MODE_NORMAL && !mouse_has(MOUSE_NORMAL))
 		return FALSE;
 	}
 
@@ -262,7 +281,10 @@ do_mouse(
 	{
 	    // If the next character is the same mouse event then use that
 	    // one. Speeds up dragging the status line.
-	    if (vpeekc() != NUL)
+	    // Note: Since characters added to the stuff buffer in the code
+	    // below need to come before the next character, do not do this
+	    // when the current character was stuffed.
+	    if (!KeyStuffed && vpeekc() != NUL)
 	    {
 		int nc;
 		int save_mouse_row = mouse_row;
@@ -334,7 +356,7 @@ do_mouse(
     // CTRL right mouse button does CTRL-T
     if (is_click && (mod_mask & MOD_MASK_CTRL) && which_button == MOUSE_RIGHT)
     {
-	if (State & INSERT)
+	if (State & MODE_INSERT)
 	    stuffcharReadbuff(Ctrl_O);
 	if (count > 1)
 	    stuffnumReadbuff(count);
@@ -378,7 +400,7 @@ do_mouse(
     // Middle mouse button does a 'put' of the selected text
     if (which_button == MOUSE_MIDDLE)
     {
-	if (State == NORMAL)
+	if (State == MODE_NORMAL)
 	{
 	    // If an operator was pending, we don't know what the user wanted
 	    // to do. Go back to normal mode: Clear the operator and beep().
@@ -409,7 +431,7 @@ do_mouse(
 	    // The rest is below jump_to_mouse()
 	}
 
-	else if ((State & INSERT) == 0)
+	else if ((State & MODE_INSERT) == 0)
 	    return FALSE;
 
 	// Middle click in insert mode doesn't move the mouse, just insert the
@@ -417,7 +439,7 @@ do_mouse(
 	// with do_put().
 	// Also paste at the cursor if the current mode isn't in 'mouse' (only
 	// happens for the GUI).
-	if ((State & INSERT) || !mouse_has(MOUSE_NORMAL))
+	if ((State & MODE_INSERT) || !mouse_has(MOUSE_NORMAL))
 	{
 	    if (regname == '.')
 		insert_reg(regname, TRUE);
@@ -540,7 +562,7 @@ do_mouse(
 		    // menu on the button down event.
 		    return FALSE;
 #  endif
-#  if defined(FEAT_GUI_ATHENA) || defined(FEAT_GUI_MSWIN) || defined(FEAT_GUI_HAIKU)
+#  if defined(FEAT_GUI_MSWIN) || defined(FEAT_GUI_HAIKU)
 		if (is_click || is_drag)
 		    // Ignore right button down and drag mouse events.  Windows
 		    // only shows the popup menu on the button up event.
@@ -624,7 +646,7 @@ do_mouse(
 	}
     }
 
-    if ((State & (NORMAL | INSERT))
+    if ((State & (MODE_NORMAL | MODE_INSERT))
 			    && !(mod_mask & (MOD_MASK_SHIFT | MOD_MASK_CTRL)))
     {
 	if (which_button == MOUSE_LEFT)
@@ -817,7 +839,7 @@ do_mouse(
 	}
     }
     // If Visual mode started in insert mode, execute "CTRL-O"
-    else if ((State & INSERT) && VIsual_active)
+    else if ((State & MODE_INSERT) && VIsual_active)
 	stuffcharReadbuff(Ctrl_O);
 
     // Middle mouse click: Put text before cursor.
@@ -874,7 +896,7 @@ do_mouse(
     else if ((mod_mask & MOD_MASK_CTRL) || (curbuf->b_help
 		     && (mod_mask & MOD_MASK_MULTI_CLICK) == MOD_MASK_2CLICK))
     {
-	if (State & INSERT)
+	if (State & MODE_INSERT)
 	    stuffcharReadbuff(Ctrl_O);
 	stuffcharReadbuff(Ctrl_RSB);
 	got_click = FALSE;		// ignore drag&release now
@@ -884,7 +906,7 @@ do_mouse(
     // the mouse pointer
     else if ((mod_mask & MOD_MASK_SHIFT))
     {
-	if ((State & INSERT) || (VIsual_active && VIsual_select))
+	if ((State & MODE_INSERT) || (VIsual_active && VIsual_select))
 	    stuffcharReadbuff(Ctrl_O);
 	if (which_button == MOUSE_LEFT)
 	    stuffcharReadbuff('*');
@@ -913,7 +935,8 @@ do_mouse(
 	}
 #endif
     }
-    else if ((mod_mask & MOD_MASK_MULTI_CLICK) && (State & (NORMAL | INSERT))
+    else if ((mod_mask & MOD_MASK_MULTI_CLICK)
+				       && (State & (MODE_NORMAL | MODE_INSERT))
 	     && mouse_has(MOUSE_VISUAL))
     {
 	if (is_click || !VIsual_active)
@@ -1061,9 +1084,7 @@ ins_mouse(int c)
 	    curwin = new_curwin;
 	    curbuf = curwin->w_buffer;
 	}
-# ifdef FEAT_CINDENT
 	set_can_cindent(TRUE);
-# endif
     }
 
     // redraw status lines (in case another window became active)
@@ -1076,9 +1097,6 @@ ins_mousescroll(int dir)
     pos_T	tpos;
     win_T	*old_curwin = curwin, *wp;
     int		did_scroll = FALSE;
-# ifdef FEAT_GUI_SCROLL_WHEEL_FORCE
-    int		scroll_wheel_force = 0;
-# endif
 
     tpos = curwin->w_cursor;
 
@@ -1102,26 +1120,29 @@ ins_mousescroll(int dir)
     // Don't scroll the window in which completion is being done.
     if (!pum_visible() || curwin != old_curwin)
     {
+	long step;
 # ifdef FEAT_GUI_SCROLL_WHEEL_FORCE
+	long scroll_wheel_force = 0;
+
 	if (gui.in_use && gui.scroll_wheel_force >= 1)
 	{
 	    scroll_wheel_force = gui.scroll_wheel_force;
-	    if (scroll_wheel_force > 1000) scroll_wheel_force = 1000;
+	    if (scroll_wheel_force > 1000) 
+		scroll_wheel_force = 1000;
 	}
-	else
-	    scroll_wheel_force = dir >= 0 ? 3 : 6;
 # endif
 	if (dir == MSCR_DOWN || dir == MSCR_UP)
 	{
-	    if (mod_mask & (MOD_MASK_SHIFT | MOD_MASK_CTRL))
-		scroll_redraw(dir,
-			(long)(curwin->w_botline - curwin->w_topline));
-	    else
+	    if (mouse_vert_step < 0
+		    || mod_mask & (MOD_MASK_SHIFT | MOD_MASK_CTRL))
+		step = (long)(curwin->w_botline - curwin->w_topline);
 # ifdef FEAT_GUI_SCROLL_WHEEL_FORCE
-		scroll_redraw(dir, scroll_wheel_force);
-# else
-		scroll_redraw(dir, 3L);
+	    else if (scroll_wheel_force > 0)
+		step = scroll_wheel_force;
 # endif
+	    else
+		step = mouse_vert_step;
+	    scroll_redraw(dir, step);
 # ifdef FEAT_PROP_POPUP
 	if (WIN_IS_POPUP(curwin))
 	    popup_set_firstline(curwin);
@@ -1130,13 +1151,17 @@ ins_mousescroll(int dir)
 #ifdef FEAT_GUI
 	else
 	{
-	    int val, step = 6;
+	    int val;
 
-#  ifdef FEAT_GUI_SCROLL_WHEEL_FORCE
-	    step = scroll_wheel_force;
-#  endif
-	    if (mod_mask & (MOD_MASK_SHIFT | MOD_MASK_CTRL))
+	    if (mouse_hor_step < 0
+		    || mod_mask & (MOD_MASK_SHIFT | MOD_MASK_CTRL))
 		step = curwin->w_width;
+# ifdef FEAT_GUI_SCROLL_WHEEL_FORCE
+	    else if (scroll_wheel_force > 0)
+		step = scroll_wheel_force;
+# endif
+	    else
+		step = mouse_hor_step;
 	    val = curwin->w_leftcol + (dir == MSCR_RIGHT ? -step : step);
 	    if (val < 0)
 		val = 0;
@@ -1144,6 +1169,7 @@ ins_mousescroll(int dir)
 	}
 #endif
 	did_scroll = TRUE;
+	may_trigger_winscrolled();
     }
 
     curwin->w_redr_status = TRUE;
@@ -1163,9 +1189,7 @@ ins_mousescroll(int dir)
     if (!EQUAL_POS(curwin->w_cursor, tpos))
     {
 	start_arrow(&tpos);
-# ifdef FEAT_CINDENT
 	set_can_cindent(TRUE);
-# endif
     }
 }
 
@@ -1432,13 +1456,14 @@ setmouse(void)
 
     if (VIsual_active)
 	checkfor = MOUSE_VISUAL;
-    else if (State == HITRETURN || State == ASKMORE || State == SETWSIZE)
+    else if (State == MODE_HITRETURN || State == MODE_ASKMORE
+						     || State == MODE_SETWSIZE)
 	checkfor = MOUSE_RETURN;
-    else if (State & INSERT)
+    else if (State & MODE_INSERT)
 	checkfor = MOUSE_INSERT;
-    else if (State & CMDLINE)
+    else if (State & MODE_CMDLINE)
 	checkfor = MOUSE_COMMAND;
-    else if (State == CONFIRM || State == EXTERNCMD)
+    else if (State == MODE_CONFIRM || State == MODE_EXTERNCMD)
 	checkfor = ' '; // don't use mouse for ":confirm" or ":!cmd"
     else
 	checkfor = MOUSE_NORMAL;    // assume normal mode
@@ -1812,7 +1837,7 @@ retnomove:
 	if (dragwin != NULL)
 	{
 	    // Drag the status line
-	    count = row - dragwin->w_winrow - dragwin->w_height + 1
+	    count = row - W_WINROW(dragwin) - dragwin->w_height + 1
 							     - on_status_line;
 	    win_drag_status_line(dragwin, count);
 	    did_drag |= count;
@@ -2011,7 +2036,7 @@ retnomove:
 	count |= CURSOR_MOVED;		// Cursor has moved
 
 # ifdef FEAT_FOLDING
-    if (mouse_char == fill_foldclosed)
+    if (mouse_char == curwin->w_fill_chars.foldclosed)
 	count |= MOUSE_FOLD_OPEN;
     else if (mouse_char != ' ')
 	count |= MOUSE_FOLD_CLOSE;
@@ -2021,18 +2046,19 @@ retnomove:
 }
 
 /*
- * Mouse scroll wheel: Default action is to scroll three lines, or one page
- * when Shift or Ctrl is used.
+ * Mouse scroll wheel: Default action is to scroll mouse_vert_step lines (or
+ * mouse_hor_step, depending on the scroll direction), or one page when Shift or
+ * Ctrl is used.
  * K_MOUSEUP (cap->arg == 1) or K_MOUSEDOWN (cap->arg == 0) or
  * K_MOUSELEFT (cap->arg == -1) or K_MOUSERIGHT (cap->arg == -2)
  */
     void
 nv_mousescroll(cmdarg_T *cap)
 {
-# ifdef FEAT_GUI_SCROLL_WHEEL_FORCE
-    int scroll_wheel_force = 0;
-# endif
     win_T *old_curwin = curwin, *wp;
+# ifdef FEAT_GUI_SCROLL_WHEEL_FORCE
+    long scroll_wheel_force = 0;
+# endif
 
     if (mouse_row >= 0 && mouse_col >= 0)
     {
@@ -2056,12 +2082,10 @@ nv_mousescroll(cmdarg_T *cap)
     if (gui.in_use && gui.scroll_wheel_force >= 1)
     {
 	scroll_wheel_force = gui.scroll_wheel_force;
-	if (scroll_wheel_force > 1000) scroll_wheel_force = 1000;
+	if (scroll_wheel_force > 1000)
+	    scroll_wheel_force = 1000;
     }
-    else
-	scroll_wheel_force = cap->arg >= 0 ? 3 : 6;
 # endif
-
     if (cap->arg == MSCR_UP || cap->arg == MSCR_DOWN)
     {
 # ifdef FEAT_TERMINAL
@@ -2071,27 +2095,25 @@ nv_mousescroll(cmdarg_T *cap)
 	    send_keys_to_term(curbuf->b_term, cap->cmdchar, mod_mask, FALSE);
 	else
 # endif
-	if (mod_mask & (MOD_MASK_SHIFT | MOD_MASK_CTRL))
+	if (mouse_vert_step < 0 || mod_mask & (MOD_MASK_SHIFT | MOD_MASK_CTRL))
 	{
 	    (void)onepage(cap->arg ? FORWARD : BACKWARD, 1L);
 	}
 	else
 	{
 	    // Don't scroll more than half the window height.
-	    if (curwin->w_height < 6)
+	    if (curwin->w_height < mouse_vert_step * 2)
 	    {
 		cap->count1 = curwin->w_height / 2;
 		if (cap->count1 == 0)
 		    cap->count1 = 1;
 	    }
-	    else
-	    {
 # ifdef FEAT_GUI_SCROLL_WHEEL_FORCE
+	    else if (scroll_wheel_force > 0)
 		cap->count1 = scroll_wheel_force;
-# else
-		cap->count1 = 3;
 # endif
-	    }
+	    else
+		cap->count1 = mouse_vert_step;
 	    cap->count0 = cap->count1;
 	    nv_scroll_line(cap);
 	}
@@ -2106,13 +2128,17 @@ nv_mousescroll(cmdarg_T *cap)
 	// Horizontal scroll - only allowed when 'wrap' is disabled
 	if (!curwin->w_p_wrap)
 	{
-	    int val, step = 6;
+	    int val, step;
 
-#  ifdef FEAT_GUI_SCROLL_WHEEL_FORCE
-	    step = scroll_wheel_force;
-#  endif
-	    if (mod_mask & (MOD_MASK_SHIFT | MOD_MASK_CTRL))
+	    if (mouse_hor_step < 0
+		    || mod_mask & (MOD_MASK_SHIFT | MOD_MASK_CTRL))
 		step = curwin->w_width;
+#  ifdef FEAT_GUI_SCROLL_WHEEL_FORCE
+	    else if (scroll_wheel_force > 0)
+		step = scroll_wheel_force;
+#  endif
+	    else
+		step = mouse_hor_step;
 	    val = curwin->w_leftcol + (cap->arg == MSCR_RIGHT ? -step : +step);
 	    if (val < 0)
 		val = 0;
@@ -2125,6 +2151,7 @@ nv_mousescroll(cmdarg_T *cap)
     if (curwin != old_curwin && curwin->w_p_cul)
 	redraw_for_cursorline(curwin);
 # endif
+    may_trigger_winscrolled();
 
     curwin->w_redr_status = TRUE;
 
@@ -2290,7 +2317,7 @@ check_termcode_mouse(
 	//	    ^----- column
 	//	 ^-------- code
 	//
-	// \033[<%d;%d;%dm        : mouse release event
+	// \033[<%d;%d;%dm	  : mouse release event
 	//	       ^-- row
 	//	    ^----- column
 	//	 ^-------- code
@@ -2571,9 +2598,9 @@ check_termcode_mouse(
 	 * Pe, the event code indicates what event caused this report
 	 *    The following event codes are defined:
 	 *    0 - request, the terminal received an explicit request for a
-	 *        locator report, but the locator is unavailable
+	 *	  locator report, but the locator is unavailable
 	 *    1 - request, the terminal received an explicit request for a
-	 *        locator report
+	 *	  locator report
 	 *    2 - left button down
 	 *    3 - left button up
 	 *    4 - middle button down
@@ -3109,7 +3136,7 @@ f_getmousepos(typval_T *argvars UNUSED, typval_T *rettv)
     linenr_T	lnum = 0;
     varnumber_T column = 0;
 
-    if (rettv_dict_alloc(rettv) != OK)
+    if (rettv_dict_alloc(rettv) == FAIL)
 	return;
     d = rettv->vval.v_dict;
 

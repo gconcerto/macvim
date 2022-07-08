@@ -100,6 +100,8 @@ typedef char * LPCSTR;
 typedef char * LPWSTR;
 typedef int ACCESS_MASK;
 typedef int BOOL;
+typedef int BOOLEAN;
+typedef int CALLBACK;
 typedef int COLORREF;
 typedef int CONSOLE_CURSOR_INFO;
 typedef int COORD;
@@ -211,7 +213,6 @@ static int g_color_index_bg = 0;
 static int g_color_index_fg = 7;
 
 # ifdef FEAT_TERMGUICOLORS
-static int default_console_color_bg = 0x000000; // black
 static int default_console_color_fg = 0xc0c0c0; // white
 # endif
 
@@ -272,11 +273,12 @@ typedef BOOL (WINAPI *PfnRtlGetVersion)(LPOSVERSIONINFOW);
     static DWORD
 get_build_number(void)
 {
-    OSVERSIONINFOW	osver = {sizeof(OSVERSIONINFOW)};
+    OSVERSIONINFOW	osver;
     HMODULE		hNtdll;
     PfnRtlGetVersion	pRtlGetVersion;
     DWORD		ver = MAKE_VER(0, 0, 0);
 
+    osver.dwOSVersionInfoSize = sizeof(OSVERSIONINFOW);
     hNtdll = GetModuleHandle("ntdll.dll");
     if (hNtdll != NULL)
     {
@@ -324,7 +326,7 @@ make_ambiwidth_event(
 read_console_input(
     HANDLE	    hInput,
     INPUT_RECORD    *lpBuffer,
-    DWORD	    nLength,
+    int		    nLength,
     LPDWORD	    lpEvents)
 {
     enum
@@ -422,7 +424,7 @@ peek_console_input(
     DWORD	    nLength UNUSED,
     LPDWORD	    lpEvents)
 {
-    return read_console_input(hInput, lpBuffer, (DWORD)-1, lpEvents);
+    return read_console_input(hInput, lpBuffer, -1, lpEvents);
 }
 
 # ifdef FEAT_CLIENTSERVER
@@ -434,7 +436,7 @@ msg_wait_for_multiple_objects(
     DWORD    dwMilliseconds,
     DWORD    dwWakeMask)
 {
-    if (read_console_input(NULL, NULL, (DWORD)-2, NULL))
+    if (read_console_input(NULL, NULL, -2, NULL))
 	return WAIT_OBJECT_0;
     return MsgWaitForMultipleObjects(nCount, pHandles, fWaitAll,
 				     dwMilliseconds, dwWakeMask);
@@ -447,7 +449,7 @@ wait_for_single_object(
     HANDLE hHandle,
     DWORD dwMilliseconds)
 {
-    if (read_console_input(NULL, NULL, (DWORD)-2, NULL))
+    if (read_console_input(NULL, NULL, -2, NULL))
 	return WAIT_OBJECT_0;
     return WaitForSingleObject(hHandle, dwMilliseconds);
 }
@@ -759,8 +761,8 @@ dyn_libintl_init(void)
     }
 
     // The bind_textdomain_codeset() function is optional.
-    dyn_libintl_bind_textdomain_codeset = (void *)GetProcAddress(hLibintlDLL,
-						   "bind_textdomain_codeset");
+    dyn_libintl_bind_textdomain_codeset = (char *(*)(const char *, const char *))
+			GetProcAddress(hLibintlDLL, "bind_textdomain_codeset");
     if (dyn_libintl_bind_textdomain_codeset == NULL)
 	dyn_libintl_bind_textdomain_codeset =
 					 null_libintl_bind_textdomain_codeset;
@@ -768,7 +770,8 @@ dyn_libintl_init(void)
     // _wputenv() function for the libintl.dll is optional.
     hmsvcrt = find_imported_module_by_funcname(hLibintlDLL, "getenv");
     if (hmsvcrt != NULL)
-	dyn_libintl_wputenv = (void *)GetProcAddress(hmsvcrt, "_wputenv");
+	dyn_libintl_wputenv = (int (*)(const wchar_t *))
+					GetProcAddress(hmsvcrt, "_wputenv");
     if (dyn_libintl_wputenv == NULL || dyn_libintl_wputenv == _wputenv)
 	dyn_libintl_wputenv = null_libintl_wputenv;
 
@@ -1201,8 +1204,8 @@ static int g_fMouseActive = FALSE;  // mouse enabled
 static int g_nMouseClick = -1;	    // mouse status
 static int g_xMouse;		    // mouse x coordinate
 static int g_yMouse;		    // mouse y coordinate
-static DWORD g_cmodein = 0;         // Original console input mode
-static DWORD g_cmodeout = 0;        // Original console output mode
+static DWORD g_cmodein = 0;	    // Original console input mode
+static DWORD g_cmodeout = 0;	    // Original console output mode
 
 /*
  * Enable or disable mouse input
@@ -1679,7 +1682,7 @@ WaitForChar(long msec, int ignore_input)
 # ifdef FEAT_MBYTE_IME
 	// May have to redraw if the cursor ends up in the wrong place.
 	// Only when not peeking.
-	if (State & CMDLINE && msg_row == Rows - 1 && msec != 0)
+	if (State == MODE_CMDLINE && msg_row == Rows - 1 && msec != 0)
 	{
 	    CONSOLE_SCREEN_BUFFER_INFO csbi;
 
@@ -1926,7 +1929,7 @@ mch_inchar(
     // to get and still room in the buffer (up to two bytes for a char and
     // three bytes for a modifier).
     while ((typeaheadlen == 0 || WaitForChar(0L, FALSE))
-		         && typeaheadlen + 5 + TYPEAHEADSPACE <= TYPEAHEADLEN)
+			  && typeaheadlen + 5 + TYPEAHEADSPACE <= TYPEAHEADLEN)
     {
 	if (typebuf_changed(tb_change_cnt))
 	{
@@ -2127,13 +2130,27 @@ theend:
     static int
 executable_file(char *name, char_u **path)
 {
-    if (mch_getperm((char_u *)name) != -1 && !mch_isdir((char_u *)name))
+    int attrs = win32_getattrs((char_u *)name);
+
+    // The file doesn't exist or is a folder.
+    if (attrs == -1 || (attrs & FILE_ATTRIBUTE_DIRECTORY))
+	return FALSE;
+    // Check if the file is an AppExecLink, a special alias used by Windows
+    // Store for its apps.
+    if (attrs & FILE_ATTRIBUTE_REPARSE_POINT)
     {
+	char_u	*res = resolve_appexeclink((char_u *)name);
+	if (res == NULL)
+	    return FALSE;
+	// The path is already absolute.
 	if (path != NULL)
-	    *path = FullName_save((char_u *)name, FALSE);
-	return TRUE;
+	    *path = res;
+	else
+	    vim_free(res);
     }
-    return FALSE;
+    else if (path != NULL)
+	*path = FullName_save((char_u *)name, FALSE);
+    return TRUE;
 }
 
 /*
@@ -2237,7 +2254,11 @@ executable_exists(char *name, char_u **path, int use_path, int use_pathext)
 		retval = FALSE;
 		goto theend;
 	    }
-	    STRCPY(pathbuf, ".;");
+
+	    if (mch_getenv("NoDefaultCurrentDirectoryInExePath") == NULL)
+		STRCPY(pathbuf, ".;");
+	    else
+		*pathbuf = NUL;
 	    STRCAT(pathbuf, p);
 	}
     }
@@ -2334,11 +2355,11 @@ theend:
  * worth allowing these to make debugging of issues easier.
  */
     static void
-bad_param_handler(const wchar_t *expression,
-    const wchar_t *function,
-    const wchar_t *file,
-    unsigned int line,
-    uintptr_t pReserved)
+bad_param_handler(const wchar_t *expression UNUSED,
+    const wchar_t *function UNUSED,
+    const wchar_t *file UNUSED,
+    unsigned int line UNUSED,
+    uintptr_t pReserved UNUSED)
 {
 }
 
@@ -2411,7 +2432,8 @@ mch_init_g(void)
      * Otherwise the default "findstr /n" is used.
      */
     if (!executable_exists("findstr.exe", NULL, TRUE, FALSE))
-	set_option_value((char_u *)"grepprg", 0, (char_u *)"grep -n", 0);
+	set_option_value_give_err((char_u *)"grepprg",
+						    0, (char_u *)"grep -n", 0);
 
 # ifdef FEAT_CLIPBOARD
     win_clip_init();
@@ -3475,7 +3497,7 @@ mch_writable(char_u *name)
  * the allocated memory.
  */
     int
-mch_can_exe(char_u *name, char_u **path, int use_path)
+mch_can_exe(char_u *name, char_u **path, int use_path UNUSED)
 {
     return executable_exists((char *)name, path, TRUE, TRUE);
 }
@@ -4204,7 +4226,7 @@ sub_process_writer(LPVOID param)
 		      s == NULL ? l : (DWORD)(s - (lp + written)),
 		      &len, NULL);
 	}
-	if (len == (int)l)
+	if (len == l)
 	{
 	    // Finished a line, add a NL, unless this line should not have
 	    // one.
@@ -4767,6 +4789,9 @@ mch_call_shell(
     int		tmode = cur_tmode;
     WCHAR	szShellTitle[512];
 
+#ifdef FEAT_JOB_CHANNEL
+    ch_log(NULL, "executing shell command: %s", cmd);
+#endif
     // Change the title to reflect that we are in a subshell.
     if (GetConsoleTitleW(szShellTitle, ARRAY_LENGTH(szShellTitle) - 4) > 0)
     {
@@ -6594,7 +6619,7 @@ mch_write(
 		    p = sp;
 
 		// If restoreFG and FG are connected, the restoreFG can be
-	        // omitted.
+		// omitted.
 		if (sgrn2((sp = sgrnc(p, 39)), 38))
 		    p = sp;
 
@@ -7306,6 +7331,7 @@ typedef struct _FILE_EA_INFORMATION_ {
     ULONG EaSize;
 } FILE_EA_INFORMATION_, *PFILE_EA_INFORMATION_;
 
+#ifndef PROTO
 typedef NTSTATUS (NTAPI *PfnNtOpenFile)(
 	PHANDLE FileHandle,
 	ACCESS_MASK DesiredAccess,
@@ -7316,10 +7342,10 @@ typedef NTSTATUS (NTAPI *PfnNtOpenFile)(
 typedef NTSTATUS (NTAPI *PfnNtClose)(
 	HANDLE Handle);
 typedef NTSTATUS (NTAPI *PfnNtSetEaFile)(
-	HANDLE           FileHandle,
-	PIO_STATUS_BLOCK IoStatusBlock,
-	PVOID            Buffer,
-	ULONG            Length);
+	HANDLE		    FileHandle,
+	PIO_STATUS_BLOCK    IoStatusBlock,
+	PVOID		    Buffer,
+	ULONG		    Length);
 typedef NTSTATUS (NTAPI *PfnNtQueryEaFile)(
 	HANDLE FileHandle,
 	PIO_STATUS_BLOCK IoStatusBlock,
@@ -7331,10 +7357,10 @@ typedef NTSTATUS (NTAPI *PfnNtQueryEaFile)(
 	PULONG EaIndex,
 	BOOLEAN RestartScan);
 typedef NTSTATUS (NTAPI *PfnNtQueryInformationFile)(
-	HANDLE                 FileHandle,
-	PIO_STATUS_BLOCK       IoStatusBlock,
-	PVOID                  FileInformation,
-	ULONG                  Length,
+	HANDLE			FileHandle,
+	PIO_STATUS_BLOCK	IoStatusBlock,
+	PVOID			FileInformation,
+	ULONG			Length,
 	FILE_INFORMATION_CLASS FileInformationClass);
 typedef VOID (NTAPI *PfnRtlInitUnicodeString)(
 	PUNICODE_STRING DestinationString,
@@ -7346,6 +7372,7 @@ PfnNtSetEaFile pNtSetEaFile = NULL;
 PfnNtQueryEaFile pNtQueryEaFile = NULL;
 PfnNtQueryInformationFile pNtQueryInformationFile = NULL;
 PfnRtlInitUnicodeString pRtlInitUnicodeString = NULL;
+#endif
 
 /*
  * Load ntdll.dll functions.
@@ -7824,7 +7851,7 @@ vtp_init(void)
     HMODULE hKerneldll;
     DYN_CONSOLE_SCREEN_BUFFER_INFOEX csbi;
 # ifdef FEAT_TERMGUICOLORS
-    COLORREF fg, bg;
+    COLORREF fg;
 # endif
 
     // Use functions supported from Vista
@@ -7851,11 +7878,8 @@ vtp_init(void)
     store_console_fg_rgb = save_console_fg_rgb;
 
 # ifdef FEAT_TERMGUICOLORS
-    bg = (COLORREF)csbi.ColorTable[g_color_index_bg];
     fg = (COLORREF)csbi.ColorTable[g_color_index_fg];
-    bg = (GetRValue(bg) << 16) | (GetGValue(bg) << 8) | GetBValue(bg);
     fg = (GetRValue(fg) << 16) | (GetGValue(fg) << 8) | GetBValue(fg);
-    default_console_color_bg = bg;
     default_console_color_fg = fg;
 # endif
 
@@ -8136,10 +8160,11 @@ get_default_console_color(
 	ctermbg = -1;
 	if (id > 0)
 	    syn_id2cterm_bg(id, &ctermfg, &ctermbg);
-	guibg = ctermbg != -1 ? ctermtoxterm(ctermbg)
-						    : default_console_color_bg;
-	cterm_normal_bg_gui_color = guibg;
-	ctermbg = ctermbg < 0 ? 0 : ctermbg;
+	cterm_normal_bg_gui_color = guibg =
+			    ctermbg != -1 ? ctermtoxterm(ctermbg) : INVALCOLOR;
+
+	if (ctermbg < 0)
+	    ctermbg = 0;
     }
 
     *cterm_fg = ctermfg;
@@ -8296,3 +8321,84 @@ GetWin32Error(void)
     }
     return msg;
 }
+
+#if defined(FEAT_RELTIME) || defined(PROTO)
+static HANDLE   timer_handle;
+static int      timer_active = FALSE;
+
+/*
+ * Calls to start_timeout alternate the return value pointer between the two
+ * entries in timeout_flags. If the previously active timeout is very close to
+ * expiring when start_timeout() is called then a race condition means that the
+ * set_flag() function may still be invoked after the previous timer is
+ * deleted. Ping-ponging between the two flags prevents this causing 'fake'
+ * timeouts.
+ */
+static sig_atomic_t timeout_flags[2];
+static int	    timeout_flag_idx = 0;
+static sig_atomic_t *timeout_flag = &timeout_flags[0];
+
+
+    static void CALLBACK
+set_flag(void *param, BOOLEAN unused2 UNUSED)
+{
+    int *timeout_flag = (int *)param;
+
+    *timeout_flag = TRUE;
+}
+
+/*
+ * Stop any active timeout.
+ */
+    void
+stop_timeout(void)
+{
+    if (timer_active)
+    {
+        BOOL ret = DeleteTimerQueueTimer(NULL, timer_handle, NULL);
+	timer_active = FALSE;
+	if (!ret && GetLastError() != ERROR_IO_PENDING)
+	{
+	    semsg(_(e_could_not_clear_timeout_str), GetWin32Error());
+	}
+    }
+    *timeout_flag = FALSE;
+}
+
+/*
+ * Start the timeout timer.
+ *
+ * The period is defined in milliseconds.
+ *
+ * The return value is a pointer to a flag that is initialised to 0.  If the
+ * timeout expires, the flag is set to 1. This will only return pointers to
+ * static memory; i.e. any pointer returned by this function may always be
+ * safely dereferenced.
+ *
+ * This function is not expected to fail, but if it does it still returns a
+ * valid flag pointer; the flag will remain stuck at zero.
+ */
+    volatile sig_atomic_t *
+start_timeout(long msec)
+{
+    BOOL ret;
+
+    timeout_flag = &timeout_flags[timeout_flag_idx];
+
+    stop_timeout();
+    ret = CreateTimerQueueTimer(
+	    &timer_handle, NULL, set_flag, timeout_flag,
+	    (DWORD)msec, 0, WT_EXECUTEDEFAULT);
+    if (!ret)
+    {
+	semsg(_(e_could_not_set_timeout_str), GetWin32Error());
+    }
+    else
+    {
+	timeout_flag_idx = (timeout_flag_idx + 1) % 2;
+	timer_active = TRUE;
+	*timeout_flag = FALSE;
+    }
+    return timeout_flag;
+}
+#endif

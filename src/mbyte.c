@@ -84,6 +84,11 @@
 #  define WIN32_LEAN_AND_MEAN
 # endif
 # if defined(FEAT_GUI) || defined(FEAT_XCLIPBOARD)
+#  ifdef __CYGWIN__
+    // ControlMask from <X11/X.h> (included in "vim.h") is conflicting with
+    // <w32api/windows.h> (included in <X11/Xwindows.h>).
+#   undef ControlMask
+#  endif
 #  include <X11/Xwindows.h>
 #  define WINBYTE wBYTE
 # else
@@ -4234,11 +4239,10 @@ theend:
     convert_setup(&vimconv, NULL, NULL);
 }
 
-#if defined(FEAT_GUI_GTK) || defined(PROTO)
+#if defined(FEAT_GUI_GTK) || defined(FEAT_SPELL) || defined(PROTO)
 /*
  * Return TRUE if string "s" is a valid utf-8 string.
- * When "end" is NULL stop at the first NUL.
- * When "end" is positive stop there.
+ * When "end" is NULL stop at the first NUL.  Otherwise stop at "end".
  */
     int
 utf_valid_string(char_u *s, char_u *end)
@@ -4930,13 +4934,18 @@ iconv_enabled(int verbose)
 	return FALSE;
     }
 
-    iconv	= (void *)GetProcAddress(hIconvDLL, "libiconv");
-    iconv_open	= (void *)GetProcAddress(hIconvDLL, "libiconv_open");
-    iconv_close	= (void *)GetProcAddress(hIconvDLL, "libiconv_close");
-    iconvctl	= (void *)GetProcAddress(hIconvDLL, "libiconvctl");
-    iconv_errno	= get_dll_import_func(hIconvDLL, "_errno");
+    iconv	= (size_t (*)(iconv_t, const char **,
+			size_t *, char **, size_t *))
+				GetProcAddress(hIconvDLL, "libiconv");
+    iconv_open	= (iconv_t (*)(const char *, const char *))
+				GetProcAddress(hIconvDLL, "libiconv_open");
+    iconv_close	= (int (*)(iconv_t))
+				GetProcAddress(hIconvDLL, "libiconv_close");
+    iconvctl	= (int (*)(iconv_t, int, void *))
+				GetProcAddress(hIconvDLL, "libiconvctl");
+    iconv_errno	= (int *(*)(void))get_dll_import_func(hIconvDLL, "_errno");
     if (iconv_errno == NULL)
-	iconv_errno = (void *)GetProcAddress(hMsvcrtDLL, "_errno");
+	iconv_errno = (int *(*)(void))GetProcAddress(hMsvcrtDLL, "_errno");
     if (iconv == NULL || iconv_open == NULL || iconv_close == NULL
 	    || iconvctl == NULL || iconv_errno == NULL)
     {
@@ -5532,6 +5541,7 @@ f_setcellwidths(typval_T *argvars, typval_T *rettv UNUSED)
     cw_interval_T   *table;
     cw_interval_T   *cw_table_save;
     size_t	    cw_table_size_save;
+    char	    *error = NULL;
 
     if (in_vim9script() && check_for_list_arg(argvars, 0) == FAIL)
 	return;
@@ -5650,30 +5660,36 @@ f_setcellwidths(typval_T *argvars, typval_T *rettv UNUSED)
 
     // Check that the new value does not conflict with 'fillchars' or
     // 'listchars'.
-    if (set_chars_option(curwin, &p_fcs) != NULL)
+    if (set_chars_option(curwin, &p_fcs, FALSE) != NULL)
+	error = e_conflicts_with_value_of_fillchars;
+    else if (set_chars_option(curwin, &p_lcs, FALSE) != NULL)
+	error = e_conflicts_with_value_of_listchars;
+    else
     {
-	emsg(_(e_conflicts_with_value_of_fillchars));
+	tabpage_T   *tp;
+	win_T	    *wp;
+
+	FOR_ALL_TAB_WINDOWS(tp, wp)
+	{
+	    if (set_chars_option(wp, &wp->w_p_lcs, FALSE) != NULL)
+	    {
+		error = e_conflicts_with_value_of_listchars;
+		break;
+	    }
+	    if (set_chars_option(wp, &wp->w_p_fcs, FALSE) != NULL)
+	    {
+		error = e_conflicts_with_value_of_fillchars;
+		break;
+	    }
+	}
+    }
+    if (error != NULL)
+    {
+	emsg(_(error));
 	cw_table = cw_table_save;
 	cw_table_size = cw_table_size_save;
 	vim_free(table);
 	return;
-    }
-    else
-    {
-	tabpage_T	*tp;
-	win_T	*wp;
-
-	FOR_ALL_TAB_WINDOWS(tp, wp)
-	{
-	    if (set_chars_option(wp, &wp->w_p_lcs) != NULL)
-	    {
-		emsg((e_conflicts_with_value_of_listchars));
-		cw_table = cw_table_save;
-		cw_table_size = cw_table_size_save;
-		vim_free(table);
-		return;
-	    }
-	}
     }
 
     vim_free(cw_table_save);

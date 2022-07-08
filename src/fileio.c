@@ -216,7 +216,7 @@ readfile(
     int		using_b_ffname;
     int		using_b_fname;
     static char *msg_is_a_directory = N_("is a directory");
-    int         eof;
+    int		eof;
 
     au_did_filetype = FALSE; // reset before triggering any autocommands
 
@@ -1245,30 +1245,29 @@ retry:
 				read_buf_col += n;
 				break;
 			    }
-			    else
+
+			    // Append whole line and new-line.  Change NL
+			    // to NUL to reverse the effect done below.
+			    for (ni = 0; ni < n; ++ni)
 			    {
-				// Append whole line and new-line.  Change NL
-				// to NUL to reverse the effect done below.
-				for (ni = 0; ni < n; ++ni)
-				{
-				    if (p[ni] == NL)
-					ptr[tlen++] = NUL;
-				    else
-					ptr[tlen++] = p[ni];
-				}
-				ptr[tlen++] = NL;
-				read_buf_col = 0;
-				if (++read_buf_lnum > from)
-				{
-				    // When the last line didn't have an
-				    // end-of-line don't add it now either.
-				    if (!curbuf->b_p_eol)
-					--tlen;
-				    size = tlen;
-				    eof = TRUE;
-				    break;
-				}
+				if (p[ni] == NL)
+				    ptr[tlen++] = NUL;
+				else
+				    ptr[tlen++] = p[ni];
 			    }
+			    ptr[tlen++] = NL;
+			    read_buf_col = 0;
+			    if (++read_buf_lnum > from)
+			    {
+				// When the last line didn't have an
+				// end-of-line don't add it now either.
+				if (!curbuf->b_p_eol)
+				    --tlen;
+				size = tlen;
+				eof = TRUE;
+				break;
+			    }
+
 			}
 		    }
 		}
@@ -1632,7 +1631,6 @@ retry:
 		 * Do the conversion.
 		 */
 		dst = ptr;
-		size = size;
 		while (size > 0)
 		{
 		    found_bad = FALSE;
@@ -2946,7 +2944,7 @@ check_for_cryptkey(
     // When starting to edit a new file which does not have encryption, clear
     // the 'key' option, except when starting up (called with -x argument)
     else if (newfile && *curbuf->b_p_key != NUL && !starting)
-	set_option_value((char_u *)"key", 0L, (char_u *)"", OPT_LOCAL);
+	set_option_value_give_err((char_u *)"key", 0L, (char_u *)"", OPT_LOCAL);
 
     return cryptkey;
 }
@@ -4306,7 +4304,8 @@ buf_check_timestamp(
 	    }
 	    else
 #endif
-	    if (State > NORMAL_BUSY || (State & CMDLINE) || already_warned)
+	    if (State > MODE_NORMAL_BUSY || (State & MODE_CMDLINE)
+							     || already_warned)
 	    {
 		if (*mesg2 != NUL)
 		{
@@ -4825,7 +4824,7 @@ readdir_core(
     int		withattr UNUSED,
     void	*context,
     int		(*checkitem)(void *context, void *item),
-    int         sort)
+    int		sort)
 {
     int			failed = FALSE;
     char_u		*p;
@@ -5058,13 +5057,16 @@ delete_recursive(char_u *name)
 		vim_snprintf((char *)NameBuff, MAXPATHL, "%s/%s", exp,
 					    ((char_u **)ga.ga_data)[i]);
 		if (delete_recursive(NameBuff) != 0)
+		    // Remember the failure but continue deleting any further
+		    // entries.
 		    result = -1;
 	    }
 	    ga_clear_strings(&ga);
+	    if (mch_rmdir(exp) != 0)
+		result = -1;
 	}
 	else
 	    result = -1;
-	(void)mch_rmdir(exp);
 	vim_free(exp);
     }
     else

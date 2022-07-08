@@ -129,13 +129,11 @@ buf_init_chartab(
 		SET_CHARTAB(buf, c);
 	}
 
-#ifdef FEAT_LISP
     /*
      * In lisp mode the '-' character is included in keywords.
      */
     if (buf->b_p_lisp)
 	SET_CHARTAB(buf, '-');
-#endif
 
     // Walk through the 'isident', 'iskeyword', 'isfname' and 'isprint'
     // options Each option is a list of characters, character numbers or
@@ -1300,7 +1298,7 @@ getvcol(
     if (cursor != NULL)
     {
 	if (*ptr == TAB
-		&& (State & NORMAL)
+		&& (State & MODE_NORMAL)
 		&& !wp->w_p_list
 		&& !virtual_active()
 		&& !(VIsual_active
@@ -2004,6 +2002,7 @@ vim_str2nr(
 	}
 	else
 	{
+	    // prevent a larg unsigned number to become negative
 	    if (un > VARNUM_MAX)
 		un = VARNUM_MAX;
 	    *nptr = (varnumber_T)un;

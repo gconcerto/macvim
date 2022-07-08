@@ -3,7 +3,7 @@
 " Original Author: Mohamed Boughaba <mohamed dot bgb at gmail dot com>
 " Maintainer: Quentin Hibon (github user hiqua)
 " Version: 0.4
-" Last Change: 2022 Jan 15
+" Last Change: 2022 Jun 05
 
 " References:
 " http://i3wm.org/docs/userguide.html#configuring
@@ -16,9 +16,6 @@ if exists("b:current_syntax")
 endif
 
 scriptencoding utf-8
-
-" Error
-syn match i3ConfigError /.*/
 
 " Todo
 syn keyword i3ConfigTodo TODO FIXME XXX contained
@@ -49,6 +46,10 @@ syn match i3ConfigVariableAndModifier /+\w\+/ contained contains=i3ConfigVariabl
 syn match i3ConfigVariable /\$\w\+\(\(-\w\+\)\+\)\?\(\s\|+\)\?/ contains=i3ConfigVariableModifier,i3ConfigVariableAndModifier
 syn keyword i3ConfigInitializeKeyword set contained
 syn match i3ConfigInitialize /^\s*set\s\+.*$/ contains=i3ConfigVariable,i3ConfigInitializeKeyword,i3ConfigColor,i3ConfigString
+
+" Include
+syn keyword i3ConfigIncludeKeyword include contained
+syn match i3ConfigInclude /^\s*include\s\+.*$/ contains=i3ConfigIncludeKeyword,i3ConfigString,i3ConfigVariable
 
 " Gaps
 syn keyword i3ConfigGapStyleKeyword inner outer horizontal vertical top right bottom left current all set plus minus toggle up down contained
@@ -176,13 +177,12 @@ syn match i3ConfigDrawingMarks /^\s*show_marks\s\+\(yes\|no\)\s\?$/ contains=i3C
 
 " Group mode/bar
 syn keyword i3ConfigBlockKeyword mode bar colors i3bar_command status_command position exec mode hidden_state modifier id position output background statusline tray_output tray_padding separator separator_symbol workspace_min_width workspace_buttons strip_workspace_numbers binding_mode_indicator focused_workspace active_workspace inactive_workspace urgent_workspace binding_mode contained
-syn region i3ConfigBlock start=+.*s\?{$+ end=+^}$+ contains=i3ConfigBlockKeyword,i3ConfigString,i3ConfigBind,i3ConfigComment,i3ConfigFont,i3ConfigFocusWrappingType,i3ConfigColor,i3ConfigVariable transparent keepend extend
+syn region i3ConfigBlock start=+^\s*[^#]*s\?{$+ end=+^\s*[^#]*}$+ contains=i3ConfigBlockKeyword,i3ConfigString,i3ConfigBind,i3ConfigComment,i3ConfigFont,i3ConfigFocusWrappingType,i3ConfigColor,i3ConfigVariable transparent keepend extend
 
 " Line continuation
 syn region i3ConfigLineCont start=/^.*\\$/ end=/^.*$/ contains=i3ConfigBlockKeyword,i3ConfigString,i3ConfigBind,i3ConfigComment,i3ConfigFont,i3ConfigFocusWrappingType,i3ConfigColor,i3ConfigVariable transparent keepend extend
 
 " Define the highlighting.
-hi def link i3ConfigError                           Error
 hi def link i3ConfigTodo                            Todo
 hi def link i3ConfigComment                         Comment
 hi def link i3ConfigFontContent                     Type
@@ -221,6 +221,7 @@ hi def link i3ConfigAssignSpecial                   Special
 hi def link i3ConfigFontNamespace                   PreProc
 hi def link i3ConfigBindArgument                    PreProc
 hi def link i3ConfigNoStartupId                     PreProc
+hi def link i3ConfigIncludeKeyword                  Identifier
 hi def link i3ConfigFontKeyword                     Identifier
 hi def link i3ConfigBindKeyword                     Identifier
 hi def link i3ConfigOrientation                     Identifier

@@ -1615,6 +1615,26 @@ def Test_lambda_type_allocated()
   v9.CheckScriptSuccess(lines)
 enddef
 
+def Test_define_lambda_in_execute()
+  var lines =<< trim [CODE]
+      vim9script
+
+      def BuildFuncMultiLine(): func
+          var x =<< trim END
+              g:SomeRandomFunc = (d: dict<any>) => {
+                  return d.k1 + d.k2
+              }
+          END
+          execute(x)
+          return g:SomeRandomFunc
+      enddef
+      var ResultPlus = BuildFuncMultiLine()
+      assert_equal(7, ResultPlus({k1: 3, k2: 4}))
+  [CODE]
+  v9.CheckScriptSuccess(lines)
+  unlet g:SomeRandomFunc
+enddef
+
 " Default arg and varargs
 def MyDefVarargs(one: string, two = 'foo', ...rest: list<string>): string
   var res = one .. ',' .. two
@@ -3709,7 +3729,7 @@ def Run_Test_opfunc_error()
 
   var buf = g:RunVimInTerminal('-S XTest_opfunc_error', {rows: 6, wait_for_ruler: 0})
   g:WaitForAssert(() => assert_match('Press ENTER', term_getline(buf, 6)))
-  g:WaitForAssert(() => assert_match('E684: list index out of range: 0', term_getline(buf, 5)))
+  g:WaitForAssert(() => assert_match('E684: List index out of range: 0', term_getline(buf, 5)))
 
   # clean up
   g:StopVimInTerminal(buf)
@@ -4031,6 +4051,63 @@ def Test_too_many_arguments()
     echo [0, 1, 2]->map((_) => 123)
   END
   v9.CheckDefAndScriptFailure(lines, ['E176', 'E1106: One argument too many'], 1)
+
+  lines =<< trim END
+      vim9script
+      def OneArgument(arg: string)
+        echo arg
+      enddef
+      var Ref = OneArgument
+      Ref('a', 'b')
+  END
+  v9.CheckScriptFailure(lines, 'E118:')
+enddef
+
+def Test_funcref_with_base()
+  var lines =<< trim END
+      vim9script
+      def TwoArguments(str: string, nr: number)
+        echo str nr
+      enddef
+      var Ref = TwoArguments
+      Ref('a', 12)
+      'b'->Ref(34)
+  END
+  v9.CheckScriptSuccess(lines)
+
+  lines =<< trim END
+      vim9script
+      def TwoArguments(str: string, nr: number)
+        echo str nr
+      enddef
+      var Ref = TwoArguments
+      'a'->Ref('b')
+  END
+  v9.CheckScriptFailure(lines, 'E1013: Argument 2: type mismatch, expected number but got string', 6)
+
+  lines =<< trim END
+      vim9script
+      def TwoArguments(str: string, nr: number)
+        echo str nr
+      enddef
+      var Ref = TwoArguments
+      123->Ref(456)
+  END
+  v9.CheckScriptFailure(lines, 'E1013: Argument 1: type mismatch, expected string but got number')
+
+  lines =<< trim END
+      vim9script
+      def TwoArguments(nr: number, str: string)
+        echo str nr
+      enddef
+      var Ref = TwoArguments
+      123->Ref('b')
+      def AndNowCompiled()
+        456->Ref('x')
+      enddef
+      AndNowCompiled()
+  END
+  v9.CheckScriptSuccess(lines)
 enddef
 
 def Test_closing_brace_at_start_of_line()
@@ -4069,6 +4146,63 @@ def Test_go_beyond_end_of_cmd()
     defcompile
   END
   v9.CheckScriptFailure(lines, 'E476:')
+enddef
+
+" Test for memory allocation failure when defining a new lambda
+func Test_lambda_allocation_failure()
+  new
+  let lines =<< trim END
+    vim9script
+    g:Xlambda = (x): number => {
+        return x + 1
+      }
+  END
+  call setline(1, lines)
+  call test_alloc_fail(GetAllocId('get_func'), 0, 0)
+  call assert_fails('source', 'E342:')
+  call assert_false(exists('g:Xlambda'))
+  bw!
+endfunc
+
+def Test_multiple_funcref()
+  # This was using a NULL pointer
+  var lines =<< trim END
+      vim9script
+      def A(F: func, ...args: list<any>): func
+          return funcref(F, args)
+      enddef
+
+      def B(F: func): func
+          return funcref(A, [F])
+      enddef
+
+      def Test(n: number)
+      enddef
+
+      const X = B(Test)
+      X(1)
+  END
+  v9.CheckScriptSuccess(lines)
+
+  # slightly different case
+  lines =<< trim END
+      vim9script
+
+      def A(F: func, ...args: list<any>): any
+          return call(F, args)
+      enddef
+
+      def B(F: func): func
+          return funcref(A, [F])
+      enddef
+
+      def Test(n: number)
+      enddef
+
+      const X = B(Test)
+      X(1)
+  END
+  v9.CheckScriptSuccess(lines)
 enddef
 
 " The following messes up syntax highlight, keep near the end.
@@ -4116,6 +4250,24 @@ if has('lua')
       'ExeLua()',
       ]
     v9.CheckScriptFailure(lines, 'E121: Undefined variable: g:nodict')
+  enddef
+endif
+
+if has('perl')
+  def Test_perl_heredoc_nested()
+    var lines =<< trim END
+        vim9script
+        def F(): string
+            def G(): string
+                perl << EOF
+        EOF
+                return 'done'
+            enddef
+            return G()
+        enddef
+        assert_equal('done', F())
+    END
+    v9.CheckScriptSuccess(lines)
   enddef
 endif
 

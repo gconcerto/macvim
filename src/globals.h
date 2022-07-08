@@ -75,7 +75,14 @@ EXTERN int	screen_cur_row INIT(= 0);
 EXTERN int	screen_cur_col INIT(= 0);
 
 #ifdef FEAT_SEARCH_EXTRA
-EXTERN match_T	screen_search_hl; // used for 'hlsearch' highlight matching
+// used for 'hlsearch' highlight matching
+EXTERN match_T	screen_search_hl;
+
+// last lnum where CurSearch was displayed
+EXTERN linenr_T search_hl_has_cursor_lnum INIT(= 0);
+
+// don't use 'hlsearch' temporarily
+EXTERN int	no_hlsearch INIT(= FALSE);
 #endif
 
 #ifdef FEAT_FOLDING
@@ -846,15 +853,10 @@ EXTERN int	secure INIT(= FALSE);
 				// allowed, e.g. when sourcing .exrc or .vimrc
 				// in current directory
 
-EXTERN int	textwinlock INIT(= 0);
+EXTERN int	textlock INIT(= 0);
 				// non-zero when changing text and jumping to
 				// another window or editing another buffer is
 				// not allowed
-
-EXTERN int	textlock INIT(= 0);
-				// non-zero when changing text is not allowed,
-				// jumping to another window is allowed,
-				// editing another buffer is not allowed.
 
 EXTERN int	curbuf_lock INIT(= 0);
 				// non-zero when the current buffer can't be
@@ -937,7 +939,6 @@ EXTERN int     end_comment_pending INIT(= NUL);
  */
 EXTERN int     did_syncbind INIT(= FALSE);
 
-#ifdef FEAT_SMARTINDENT
 /*
  * This flag is set when a smart indent has been performed. When the next typed
  * character is a '{' the inserted tab will be deleted again.
@@ -955,7 +956,6 @@ EXTERN int	can_si INIT(= FALSE);
  * one indent will be removed.
  */
 EXTERN int	can_si_back INIT(= FALSE);
-#endif
 
 EXTERN int	old_indent INIT(= 0);	// for ^^D command in insert mode
 
@@ -977,7 +977,7 @@ EXTERN pos_T	Insstart;		// This is where the latest
 EXTERN pos_T	Insstart_orig;
 
 /*
- * Stuff for VREPLACE mode.
+ * Stuff for MODE_VREPLACE state.
  */
 EXTERN int	orig_line_count INIT(= 0);  // Line count when "gR" started
 EXTERN int	vr_lines_changed INIT(= 0); // #Lines changed by "gR" so far
@@ -1097,14 +1097,14 @@ EXTERN guicolor_T	xim_bg_color INIT(= INVALCOLOR);
 /*
  * "State" is the main state of Vim.
  * There are other variables that modify the state:
- * "Visual_mode"    When State is NORMAL or INSERT.
- * "finish_op"	    When State is NORMAL, after typing the operator and before
- *		    typing the motion command.
+ * "Visual_mode"    When State is MODE_NORMAL or MODE_INSERT.
+ * "finish_op"	    When State is MODE_NORMAL, after typing the operator and
+ *		    before typing the motion command.
  * "motion_force"   Last motion_force  from do_pending_operator()
  * "debug_mode"	    Debug mode.
  */
-EXTERN int	State INIT(= NORMAL);	// This is the current state of the
-					// command interpreter.
+EXTERN int	State INIT(= MODE_NORMAL);
+
 #ifdef FEAT_EVAL
 EXTERN int	debug_mode INIT(= FALSE);
 #endif
@@ -1125,6 +1125,8 @@ EXTERN int ex_no_reprint INIT(= FALSE); // no need to print after z or p
 
 EXTERN int reg_recording INIT(= 0);	// register for recording  or zero
 EXTERN int reg_executing INIT(= 0);	// register being executed or zero
+// Flag set when peeking a character and found the end of executed register
+EXTERN int pending_end_reg_executing INIT(= 0);
 
 // Set when a modifyOtherKeys sequence was seen, then simplified mappings will
 // no longer be used.
@@ -1228,6 +1230,10 @@ EXTERN int	do_redraw INIT(= FALSE);    // extra redraw once
 #ifdef FEAT_DIFF
 EXTERN int	need_diff_redraw INIT(= 0); // need to call diff_redraw()
 #endif
+#ifdef FEAT_RELTIME
+// flag set when 'redrawtime' timeout has been set
+EXTERN int	redrawtime_limit_set INIT(= FALSE);
+#endif
 
 EXTERN int	need_highlight_changed INIT(= TRUE);
 
@@ -1291,7 +1297,7 @@ EXTERN pos_T	last_cursormoved	      // for CursorMoved event
 
 EXTERN int	postponed_split INIT(= 0);  // for CTRL-W CTRL-] command
 EXTERN int	postponed_split_flags INIT(= 0);  // args for win_split()
-EXTERN int	postponed_split_tab INIT(= 0);  // cmdmod.tab
+EXTERN int	postponed_split_tab INIT(= 0);  // cmdmod.cmod_tab
 #ifdef FEAT_QUICKFIX
 EXTERN int	g_do_tagpreview INIT(= 0);  // for tag preview commands:
 					    // height of preview window
@@ -1376,17 +1382,6 @@ EXTERN char_u	*homedir INIT(= NULL);
 // directory is not a local directory, globaldir is NULL.
 EXTERN char_u	*globaldir INIT(= NULL);
 
-// Characters from 'fillchars' option
-EXTERN int	fill_stl INIT(= ' ');
-EXTERN int	fill_stlnc INIT(= ' ');
-EXTERN int	fill_vert INIT(= ' ');
-EXTERN int	fill_fold INIT(= '-');
-EXTERN int	fill_foldopen INIT(= '-');
-EXTERN int	fill_foldclosed INIT(= '+');
-EXTERN int	fill_foldsep INIT(= '|');
-EXTERN int	fill_diff INIT(= '-');
-EXTERN int	fill_eob INIT(= '~');
-
 #ifdef FEAT_FOLDING
 EXTERN int	disable_fold_update INIT(= 0);
 #endif
@@ -1423,11 +1418,6 @@ EXTERN char_u	wim_flags[4];
 # define STL_IN_ICON	1
 # define STL_IN_TITLE	2
 EXTERN int      stl_syntax INIT(= 0);
-#endif
-
-#ifdef FEAT_SEARCH_EXTRA
-// don't use 'hlsearch' temporarily
-EXTERN int	no_hlsearch INIT(= FALSE);
 #endif
 
 #if defined(FEAT_BEVAL) && !defined(NO_X11_INCLUDES)
@@ -1657,6 +1647,7 @@ EXTERN int  reset_term_props_on_termresponse INIT(= FALSE);
 EXTERN int  disable_vterm_title_for_testing INIT(= FALSE);
 EXTERN long override_sysinfo_uptime INIT(= -1);
 EXTERN int  override_autoload INIT(= FALSE);
+EXTERN int  ml_get_alloc_lines INIT(= FALSE);
 
 EXTERN int  in_free_unref_items INIT(= FALSE);
 #endif

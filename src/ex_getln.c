@@ -110,7 +110,7 @@ empty_pattern_magic(char_u *p, size_t len, magic_T magic_val)
 {
     // remove trailing \v and the like
     while (len >= 2 && p[len - 2] == '\\'
-                        && vim_strchr((char_u *)"mMvVcCZ", p[len - 1]) != NULL)
+			&& vim_strchr((char_u *)"mMvVcCZ", p[len - 1]) != NULL)
        len -= 2;
 
     // true, if the pattern is empty, or the pattern ends with \| and magic is
@@ -256,7 +256,6 @@ do_incsearch_highlighting(
     ea.cmd = ccline.cmdbuff;
     ea.addr_type = ADDR_LINES;
 
-    CLEAR_FIELD(dummy_cmdmod);
     parse_command_modifiers(&ea, &dummy, &dummy_cmdmod, TRUE);
 
     cmd = skip_range(ea.cmd, TRUE, NULL);
@@ -417,7 +416,6 @@ may_do_incsearch_highlighting(
     int		found;  // do_search() result
     pos_T	end_pos;
 #ifdef FEAT_RELTIME
-    proftime_T	tm;
     searchit_arg_T sia;
 #endif
     int		next_char;
@@ -484,10 +482,6 @@ may_do_incsearch_highlighting(
 	cursor_off();	// so the user knows we're busy
 	out_flush();
 	++emsg_off;	// so it doesn't beep if bad expr
-#ifdef FEAT_RELTIME
-	// Set the time limit to half a second.
-	profile_setlimit(500L, &tm);
-#endif
 	if (!p_hls)
 	    search_flags += SEARCH_KEEP;
 	if (search_first_line != 0)
@@ -495,7 +489,8 @@ may_do_incsearch_highlighting(
 	ccline.cmdbuff[skiplen + patlen] = NUL;
 #ifdef FEAT_RELTIME
 	CLEAR_FIELD(sia);
-	sia.sa_tm = &tm;
+	// Set the time limit to half a second.
+	sia.sa_tm = 500;
 #endif
 	found = do_search(NULL, firstc == ':' ? '/' : firstc, search_delim,
 				 ccline.cmdbuff + skiplen, count, search_flags,
@@ -850,12 +845,12 @@ cmdline_handle_backslash_key(int c, int *gotesc)
 	c = get_expr_register();
 	if (c == '=')
 	{
-	    // Need to save and restore ccline.  And set "textwinlock"
+	    // Need to save and restore ccline.  And set "textlock"
 	    // to avoid nasty things like going to another buffer when
 	    // evaluating an expression.
-	    ++textwinlock;
+	    ++textlock;
 	    p = get_expr_line();
-	    --textwinlock;
+	    --textlock;
 
 	    if (p != NULL)
 	    {
@@ -1082,10 +1077,13 @@ cmdline_erase_chars(
 	{
 	    while (p > ccline.cmdbuff && vim_isspace(p[-1]))
 		--p;
-	    i = vim_iswordc(p[-1]);
-	    while (p > ccline.cmdbuff && !vim_isspace(p[-1])
-		    && vim_iswordc(p[-1]) == i)
-		--p;
+	    if (p > ccline.cmdbuff)
+	    {
+		i = vim_iswordc(p[-1]);
+		while (p > ccline.cmdbuff && !vim_isspace(p[-1])
+			&& vim_iswordc(p[-1]) == i)
+		    --p;
+	    }
 	}
 	else
 	    --p;
@@ -1147,16 +1145,16 @@ cmdline_erase_chars(
     static void
 cmdline_toggle_langmap(long *b_im_ptr)
 {
-    if (map_to_exists_mode((char_u *)"", LANGMAP, FALSE))
+    if (map_to_exists_mode((char_u *)"", MODE_LANGMAP, FALSE))
     {
 	// ":lmap" mappings exists, toggle use of mappings.
-	State ^= LANGMAP;
+	State ^= MODE_LANGMAP;
 #ifdef HAVE_INPUT_METHOD
 	im_set_active(FALSE);	// Disable input method
 #endif
 	if (b_im_ptr != NULL)
 	{
-	    if (State & LANGMAP)
+	    if (State & MODE_LANGMAP)
 		*b_im_ptr = B_IMODE_LMAP;
 	    else
 		*b_im_ptr = B_IMODE_NONE;
@@ -1208,6 +1206,9 @@ cmdline_insert_reg(int *gotesc UNUSED)
 {
     int		i;
     int		c;
+#ifdef FEAT_EVAL
+    int		save_new_cmdpos = new_cmdpos;
+#endif
 
 #ifdef USE_ON_FLY_SCROLL
     dont_scroll = TRUE;	// disallow scrolling here
@@ -1226,8 +1227,6 @@ cmdline_insert_reg(int *gotesc UNUSED)
 #ifdef FEAT_EVAL
     /*
      * Insert the result of an expression.
-     * Need to save the current command line, to be able to enter
-     * a new one...
      */
     new_cmdpos = -1;
     if (c == '=')
@@ -1268,6 +1267,10 @@ cmdline_insert_reg(int *gotesc UNUSED)
 	}
 #endif
     }
+#ifdef FEAT_EVAL
+    new_cmdpos = save_new_cmdpos;
+#endif
+
     // remove the double quote
     redrawcmd();
 
@@ -1578,6 +1581,7 @@ getcmdline_int(
     int		indent,		// indent for inside conditionals
     int		clear_ccline)	// clear ccline first
 {
+    static int	depth = 0;	    // call depth
     int		c;
     int		i;
     int		j;
@@ -1608,6 +1612,9 @@ getcmdline_int(
     int		cmdline_type;
     int		wild_type;
 
+    // one recursion level deeper
+    ++depth;
+
     if (ccline.cmdbuff != NULL)
     {
 	// Being called recursively.  Since ccline is global, we need to save
@@ -1637,6 +1644,13 @@ getcmdline_int(
 
     if (init_ccline(firstc, indent) != OK)
 	goto theend;	// out of memory
+
+    if (depth == 50)
+    {
+	// Somehow got into a loop recursively calling getcmdline(), bail out.
+	emsg(_(e_command_too_recursive));
+	goto theend;
+    }
 
     ExpandInit(&xpc);
     ccline.xpc = &xpc;
@@ -1680,7 +1694,7 @@ getcmdline_int(
      */
     msg_scroll = FALSE;
 
-    State = CMDLINE;
+    State = MODE_CMDLINE;
 
     if (firstc == '/' || firstc == '?' || firstc == '@')
     {
@@ -1690,7 +1704,7 @@ getcmdline_int(
 	else
 	    b_im_ptr = &curbuf->b_p_imsearch;
 	if (*b_im_ptr == B_IMODE_LMAP)
-	    State |= LANGMAP;
+	    State |= MODE_LANGMAP;
 #ifdef HAVE_INPUT_METHOD
 	im_set_active(*b_im_ptr == B_IMODE_IM);
 #endif
@@ -1714,7 +1728,7 @@ getcmdline_int(
     trigger_cmd_autocmd(cmdline_type, EVENT_CMDLINEENTER);
 #ifdef FEAT_EVAL
     if (!debug_mode)
-	trigger_modechanged();
+	may_trigger_modechanged();
 #endif
 
     init_history();
@@ -2564,7 +2578,7 @@ returncmd:
 
 #ifdef FEAT_EVAL
     if (!debug_mode)
-	trigger_modechanged();
+	may_trigger_modechanged();
 #endif
 
 #ifdef HAVE_INPUT_METHOD
@@ -2582,6 +2596,7 @@ theend:
     {
 	char_u *p = ccline.cmdbuff;
 
+	--depth;
 	if (did_save_ccline)
 	    restore_cmdline(&save_ccline);
 	else
@@ -2704,13 +2719,13 @@ check_opt_wim(void)
  * 'balloonexpr', etc.
  */
     int
-text_and_win_locked(void)
+text_locked(void)
 {
 #ifdef FEAT_CMDWIN
     if (cmdwin_type != 0)
 	return TRUE;
 #endif
-    return textwinlock != 0;
+    return textlock != 0;
 }
 
 /*
@@ -2730,19 +2745,22 @@ get_text_locked_msg(void)
     if (cmdwin_type != 0)
 	return e_invalid_in_cmdline_window;
 #endif
-    if (textwinlock != 0)
-	return e_not_allowed_to_change_text_or_change_window;
-    return e_not_allowed_to_change_text_here;
+    return e_not_allowed_to_change_text_or_change_window;
 }
 
 /*
- * Return TRUE when the text must not be changed and/or we cannot switch to
- * another window.  TRUE while evaluating 'completefunc'.
+ * Check for text, window or buffer locked.
+ * Give an error message and return TRUE if something is locked.
  */
     int
-text_locked(void)
+text_or_buf_locked(void)
 {
-    return text_and_win_locked() || textlock != 0;
+    if (text_locked())
+    {
+	text_locked_msg();
+	return TRUE;
+    }
+    return curbuf_locked();
 }
 
 /*
@@ -3215,7 +3233,7 @@ cmdline_getvcol_cursor(void)
     static void
 redrawcmd_preedit(void)
 {
-    if ((State & CMDLINE)
+    if ((State & MODE_CMDLINE)
 # ifndef FEAT_GUI_MACVIM
 	    && xic != NULL
 # endif
@@ -3727,11 +3745,11 @@ cmdline_paste(
     regname = may_get_selection(regname);
 #endif
 
-    // Need to  set "textwinlock" to avoid nasty things like going to another
+    // Need to set "textlock" to avoid nasty things like going to another
     // buffer when evaluating an expression.
-    ++textwinlock;
+    ++textlock;
     i = get_spec_reg(regname, &arg, &allocated, TRUE);
-    --textwinlock;
+    --textlock;
 
     if (i)
     {
@@ -4098,7 +4116,7 @@ get_cmdline_info(void)
     static cmdline_info_T *
 get_ccline_ptr(void)
 {
-    if ((State & CMDLINE) == 0)
+    if ((State & MODE_CMDLINE) == 0)
 	return NULL;
     if (ccline.cmdbuff != NULL)
 	return &ccline;
@@ -4128,6 +4146,42 @@ get_cmdline_str(void)
 }
 
 /*
+ * Get the current command-line completion type.
+ */
+    static char_u *
+get_cmdline_completion(void)
+{
+    cmdline_info_T *p;
+
+    if (cmdline_star > 0)
+	return NULL;
+
+    p = get_ccline_ptr();
+    if (p != NULL && p->xpc != NULL)
+    {
+	char_u *cmd_compl;
+
+	set_expand_context(p->xpc);
+
+	cmd_compl = cmdcomplete_type_to_str(p->xpc->xp_context);
+	if (cmd_compl != NULL)
+	    return vim_strsave(cmd_compl);
+    }
+
+    return NULL;
+}
+
+/*
+ * "getcmdcompltype()" function
+ */
+    void
+f_getcmdcompltype(typval_T *argvars UNUSED, typval_T *rettv)
+{
+    rettv->v_type = VAR_STRING;
+    rettv->vval.v_string = get_cmdline_completion();
+}
+
+/*
  * "getcmdline()" function
  */
     void
@@ -4148,6 +4202,28 @@ f_getcmdpos(typval_T *argvars UNUSED, typval_T *rettv)
     rettv->vval.v_number = 0;
     if (p != NULL)
     rettv->vval.v_number = p->cmdpos + 1;
+}
+
+/*
+ * Get the command line cursor screen position.
+ */
+    static int
+get_cmdline_screen_pos(void)
+{
+    cmdline_info_T *p = get_ccline_ptr();
+
+    if (p == NULL)
+	return -1;
+    return p->cmdspos;
+}
+
+/*
+ * "getcmdscreenpos()" function
+ */
+    void
+f_getcmdscreenpos(typval_T *argvars UNUSED, typval_T *rettv)
+{
+    rettv->vval.v_number = get_cmdline_screen_pos() + 1;
 }
 
 /*
@@ -4330,8 +4406,10 @@ open_cmdwin(void)
     int			save_KeyTyped;
 #endif
 
+    // Can't do this when text or buffer is locked.
     // Can't do this recursively.  Can't do it when typing a password.
-    if (cmdwin_type != 0
+    if (text_or_buf_locked()
+	    || cmdwin_type != 0
 # if defined(FEAT_CRYPT) || defined(FEAT_EVAL)
 	    || cmdline_star > 0
 # endif
@@ -4379,7 +4457,8 @@ open_cmdwin(void)
     apply_autocmds(EVENT_BUFFILEPRE, NULL, NULL, FALSE, curbuf);
     (void)setfname(curbuf, (char_u *)_("[Command Line]"), NULL, TRUE);
     apply_autocmds(EVENT_BUFFILEPOST, NULL, NULL, FALSE, curbuf);
-    set_option_value((char_u *)"bt", 0L, (char_u *)"nofile", OPT_LOCAL);
+    set_option_value_give_err((char_u *)"bt",
+					    0L, (char_u *)"nofile", OPT_LOCAL);
     curbuf->b_p_ma = TRUE;
 #ifdef FEAT_FOLDING
     curwin->w_p_fen = FALSE;
@@ -4401,10 +4480,11 @@ open_cmdwin(void)
     {
 	if (p_wc == TAB)
 	{
-	    add_map((char_u *)"<buffer> <Tab> <C-X><C-V>", INSERT);
-	    add_map((char_u *)"<buffer> <Tab> a<C-X><C-V>", NORMAL);
+	    add_map((char_u *)"<buffer> <Tab> <C-X><C-V>", MODE_INSERT, TRUE);
+	    add_map((char_u *)"<buffer> <Tab> a<C-X><C-V>", MODE_NORMAL, TRUE);
 	}
-	set_option_value((char_u *)"ft", 0L, (char_u *)"vim", OPT_LOCAL);
+	set_option_value_give_err((char_u *)"ft",
+					       0L, (char_u *)"vim", OPT_LOCAL);
     }
     --curbuf_lock;
 
@@ -4444,7 +4524,7 @@ open_cmdwin(void)
     // No Ex mode here!
     exmode_active = 0;
 
-    State = NORMAL;
+    State = MODE_NORMAL;
     setmouse();
 
     // Reset here so it can be set by a CmdWinEnter autocommand.
@@ -4615,7 +4695,7 @@ script_get(exarg_T *eap UNUSED, char_u *cmd UNUSED)
 	return NULL;
     cmd += 2;
 
-    l = heredoc_get(eap, cmd, TRUE);
+    l = heredoc_get(eap, cmd, TRUE, FALSE);
     if (l == NULL)
 	return NULL;
 

@@ -610,10 +610,6 @@ add_menu_path(
 #ifdef FEAT_BEVAL_TIP
 	    menu->tip = NULL;
 #endif
-#ifdef FEAT_GUI_ATHENA
-	    menu->image = None;		    // X-Windows definition for NULL
-#endif
-
 	    /*
 	     * Add after menu that has lower priority.
 	     */
@@ -1646,7 +1642,7 @@ get_menu_cmd_modes(
 	    modes = MENU_INSERT_MODE;
 	    break;
 	case 't':
-	    if (*cmd == 'l')            // tlmenu, tlunmenu, tlnoremenu
+	    if (*cmd == 'l')		// tlmenu, tlunmenu, tlnoremenu
 	    {
 		modes = MENU_TERMINAL_MODE;
 		++cmd;
@@ -1762,9 +1758,9 @@ get_menu_index(vimmenu_T *menu, int state)
 {
     int		idx;
 
-    if ((state & INSERT))
+    if ((state & MODE_INSERT))
 	idx = MENU_INDEX_INSERT;
-    else if (state & CMDLINE)
+    else if (state & MODE_CMDLINE)
 	idx = MENU_INDEX_CMDLINE;
 #ifdef FEAT_TERMINAL
     else if (term_use_loop())
@@ -1777,11 +1773,11 @@ get_menu_index(vimmenu_T *menu, int state)
 	else
 	    idx = MENU_INDEX_VISUAL;
     }
-    else if (state == HITRETURN || state == ASKMORE)
+    else if (state == MODE_HITRETURN || state == MODE_ASKMORE)
 	idx = MENU_INDEX_CMDLINE;
     else if (finish_op)
 	idx = MENU_INDEX_OP_PENDING;
-    else if ((state & NORMAL))
+    else if ((state & MODE_NORMAL))
 	idx = MENU_INDEX_NORMAL;
     else
 	idx = MENU_INDEX_INVALID;
@@ -1941,15 +1937,16 @@ get_menu_mode(void)
 	    return MENU_INDEX_SELECT;
 	return MENU_INDEX_VISUAL;
     }
-    if (State & INSERT)
+    if (State & MODE_INSERT)
 	return MENU_INDEX_INSERT;
-    if ((State & CMDLINE) || State == ASKMORE || State == HITRETURN)
+    if ((State & MODE_CMDLINE) || State == MODE_ASKMORE
+						    || State == MODE_HITRETURN)
 	return MENU_INDEX_CMDLINE;
     if (finish_op)
 	return MENU_INDEX_OP_PENDING;
-    if (State & NORMAL)
+    if (State & MODE_NORMAL)
 	return MENU_INDEX_NORMAL;
-    if (State & LANGMAP)	// must be a "r" command, like Insert mode
+    if (State & MODE_LANGMAP)	// must be a "r" command, like Insert mode
 	return MENU_INDEX_INSERT;
     return MENU_INDEX_INVALID;
 }
@@ -2080,10 +2077,7 @@ gui_update_menus_recurse(vimmenu_T *menu, int mode)
 	    grey = FALSE;
 	else
 	    grey = TRUE;
-# ifdef FEAT_GUI_ATHENA
-	// Hiding menus doesn't work for Athena, it can cause a crash.
-	gui_mch_menu_grey(menu, grey);
-# else
+
 	// Never hide a toplevel menu, it may make the menubar resize or
 	// disappear. Same problem for ToolBar items.
 	if (vim_strchr(p_go, GO_GREY) != NULL || menu->parent == NULL
@@ -2094,7 +2088,6 @@ gui_update_menus_recurse(vimmenu_T *menu, int mode)
 	    gui_mch_menu_grey(menu, grey);
 	else
 	    gui_mch_menu_hidden(menu, grey);
-# endif
 	gui_update_menus_recurse(menu->children, mode);
 	menu = menu->next;
     }
@@ -2379,12 +2372,11 @@ execute_menu(exarg_T *eap, vimmenu_T *menu, int mode_idx)
     }
 
     // For the WinBar menu always use the Normal mode menu.
-    if (idx == -1 || eap == NULL)
+    if (idx == MENU_INDEX_INVALID || eap == NULL)
 	idx = MENU_INDEX_NORMAL;
 
-    if (idx != MENU_INDEX_INVALID && menu->strings[idx] != NULL
-						 && (menu->strings[idx][0] != NUL)
-						 && (menu->modes & (1 << idx)))
+    if (menu->strings[idx] != NULL && menu->strings[idx][0] != NUL
+						&& (menu->modes & (1 << idx)))
     {
 	// When executing a script or function execute the commands right now.
 	// Also for the window toolbar.
@@ -3334,7 +3326,7 @@ f_menu_info(typval_T *argvars, typval_T *rettv)
     vimmenu_T	*menu;
     dict_T	*retdict;
 
-    if (rettv_dict_alloc(rettv) != OK)
+    if (rettv_dict_alloc(rettv) == FAIL)
 	return;
     retdict = rettv->vval.v_dict;
 

@@ -188,12 +188,12 @@ func Test_getcharpos()
   call assert_fails('call getcharpos({})', 'E731:')
   call assert_equal([0, 0, 0, 0], getcharpos(0))
   new
-  call setline(1, ['', "01\tà4è678", 'Ⅵ', '012345678'])
+  call setline(1, ['', "01\tà4è678", 'Ⅵ', '012345678', ' │  x'])
 
   " Test for '.' and '$'
   normal 1G
   call assert_equal([0, 1, 1, 0], getcharpos('.'))
-  call assert_equal([0, 4, 1, 0], getcharpos('$'))
+  call assert_equal([0, 5, 1, 0], getcharpos('$'))
   normal 2G6l
   call assert_equal([0, 2, 7, 0], getcharpos('.'))
   normal 3G$
@@ -206,6 +206,12 @@ func Test_getcharpos()
   call assert_equal([0, 2, 8, 0], getcharpos("'m"))
   delmarks m
   call assert_equal([0, 0, 0, 0], getcharpos("'m"))
+
+  " Check mark does not move
+  normal 5Gfxma
+  call assert_equal([0, 5, 5, 0], getcharpos("'a"))
+  call assert_equal([0, 5, 5, 0], getcharpos("'a"))
+  call assert_equal([0, 5, 5, 0], getcharpos("'a"))
 
   " Test for the visual start column
   vnoremap <expr> <F3> SaveVisualStartCharPos()
@@ -411,6 +417,28 @@ func Test_setcursorcharpos()
   call assert_equal([4, 1], [line('.'), col('.')])
 
   %bw!
+endfunc
+
+" Test for virtcol2col()
+func Test_virtcol2col()
+  new
+  call setline(1, ["a\tb\tc"])
+  call assert_equal(1, virtcol2col(0, 1, 1))
+  call assert_equal(2, virtcol2col(0, 1, 2))
+  call assert_equal(2, virtcol2col(0, 1, 8))
+  call assert_equal(3, virtcol2col(0, 1, 9))
+  call assert_equal(4, virtcol2col(0, 1, 10))
+  call assert_equal(4, virtcol2col(0, 1, 16))
+  call assert_equal(5, virtcol2col(0, 1, 17))
+  call assert_equal(-1, virtcol2col(10, 1, 1))
+  call assert_equal(-1, virtcol2col(0, 10, 1))
+  call assert_equal(-1, virtcol2col(0, -1, 1))
+  call assert_equal(-1, virtcol2col(0, 1, -1))
+  call assert_equal(5, virtcol2col(0, 1, 20))
+  call assert_fails('echo virtcol2col("0", 1, 20)', 'E1210:')
+  call assert_fails('echo virtcol2col(0, "1", 20)', 'E1210:')
+  call assert_fails('echo virtcol2col(0, 1, "1")', 'E1210:')
+  bw!
 endfunc
 
 " vim: shiftwidth=2 sts=2 expandtab

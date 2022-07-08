@@ -40,6 +40,9 @@ func Test_has()
   " Will we ever have patch 9999?
   let ver = 'patch-' .. v:version / 100 .. '.' .. v:version % 100 .. '.9999'
   call assert_equal(0, has(ver))
+
+  " There actually isn't a patch 9.0.0, but this is more consistent.
+  call assert_equal(1, has('patch-9.0.0'))
 endfunc
 
 func Test_empty()
@@ -1398,6 +1401,28 @@ func Test_Executable()
   endif
 endfunc
 
+func Test_executable_windows_store_apps()
+  CheckMSWindows
+
+  " Windows Store apps install some 'decoy' .exe that require some careful
+  " handling as they behave similarly to symlinks.
+  let app_dir = expand("$LOCALAPPDATA\\Microsoft\\WindowsApps")
+  if !isdirectory(app_dir)
+    return
+  endif
+
+  let save_path = $PATH
+  let $PATH = app_dir
+  " Ensure executable() finds all the app .exes
+  for entry in readdir(app_dir)
+    if entry =~ '\.exe$'
+      call assert_true(executable(entry))
+    endif
+  endfor
+
+  let $PATH = save_path
+endfunc
+
 func Test_executable_longname()
   CheckMSWindows
 
@@ -1522,6 +1547,10 @@ func Test_input_func()
   " Test for using special characters as default input
   call feedkeys(":let c = input('name? ', \"x\\<BS>y\")\<CR>\<CR>", 'xt')
   call assert_equal('y', c)
+
+  " Test for using text with composing characters as default input
+  call feedkeys(":let c = input('name? ', \"ã̳\")\<CR>\<CR>", 'xt')
+  call assert_equal('ã̳', c)
 
   " Test for using <CR> as default input
   call feedkeys(":let c = input('name? ', \"\\<CR>\")\<CR>x\<CR>", 'xt')
@@ -2242,6 +2271,15 @@ func Test_delete_rf()
   call assert_equal(0, delete('Xdir', 'rf'))
   call assert_false(filereadable('Xdir/foo.txt'))
   call assert_false(filereadable('Xdir/[a-1]/foo.txt'))
+
+  if has('unix')
+    call mkdir('Xdir/Xdir2', 'p')
+    silent !chmod 555 Xdir
+    call assert_equal(-1, delete('Xdir/Xdir2', 'rf'))
+    call assert_equal(-1, delete('Xdir', 'rf'))
+    silent !chmod 755 Xdir
+    call assert_equal(0, delete('Xdir', 'rf'))
+  endif
 endfunc
 
 func Test_call()
@@ -2648,7 +2686,8 @@ func Test_range()
     else
       let cmd = "ls"
     endif
-    call assert_fails('call term_start("' .. cmd .. '", #{term_finish: "close"})', 'E475:')
+    call assert_fails('call term_start("' .. cmd .. '", #{term_finish: "close"'
+        \ .. ', ansi_colors: range(16)})', 'E475:')
     unlet g:terminal_ansi_colors
   endif
 
@@ -2712,8 +2751,8 @@ func Test_nr2char()
   call assert_equal('a', nr2char(97, 1))
   call assert_equal('a', nr2char(97, 0))
 
-  call assert_equal("\x80\xfc\b\xf4\x80\xfeX\x80\xfeX\x80\xfeX", eval('"\<M-' .. nr2char(0x100000) .. '>"'))
-  call assert_equal("\x80\xfc\b\xfd\x80\xfeX\x80\xfeX\x80\xfeX\x80\xfeX\x80\xfeX", eval('"\<M-' .. nr2char(0x40000000) .. '>"'))
+  call assert_equal("\x80\xfc\b" .. nr2char(0x100000), eval('"\<M-' .. nr2char(0x100000) .. '>"'))
+  call assert_equal("\x80\xfc\b" .. nr2char(0x40000000), eval('"\<M-' .. nr2char(0x40000000) .. '>"'))
 endfunc
 
 " Test for screenattr(), screenchar() and screenchars() functions
@@ -2821,6 +2860,8 @@ func Test_glob()
   " Sort output of glob() otherwise we end up with different
   " ordering depending on whether file system is case-sensitive.
   call assert_equal(['XGLOB2', 'Xglob1'], sort(glob('Xglob[12]', 0, 1)))
+  " wildignorecase shall be applied even when the pattern contains no wildcards.
+  call assert_equal('XGLOB2', glob('xglob2'))
   set wildignorecase&
 
   call delete('Xglob1')
@@ -2876,5 +2917,52 @@ func Test_funcref_to_string()
   call assert_equal("function('g:Test_funcref_to_string')", string(Fn))
 endfunc
 
+" Test for isabsolutepath()
+func Test_isabsolutepath()
+  call assert_false(isabsolutepath(''))
+  call assert_false(isabsolutepath('.'))
+  call assert_false(isabsolutepath('../Foo'))
+  call assert_false(isabsolutepath('Foo/'))
+  if has('win32')
+    call assert_true(isabsolutepath('A:\'))
+    call assert_true(isabsolutepath('A:\Foo'))
+    call assert_true(isabsolutepath('A:/Foo'))
+    call assert_false(isabsolutepath('A:Foo'))
+    call assert_false(isabsolutepath('\Windows'))
+    call assert_true(isabsolutepath('\\Server2\Share\Test\Foo.txt'))
+  else
+    call assert_true(isabsolutepath('/'))
+    call assert_true(isabsolutepath('/usr/share/'))
+  endif
+endfunc
+
+" Test for exepath()
+func Test_exepath()
+  if has('win32')
+    call assert_notequal(exepath('cmd'), '')
+
+    let oldNoDefaultCurrentDirectoryInExePath = $NoDefaultCurrentDirectoryInExePath
+    call writefile(['@echo off', 'echo Evil'], 'vim-test-evil.bat')
+    let $NoDefaultCurrentDirectoryInExePath = ''
+    call assert_notequal(exepath("vim-test-evil.bat"), '')
+    let $NoDefaultCurrentDirectoryInExePath = '1'
+    call assert_equal(exepath("vim-test-evil.bat"), '')
+    let $NoDefaultCurrentDirectoryInExePath = oldNoDefaultCurrentDirectoryInExePath
+    call delete('vim-test-evil.bat')
+  else
+    call assert_notequal(exepath('sh'), '')
+  endif
+endfunc
+
+" Test for virtcol()
+func Test_virtcol()
+  enew!
+  call setline(1, "the\tquick\tbrown\tfox")
+  norm! 4|
+  call assert_equal(8, virtcol('.'))
+  call assert_equal(8, virtcol('.', v:false))
+  call assert_equal([4, 8], virtcol('.', v:true))
+  bwipe!
+endfunc
 
 " vim: shiftwidth=2 sts=2 expandtab

@@ -191,7 +191,8 @@ shortpath_for_invalid_fname(
 	}
 
 	// concat the not-shortened part of the path
-	vim_strncpy(*fname + len, endp, sfx_len);
+	if ((*fname + len) != endp)
+	    vim_strncpy(*fname + len, endp, sfx_len);
 	(*fname)[new_len] = NUL;
     }
 
@@ -773,6 +774,26 @@ shorten_dir(char_u *str)
     shorten_dir_len(str, 1);
 }
 
+/*
+ * Return TRUE if "fname" is a readable file.
+ */
+    int
+file_is_readable(char_u *fname)
+{
+    int		fd;
+
+#ifndef O_NONBLOCK
+# define O_NONBLOCK 0
+#endif
+    if (*fname && !mch_isdir(fname)
+	      && (fd = mch_open((char *)fname, O_RDONLY | O_NONBLOCK, 0)) >= 0)
+    {
+	close(fd);
+	return TRUE;
+    }
+    return FALSE;
+}
+
 #if defined(FEAT_EVAL) || defined(PROTO)
 
 /*
@@ -890,26 +911,6 @@ f_exepath(typval_T *argvars, typval_T *rettv)
     (void)mch_can_exe(tv_get_string(&argvars[0]), &p, TRUE);
     rettv->v_type = VAR_STRING;
     rettv->vval.v_string = p;
-}
-
-/*
- * Return TRUE if "fname" is a readable file.
- */
-    int
-file_is_readable(char_u *fname)
-{
-    int		fd;
-
-#ifndef O_NONBLOCK
-# define O_NONBLOCK 0
-#endif
-    if (*fname && !mch_isdir(fname)
-	      && (fd = mch_open((char *)fname, O_RDONLY | O_NONBLOCK, 0)) >= 0)
-    {
-	close(fd);
-	return TRUE;
-    }
-    return FALSE;
 }
 
 /*
@@ -1313,7 +1314,7 @@ f_glob(typval_T *argvars, typval_T *rettv)
 	if (rettv->v_type == VAR_STRING)
 	    rettv->vval.v_string = ExpandOne(&xpc, tv_get_string(&argvars[0]),
 						     NULL, options, WILD_ALL);
-	else if (rettv_list_alloc(rettv) != FAIL)
+	else if (rettv_list_alloc(rettv) == OK)
 	{
 	  int i;
 
@@ -1394,7 +1395,7 @@ f_globpath(typval_T *argvars, typval_T *rettv)
 	globpath(tv_get_string(&argvars[0]), file, &ga, flags);
 	if (rettv->v_type == VAR_STRING)
 	    rettv->vval.v_string = ga_concat_strings(&ga, "\n");
-	else if (rettv_list_alloc(rettv) != FAIL)
+	else if (rettv_list_alloc(rettv) == OK)
 	    for (i = 0; i < ga.ga_len; ++i)
 		list_append_string(rettv->vval.v_list,
 					    ((char_u **)(ga.ga_data))[i], -1);
@@ -1414,6 +1415,18 @@ f_isdirectory(typval_T *argvars, typval_T *rettv)
 	return;
 
     rettv->vval.v_number = mch_isdir(tv_get_string(&argvars[0]));
+}
+
+/*
+ * "isabsolutepath()" function
+ */
+    void
+f_isabsolutepath(typval_T *argvars, typval_T *rettv)
+{
+    if (in_vim9script() && check_for_string_arg(argvars, 0) == FAIL)
+	return;
+
+    rettv->vval.v_number = mch_isFullName(tv_get_string_strict(&argvars[0]));
 }
 
 /*
@@ -1605,7 +1618,7 @@ readdirex_dict_arg(typval_T *tv, int *cmp)
 	return FAIL;
     }
 
-    if (dict_find(tv->vval.v_dict, (char_u *)"sort", -1) != NULL)
+    if (dict_has_key(tv->vval.v_dict, "sort"))
 	compare = dict_get_string(tv->vval.v_dict, (char_u *)"sort", FALSE);
     else
     {
@@ -1636,7 +1649,7 @@ f_readdir(typval_T *argvars, typval_T *rettv)
     char_u	*p;
     garray_T	ga;
     int		i;
-    int         sort = READDIR_SORT_BYTE;
+    int		sort = READDIR_SORT_BYTE;
 
     if (rettv_list_alloc(rettv) == FAIL)
 	return;
@@ -1689,7 +1702,7 @@ f_readdirex(typval_T *argvars, typval_T *rettv)
     char_u	*path;
     garray_T	ga;
     int		i;
-    int         sort = READDIR_SORT_BYTE;
+    int		sort = READDIR_SORT_BYTE;
 
     if (rettv_list_alloc(rettv) == FAIL)
 	return;
@@ -3085,7 +3098,7 @@ expand_wildcards_eval(
     {
 	++emsg_off;
 	eval_pat = eval_vars(exp_pat, exp_pat, &usedlen,
-						    NULL, &ignored_msg, NULL);
+					       NULL, &ignored_msg, NULL, TRUE);
 	--emsg_off;
 	if (eval_pat != NULL)
 	    exp_pat = concat_str(eval_pat, exp_pat + usedlen);
@@ -3577,6 +3590,7 @@ unix_expandpath(
     int		didstar)	// expanded "**" once already
 {
     char_u	*buf;
+    size_t	buflen;
     char_u	*path_end;
     char_u	*p, *s, *e;
     int		start_len = gap->ga_len;
@@ -3600,7 +3614,8 @@ unix_expandpath(
     }
 
     // make room for file name
-    buf = alloc(STRLEN(path) + BASENAMELEN + 5);
+    buflen = STRLEN(path) + BASENAMELEN + 5;
+    buf = alloc(buflen);
     if (buf == NULL)
 	return 0;
 
@@ -3725,14 +3740,14 @@ unix_expandpath(
 		{
 		    // For "**" in the pattern first go deeper in the tree to
 		    // find matches.
-		    STRCPY(buf + len, "/**");
-		    STRCPY(buf + len + 3, path_end);
+		    vim_snprintf((char *)buf + len, buflen - len,
+							    "/**%s", path_end);
 		    ++stardepth;
 		    (void)unix_expandpath(gap, buf, len + 1, flags, TRUE);
 		    --stardepth;
 		}
 
-		STRCPY(buf + len, path_end);
+		vim_snprintf((char *)buf + len, buflen - len, "%s", path_end);
 		if (mch_has_exp_wildcard(path_end)) // handle more wildcards
 		{
 		    // need to expand another component of the path
@@ -3945,13 +3960,13 @@ gen_expand_wildcards(
 	    }
 
 	    /*
-	     * If there are wildcards: Expand file names and add each match to
-	     * the list.  If there is no match, and EW_NOTFOUND is given, add
-	     * the pattern.
-	     * If there are no wildcards: Add the file name if it exists or
-	     * when EW_NOTFOUND is given.
+	     * If there are wildcards or case-insensitive expansion is
+	     * required: Expand file names and add each match to the list.  If
+	     * there is no match, and EW_NOTFOUND is given, add the pattern.
+	     * Otherwise: Add the file name if it exists or when EW_NOTFOUND is
+	     * given.
 	     */
-	    if (mch_has_exp_wildcard(p))
+	    if (mch_has_exp_wildcard(p) || (flags & EW_ICASE))
 	    {
 #if defined(FEAT_SEARCHPATH)
 		if ((flags & EW_PATH)
@@ -3999,7 +4014,7 @@ gen_expand_wildcards(
 
     // When returning FAIL the array must be freed here.
     if (retval == FAIL)
-	ga_clear(&ga);
+	ga_clear_strings(&ga);
 
     *num_file = ga.ga_len;
     *file = (ga.ga_data != NULL) ? (char_u **)ga.ga_data

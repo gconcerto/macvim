@@ -95,7 +95,7 @@ func CheckUnix()
   endif
 endfunc
 
-" Command to check for running on Linix
+" Command to check for running on Linux
 command CheckLinux call CheckLinux()
 func CheckLinux()
   if !has('linux')
@@ -108,6 +108,14 @@ command CheckNotBSD call CheckNotBSD()
 func CheckNotBSD()
   if has('bsd')
     throw 'Skipped: does not work on BSD'
+  endif
+endfunc
+
+" Command to check for not running on a MacVim.
+command CheckNotMacVim call CheckNotMacVim()
+func CheckNotMacVim()
+  if has('gui_macvim')
+    throw 'Skipped: does not work on MacVim'
   endif
 endfunc
 
@@ -214,6 +222,14 @@ command CheckNotAsan call CheckNotAsan()
 func CheckNotAsan()
   if execute('version') =~# '-fsanitize=[a-z,]*\<address\>'
     throw 'Skipped: does not work with ASAN'
+  endif
+endfunc
+
+" Command to check for not running under valgrind
+command CheckNotValgrind call CheckNotValgrind()
+func CheckNotValgrind()
+  if RunningWithValgrind()
+    throw 'Skipped: does not work well with valgrind'
   endif
 endfunc
 

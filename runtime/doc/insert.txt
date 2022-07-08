@@ -1,4 +1,4 @@
-*insert.txt*    For Vim version 8.2.  Last change: 2022 Mar 28
+*insert.txt*    For Vim version 9.0.  Last change: 2022 Apr 06
 
 
 		  VIM REFERENCE MANUAL    by Bram Moolenaar
@@ -272,7 +272,7 @@ CTRL-]		Trigger abbreviation, without inserting a character.
 
 						*i_backspacing*
 The effect of the <BS>, CTRL-W, and CTRL-U depend on the 'backspace' option
-(unless 'revins' is set).  This is a comma separated list of items:
+(unless 'revins' is set).  This is a comma-separated list of items:
 
 item	    action ~
 indent	    allow backspacing over autoindent
@@ -671,7 +671,7 @@ Note: The keys that are valid in CTRL-X mode are not mapped.  This allows for
 ends CTRL-X mode (any key that is not a valid CTRL-X mode command) is mapped.
 Also, when doing completion with 'complete' mappings apply as usual.
 
-							*E578* *E565*
+								*E565*
 Note: While completion is active Insert mode can't be used recursively and
 buffer text cannot be changed.  Mappings that somehow invoke ":normal i.."
 will generate an E565 error.
@@ -1196,7 +1196,7 @@ three lines, but 'previewheight' is used when it has a value of 1 or 2.
 						*complete-popup*
 When "popup" is in 'completeopt' a popup window is used to display the "info".
 Then the 'completepopup' option specifies the properties of the popup.  This
-is used when the info popup is created.  The option is a comma separated list
+is used when the info popup is created.  The option is a comma-separated list
 of values:
 	height		maximum height of the popup
 	width		maximum width of the popup

@@ -482,6 +482,33 @@ func Test_list_mappings()
   call assert_match("\tLast set from .*/test_mapping.vim line \\d\\+$",
         \ execute('verbose map ,n')->trim()->split("\n")[1])
 
+  " character with K_SPECIAL byte in rhs
+  nmap foo …
+  call assert_equal(['n  foo           …'],
+        \ execute('nmap foo')->trim()->split("\n"))
+
+  " modified character with K_SPECIAL byte in rhs
+  nmap foo <M-…>
+  call assert_equal(['n  foo           <M-…>'],
+        \ execute('nmap foo')->trim()->split("\n"))
+
+  " character with K_SPECIAL byte in lhs
+  nmap … foo
+  call assert_equal(['n  …             foo'],
+        \ execute('nmap …')->trim()->split("\n"))
+
+  " modified character with K_SPECIAL byte in lhs
+  nmap <M-…> foo
+  call assert_equal(['n  <M-…>         foo'],
+        \ execute('nmap <M-…>')->trim()->split("\n"))
+
+  " illegal bytes
+  let str = ":\x7f:\x80:\x90:\xd0:"
+  exe 'nmap foo ' .. str
+  call assert_equal(['n  foo           ' .. strtrans(str)],
+        \ execute('nmap foo')->trim()->split("\n"))
+  unlet str
+
   " map to CTRL-V
   exe "nmap ,k \<C-V>"
   call assert_equal(['n  ,k            <Nop>'],
@@ -1565,5 +1592,137 @@ func Test_plug_remap()
   unlet g:foo
   %bw!
 endfunc
+
+func Test_mouse_drag_mapped_start_select()
+  set mouse=a
+  set selectmode=key,mouse
+  func ClickExpr()
+    call test_setmouse(1, 1)
+    return "\<LeftMouse>"
+  endfunc
+  func DragExpr()
+    call test_setmouse(1, 2)
+    return "\<LeftDrag>"
+  endfunc
+  nnoremap <expr> <F2> ClickExpr()
+  nmap <expr> <F3> DragExpr()
+
+  nnoremap <LeftDrag> <LeftDrag><Cmd><CR>
+  exe "normal \<F2>\<F3>"
+  call assert_equal('s', mode())
+  exe "normal! \<C-\>\<C-N>"
+
+  nunmap <LeftDrag>
+  nunmap <F2>
+  nunmap <F3>
+  delfunc ClickExpr
+  delfunc DragExpr
+  set selectmode&
+  set mouse&
+endfunc
+
+" Test for mapping <LeftDrag> in Insert mode
+func Test_mouse_drag_insert_map()
+  set mouse=a
+  func ClickExpr()
+    call test_setmouse(1, 1)
+    return "\<LeftMouse>"
+  endfunc
+  func DragExpr()
+    call test_setmouse(1, 2)
+    return "\<LeftDrag>"
+  endfunc
+  inoremap <expr> <F2> ClickExpr()
+  imap <expr> <F3> DragExpr()
+
+  inoremap <LeftDrag> <LeftDrag><Cmd>let g:dragged = 1<CR>
+  exe "normal i\<F2>\<F3>"
+  call assert_equal(1, g:dragged)
+  call assert_equal('v', mode())
+  exe "normal! \<C-\>\<C-N>"
+  unlet g:dragged
+
+  inoremap <LeftDrag> <LeftDrag><C-\><C-N>
+  exe "normal i\<F2>\<F3>"
+  call assert_equal('n', mode())
+
+  iunmap <LeftDrag>
+  iunmap <F2>
+  iunmap <F3>
+  delfunc ClickExpr
+  delfunc DragExpr
+  set mouse&
+endfunc
+
+func Test_unmap_simplifiable()
+  map <C-I> foo
+  map <Tab> bar
+  call assert_equal('foo', maparg('<C-I>'))
+  call assert_equal('bar', maparg('<Tab>'))
+  unmap <C-I>
+  call assert_equal('', maparg('<C-I>'))
+  call assert_equal('bar', maparg('<Tab>'))
+  unmap <Tab>
+
+  map <C-I> foo
+  unmap <Tab>
+  " This should not error
+  unmap <C-I>
+endfunc
+
+func Test_expr_map_escape_special()
+  nnoremap … <Cmd>let g:got_ellipsis += 1<CR>
+  func Func()
+    return '…'
+  endfunc
+  nmap <expr> <F2> Func()
+  let g:got_ellipsis = 0
+  call feedkeys("\<F2>", 'xt')
+  call assert_equal(1, g:got_ellipsis)
+  delfunc Func
+  nunmap <F2>
+  unlet g:got_ellipsis
+  nunmap …
+endfunc
+
+" Testing for mapping after an <Nop> mapping is triggered on timeout.
+" Test for what patch 8.1.0052 fixes.
+func Test_map_after_timed_out_nop()
+  CheckRunVimInTerminal
+
+  let lines =<< trim END
+    set timeout timeoutlen=400
+    inoremap ab TEST
+    inoremap a <Nop>
+  END
+  call writefile(lines, 'Xtest_map_after_timed_out_nop')
+  let buf = RunVimInTerminal('-S Xtest_map_after_timed_out_nop', #{rows: 6})
+
+  " Enter Insert mode
+  call term_sendkeys(buf, 'i')
+  " Wait for the "a" mapping to timeout
+  call term_sendkeys(buf, 'a')
+  call term_wait(buf, 500)
+  " Send "a" and wait for a period shorter than 'timeoutlen'
+  call term_sendkeys(buf, 'a')
+  call term_wait(buf, 100)
+  " Send "b", should trigger the "ab" mapping
+  call term_sendkeys(buf, 'b')
+  call WaitForAssert({-> assert_equal("TEST", term_getline(buf, 1))})
+
+  " clean up
+  call StopVimInTerminal(buf)
+  call delete('Xtest_map_after_timed_out_nop')
+endfunc
+
+func Test_using_past_typeahead()
+  nnoremap :00 0
+  exe "norm :set \x80\xfb0=0\<CR>"
+  exe "sil norm :0\x0f\<C-U>\<CR>"
+
+  exe "norm :set \x80\xfb0=\<CR>"
+  nunmap :00
+endfunc
+
 
 " vim: shiftwidth=2 sts=2 expandtab

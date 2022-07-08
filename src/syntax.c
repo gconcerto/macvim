@@ -266,9 +266,6 @@ static reg_extmatch_T *next_match_extmatch = NULL;
 static win_T	*syn_win;		// current window for highlighting
 static buf_T	*syn_buf;		// current buffer for highlighting
 static synblock_T *syn_block;		// current buffer for highlighting
-#ifdef FEAT_RELTIME
-static proftime_T *syn_tm;		// timeout limit
-#endif
 static linenr_T current_lnum = 0;	// lnum of current state
 static colnr_T	current_col = 0;	// column of current state
 static int	current_state_stored = 0; // TRUE if stored current state
@@ -349,18 +346,6 @@ static void init_syn_patterns(void);
 static char_u *get_syn_pattern(char_u *arg, synpat_T *ci);
 static int get_id_list(char_u **arg, int keylen, short **list, int skip);
 static void syn_combine_list(short **clstr1, short **clstr2, int list_op);
-
-#if defined(FEAT_RELTIME) || defined(PROTO)
-/*
- * Set the timeout used for syntax highlighting.
- * Use NULL to reset, no timeout.
- */
-    void
-syn_set_timeout(proftime_T *tm)
-{
-    syn_tm = tm;
-}
-#endif
 
 /*
  * Start the syntax recognition for a line.  This function is normally called
@@ -2504,55 +2489,53 @@ check_state_ends(void)
 		next_match_col = MAXCOL;
 		break;
 	    }
-	    else
+
+	    // handle next_list, unless at end of line and no "skipnl" or
+	    // "skipempty"
+	    current_next_list = cur_si->si_next_list;
+	    current_next_flags = cur_si->si_flags;
+	    if (!(current_next_flags & (HL_SKIPNL | HL_SKIPEMPTY))
+		    && syn_getcurline()[current_col] == NUL)
+		current_next_list = NULL;
+
+	    // When the ended item has "extend", another item with
+	    // "keepend" now needs to check for its end.
+	    had_extend = (cur_si->si_flags & HL_EXTEND);
+
+	    pop_current_state();
+
+	    if (current_state.ga_len == 0)
+		break;
+
+	    if (had_extend && keepend_level >= 0)
 	    {
-		// handle next_list, unless at end of line and no "skipnl" or
-		// "skipempty"
-		current_next_list = cur_si->si_next_list;
-		current_next_flags = cur_si->si_flags;
-		if (!(current_next_flags & (HL_SKIPNL | HL_SKIPEMPTY))
-			&& syn_getcurline()[current_col] == NUL)
-		    current_next_list = NULL;
-
-		// When the ended item has "extend", another item with
-		// "keepend" now needs to check for its end.
-		 had_extend = (cur_si->si_flags & HL_EXTEND);
-
-		pop_current_state();
-
+		syn_update_ends(FALSE);
 		if (current_state.ga_len == 0)
 		    break;
+	    }
 
-		if (had_extend && keepend_level >= 0)
-		{
-		    syn_update_ends(FALSE);
-		    if (current_state.ga_len == 0)
-			break;
-		}
+	    cur_si = &CUR_STATE(current_state.ga_len - 1);
 
-		cur_si = &CUR_STATE(current_state.ga_len - 1);
-
-		/*
-		 * Only for a region the search for the end continues after
-		 * the end of the contained item.  If the contained match
-		 * included the end-of-line, break here, the region continues.
-		 * Don't do this when:
-		 * - "keepend" is used for the contained item
-		 * - not at the end of the line (could be end="x$"me=e-1).
-		 * - "excludenl" is used (HL_HAS_EOL won't be set)
-		 */
-		if (cur_si->si_idx >= 0
-			&& SYN_ITEMS(syn_block)[cur_si->si_idx].sp_type
-							       == SPTYPE_START
-			&& !(cur_si->si_flags & (HL_MATCH | HL_KEEPEND)))
-		{
-		    update_si_end(cur_si, (int)current_col, TRUE);
-		    check_keepend();
-		    if ((current_next_flags & HL_HAS_EOL)
-			    && keepend_level < 0
-			    && syn_getcurline()[current_col] == NUL)
-			break;
-		}
+	    /*
+	     * Only for a region the search for the end continues after
+	     * the end of the contained item.  If the contained match
+	     * included the end-of-line, break here, the region continues.
+	     * Don't do this when:
+	     * - "keepend" is used for the contained item
+	     * - not at the end of the line (could be end="x$"me=e-1).
+	     * - "excludenl" is used (HL_HAS_EOL won't be set)
+	     */
+	    if (cur_si->si_idx >= 0
+		    && SYN_ITEMS(syn_block)[cur_si->si_idx].sp_type
+								== SPTYPE_START
+		    && !(cur_si->si_flags & (HL_MATCH | HL_KEEPEND)))
+	    {
+		update_si_end(cur_si, (int)current_col, TRUE);
+		check_keepend();
+		if ((current_next_flags & HL_HAS_EOL)
+			&& keepend_level < 0
+			&& syn_getcurline()[current_col] == NUL)
+		    break;
 	    }
 	}
 	else
@@ -3167,10 +3150,8 @@ syn_regexec(
     colnr_T	col,
     syn_time_T  *st UNUSED)
 {
-    int r;
-#ifdef FEAT_RELTIME
-    int timed_out = FALSE;
-#endif
+    int		r;
+    int		timed_out = FALSE;
 #ifdef FEAT_PROFILE
     proftime_T	pt;
 
@@ -3185,13 +3166,7 @@ syn_regexec(
 	return FALSE;
 
     rmp->rmm_maxcol = syn_buf->b_p_smc;
-    r = vim_regexec_multi(rmp, syn_win, syn_buf, lnum, col,
-#ifdef FEAT_RELTIME
-	    syn_tm, &timed_out
-#else
-	    NULL, NULL
-#endif
-	    );
+    r = vim_regexec_multi(rmp, syn_win, syn_buf, lnum, col, &timed_out);
 
 #ifdef FEAT_PROFILE
     if (syn_time_on)
@@ -3206,7 +3181,7 @@ syn_regexec(
     }
 #endif
 #ifdef FEAT_RELTIME
-    if (timed_out && !syn_win->w_s->b_syn_slow)
+    if (timed_out && redrawtime_limit_set && !syn_win->w_s->b_syn_slow)
     {
 	syn_win->w_s->b_syn_slow = TRUE;
 	msg(_("'redrawtime' exceeded, syntax highlighting disabled"));
@@ -6488,8 +6463,9 @@ syn_get_id(
     int		keep_state)  // keep state of char at "col"
 {
     // When the position is not after the current position and in the same
-    // line of the same buffer, need to restart parsing.
-    if (wp->w_buffer != syn_buf
+    // line of the same window with the same buffer, need to restart parsing.
+    if (wp != syn_win
+	    || wp->w_buffer != syn_buf
 	    || lnum != current_lnum
 	    || col < current_col)
 	syntax_start(wp, lnum);

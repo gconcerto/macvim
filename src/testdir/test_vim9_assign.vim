@@ -213,6 +213,8 @@ def Test_assignment()
   v9.CheckDefFailure(['var s:var = 123'], 'E1101:')
   v9.CheckDefFailure(['var s:var: number'], 'E1101:')
 
+  v9.CheckDefAndScriptFailure(['var $VAR: number'], ['E1016:', 'E475:'])
+
   lines =<< trim END
     vim9script
     def SomeFunc()
@@ -288,6 +290,12 @@ def Test_assign_concat()
     s ..= {a: 2}
   END
   v9.CheckDefAndScriptFailure(lines, ['E1105: Cannot convert dict to string', 'E734: Wrong variable type for .='], 2)
+
+  lines =<< trim END
+      var ls: list<string> = []
+      ls[-1] ..= 'foo'
+  END
+  v9.CheckDefExecAndScriptFailure(lines, 'E684: List index out of range: -1', 2)
 enddef
 
 def Test_assign_register()
@@ -733,7 +741,16 @@ def Test_init_in_for_loop()
   v9.CheckDefAndScriptSuccess(lines)
 enddef
 
+def Test_redir_is_not_assign()
+  if false
+    redir => res
+    echo var_job
+    redir END
+  endif
+enddef
+
 def Test_extend_list()
+  # using uninitialized list assigns empty list
   var lines =<< trim END
       var l1: list<number>
       var l2 = l1
@@ -751,7 +768,7 @@ def Test_extend_list()
   END
   v9.CheckDefAndScriptSuccess(lines)
 
-  # appending to NULL list from a function
+  # appending to uninitialized list from a function works
   lines =<< trim END
       vim9script
       var list: list<string>
@@ -773,13 +790,30 @@ def Test_extend_list()
   END
   v9.CheckScriptSuccess(lines)
 
+  # initialized to null, with type, does not default to empty list
   lines =<< trim END
       vim9script
       var l: list<string> = test_null_list()
       extend(l, ['x'])
-      assert_equal(['x'], l)
   END
-  v9.CheckScriptSuccess(lines)
+  v9.CheckScriptFailure(lines, 'E1134:', 3)
+
+  # initialized to null, without type, does not default to empty list
+  lines =<< trim END
+      vim9script
+      var l = null_list
+      extend(l, ['x'])
+  END
+  v9.CheckScriptFailure(lines, 'E1134:', 3)
+
+  # assigned null, does not default to empty list
+  lines =<< trim END
+      vim9script
+      var l: list<string>
+      l = null_list
+      extend(l, ['x'])
+  END
+  v9.CheckScriptFailure(lines, 'E1134:', 4)
 
   lines =<< trim END
       vim9script
@@ -832,9 +866,8 @@ def Test_extend_dict()
       vim9script
       var d: dict<string> = test_null_dict()
       extend(d, {a: 'x'})
-      assert_equal({a: 'x'}, d)
   END
-  v9.CheckScriptSuccess(lines)
+  v9.CheckScriptFailure(lines, 'E1133:', 3)
 
   lines =<< trim END
       vim9script
@@ -1087,6 +1120,9 @@ def Test_assignment_dict()
   var dict3: dict<string> = {key: 'value'}
   var dict4: dict<any> = {one: 1, two: '2'}
   var dict5: dict<blob> = {one: 0z01, two: 0z02}
+
+  # check the type is OK
+  var events: dict<string> = v:event
 
   # overwrite
   dict3['key'] = 'another'
@@ -1610,7 +1646,7 @@ def Test_assign_list()
       l[g:idx : 1] = [0]
       echo l
   END
-  v9.CheckDefExecAndScriptFailure(lines, 'E684: list index out of range: 3')
+  v9.CheckDefExecAndScriptFailure(lines, 'E684: List index out of range: 3')
 
   lines =<< trim END
       var l = [1, 2]
@@ -1798,10 +1834,31 @@ def Test_assign_lambda()
 enddef
 
 def Test_heredoc()
-  var lines =<< trim END # comment
-    text
+  # simple heredoc
+  var lines =<< trim END
+    var text =<< trim TEXT # comment
+      abc
+    TEXT
+    assert_equal(['abc'], text)
   END
-  assert_equal(['text'], lines)
+  v9.CheckDefAndScriptSuccess(lines)
+
+  # empty heredoc
+  lines =<< trim END
+     var text =<< trim TEXT
+     TEXT
+     assert_equal([], text)
+  END
+  v9.CheckDefAndScriptSuccess(lines)
+
+  # heredoc with a single empty line
+  lines =<< trim END
+     var text =<< trim TEXT
+
+     TEXT
+     assert_equal([''], text)
+  END
+  v9.CheckDefAndScriptSuccess(lines)
 
   v9.CheckDefFailure(['var lines =<< trim END X', 'END'], 'E488:')
   v9.CheckDefFailure(['var lines =<< trim END " comment', 'END'], 'E488:')
@@ -2051,6 +2108,32 @@ def Test_var_declaration_fails()
       va foo = 123
   END
   v9.CheckDefAndScriptFailure(lines, 'E1065:', 1)
+
+  lines =<< trim END
+      var foo: func(number
+  END
+  v9.CheckDefAndScriptFailure(lines, 'E110:', 1)
+
+  lines =<< trim END
+      var foo: func(number): func(
+  END
+  v9.CheckDefAndScriptFailure(lines, 'E110:', 1)
+
+  for type in ['num_ber',
+               'anys', 'ani',
+               'bools', 'boel',
+               'blobs', 'blub',
+               'channels', 'channol',
+               'dicts', 'duct',
+               'floats', 'floot',
+               'funcs', 'funk',
+               'jobs', 'jop',
+               'lists', 'last'
+               'numbers', 'numbar',
+               'strings', 'strung',
+               'voids', 'viod']
+    v9.CheckDefAndScriptFailure([$'var foo: {type}'], 'E1010:', 1)
+  endfor
 enddef
 
 def Test_var_declaration_inferred()
@@ -2064,6 +2147,34 @@ def Test_var_declaration_inferred()
       echo GetList()->extend(['x'])
   END
   v9.CheckScriptFailure(lines, 'E1013:', 6)
+
+  lines =<< trim END
+      vim9script
+      def GetNr(): number
+        return 5
+      enddef
+      def TestOne()
+        var some = [function('len'), GetNr]
+        g:res = typename(some)
+      enddef
+      TestOne()
+      assert_equal('list<func(): number>', g:res)
+
+      def TestTwo()
+        var some = [function('len'), GetNr]
+        g:res = typename(some)
+      enddef
+      TestTwo()
+      assert_equal('list<func(): number>', g:res)
+      unlet g:res
+
+      # FIXME: why is the type different?
+      var first = [function('len'), GetNr]
+      assert_equal('list<func(...): number>', typename(first))
+      var second = [GetNr, function('len')]
+      assert_equal('list<func(...): number>', typename(second))
+  END
+  v9.CheckScriptSuccess(lines)
 enddef
 
 def Test_script_local_in_legacy()
@@ -2614,6 +2725,73 @@ def Test_using_s_var_in_function()
   v9.CheckScriptSuccess(lines)
 enddef
 
+let g:someVar = 'X'
 
+" Test for heredoc with Vim expressions.
+" This messes up highlighting, keep it near the end.
+def Test_heredoc_expr()
+  var lines =<< trim CODE
+    var s = "local"
+    var a1 = "1"
+    var a2 = "2"
+    var a3 = "3"
+    var a4 = ""
+    var code =<< trim eval END
+      var a = {5 + 10}
+      var b = {min([10, 6])} + {max([4, 6])}
+      var c = "{s}"
+      var d = x{a1}x{a2}x{a3}x{a4}
+    END
+    assert_equal(['var a = 15', 'var b = 6 + 6', 'var c = "local"', 'var d = x1x2x3x'], code)
+  CODE
+  v9.CheckDefAndScriptSuccess(lines)
+
+  lines =<< trim CODE
+    var code =<< eval trim END
+      var s = "{$SOME_ENV_VAR}"
+    END
+    assert_equal(['var s = "somemore"'], code)
+  CODE
+  v9.CheckDefAndScriptSuccess(lines)
+
+  lines =<< trim CODE
+    var code =<< eval END
+      var s = "{$SOME_ENV_VAR}"
+    END
+    assert_equal(['  var s = "somemore"'], code)
+  CODE
+  v9.CheckDefAndScriptSuccess(lines)
+
+  lines =<< trim CODE
+    var code =<< eval trim END
+      let a = {{abc}}
+      let b = {g:someVar}
+      let c = {{
+    END
+    assert_equal(['let a = {abc}', 'let b = X', 'let c = {'], code)
+  CODE
+  v9.CheckDefAndScriptSuccess(lines)
+
+  lines =<< trim LINES
+      var text =<< eval trim END
+        let b = {
+      END
+  LINES
+  v9.CheckDefAndScriptFailure(lines, "E1279: Missing '}'")
+
+  lines =<< trim LINES
+      var text =<< eval trim END
+        let b = {abc
+      END
+  LINES
+  v9.CheckDefAndScriptFailure(lines, "E1279: Missing '}'")
+
+  lines =<< trim LINES
+      var text =<< eval trim END
+        let b = {}
+      END
+  LINES
+  v9.CheckDefAndScriptFailure(lines, 'E15: Invalid expression: "}"')
+enddef
 
 " vim: ts=8 sw=2 sts=2 expandtab tw=80 fdm=marker
