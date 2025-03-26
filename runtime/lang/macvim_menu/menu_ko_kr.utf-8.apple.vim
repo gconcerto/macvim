@@ -7,7 +7,7 @@ menutrans Open… 열기…
 menutrans Open\ Recent 최근\ 사용\ 열기
 menutrans Close\ Window<Tab>:qa 윈도우\ 닫기
 menutrans Close<Tab>:q 닫기
-menutrans Save\ As…<Tab>:sav 별도\ 저장...
+menutrans Save\ As…<Tab>:sav 별도\ 저장\.\.\.
 menutrans Save\ All 모두\ 저장
 menutrans Find 찾기
 menutrans Find… 찾기…
@@ -25,4 +25,6 @@ menutrans Zoom\ All 모두\ 확대/축소
 menutrans Show\ Next\ Tab 다음\ 탭\ 보기
 menutrans Show\ Previous\ Tab 이전\ 탭\ 보기
 menutrans Bring\ All\ to\ Front 모두\ 앞으로\ 가져오기
+menutrans What's\ New 새로운\ 기능
 menutrans Release\ Notes 릴리즈\ 노트
+menutrans Look\ Up 찾아보기

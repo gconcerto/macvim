@@ -40,6 +40,8 @@ NSString *MMRendererKey	       = @"MMRenderer";
 // Vim find pasteboard type (string contains Vim regex patterns)
 NSString *VimFindPboardType = @"VimFindPboardType";
 
+NSString *MMSystemFontAlias = @"-monospace-";
+
 int ASLogLevel = MM_ASL_LEVEL_DEFAULT;
 
 
@@ -51,7 +53,7 @@ int ASLogLevel = MM_ASL_LEVEL_DEFAULT;
 debugStringForMessageQueue(NSArray *queue)
 {
     NSMutableString *s = [NSMutableString new];
-    unsigned i, count = [queue count];
+    NSUInteger i, count = [queue count];
     int item = 0, menu = 0, enable = 0, remove = 0;
     int sets = 0, sett = 0, shows = 0, cres = 0, dess = 0;
     for (i = 0; i < count; i += 2) {
@@ -159,7 +161,7 @@ debugStringForMessageQueue(NSArray *queue)
 
 - (unsigned)argbInt {
     CGFloat rf, gf, bf, af;
-    [[self colorUsingColorSpace:NSColorSpace.deviceRGBColorSpace]
+    [[self colorUsingColorSpace:NSColorSpace.sRGBColorSpace]
      getRed:&rf green:&gf blue:&bf alpha:&af];
     unsigned r = rf * 255, g = gf * 255, b = bf * 255, a = af*255;
     return a<<24 | r<<16 | g<<8 | b;
@@ -171,7 +173,7 @@ debugStringForMessageQueue(NSArray *queue)
     float g = ((rgb>>8) & 0xff)/255.0f;
     float b = (rgb & 0xff)/255.0f;
 
-    return [NSColor colorWithDeviceRed:r green:g blue:b alpha:1.0f];
+    return [NSColor colorWithSRGBRed:r green:g blue:b alpha:1.0f];
 }
 
 + (NSColor *)colorWithArgbInt:(unsigned)argb
@@ -181,7 +183,7 @@ debugStringForMessageQueue(NSArray *queue)
     float g = ((argb>>8) & 0xff)/255.0f;
     float b = (argb & 0xff)/255.0f;
 
-    return [NSColor colorWithDeviceRed:r green:g blue:b alpha:a];
+    return [NSColor colorWithSRGBRed:r green:g blue:b alpha:a];
 }
 
 @end // NSColor (MMExtras)
@@ -253,7 +255,7 @@ debugStringForMessageQueue(NSArray *queue)
 
 
     void
-ASLInit()
+ASLInit(void)
 {
     NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
 

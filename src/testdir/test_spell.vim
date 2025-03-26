@@ -5,6 +5,7 @@ source check.vim
 CheckFeature spell
 
 source screendump.vim
+source view_util.vim
 
 func TearDown()
   set nospell
@@ -132,6 +133,26 @@ foobar/?
   set spell&
 endfunc
 
+func Test_spell_camelcase()
+  set spell spelloptions=camel
+  let words = [
+      \ 'UPPER',
+      \ 'lower',
+      \ 'mixedCase',
+      \ 'HTML',
+      \ 'XMLHttpRequest',
+      \ 'foo123bar',
+      \ '12345678',
+      \ 'HELLO123world',
+      \]
+
+  for word in words
+    call assert_equal(['', ''],  spellbadword(word))
+  endfor
+
+  set spell& spelloptions&
+endfunc
+
 func Test_spell_file_missing()
   let s:spell_file_missing = 0
   augroup TestSpellFileMissing
@@ -147,7 +168,7 @@ func Test_spell_file_missing()
   augroup TestSpellFileMissing
     autocmd! SpellFileMissing * bwipe
   augroup END
-  call assert_fails('set spell spelllang=ab_cd', 'E797:')
+  call assert_fails('set spell spelllang=ab_cd', 'E937:')
 
   " clean up
   augroup TestSpellFileMissing
@@ -157,6 +178,19 @@ func Test_spell_file_missing()
   unlet s:spell_file_missing
   set spell& spelllang&
   %bwipe!
+endfunc
+
+func Test_spell_file_missing_bwipe()
+  " this was using a window that was wiped out in a SpellFileMissing autocmd
+  set spelllang=xy
+  au SpellFileMissing * n0
+  set spell
+  au SpellFileMissing * bw
+  snext somefile
+
+  au! SpellFileMissing
+  bwipe!
+  set nospell spelllang=en
 endfunc
 
 func Test_spelldump()
@@ -261,14 +295,27 @@ func Test_compl_with_CTRL_X_CTRL_K_using_spell()
   call assert_equal(['theater'], getline(1, '$'))
   set spelllang=en_gb
   call feedkeys("Stheat\<c-x>\<c-k>\<esc>", 'tnx')
-  " FIXME: commented out, expected theatre bug got theater. See issue #7025.
-  " call assert_equal(['theatre'], getline(1, '$'))
+  call assert_equal(['theatre'], getline(1, '$'))
 
   bwipe!
   set spell& spelllang& dictionary& ignorecase&
 endfunc
 
-func Test_spellreall()
+func Test_compl_with_CTRL_X_s()
+  new
+  set spell spelllang=en_us showmode
+  inoremap <buffer><F2> <Cmd>let g:msg = Screenline(&lines)<CR>
+
+  call feedkeys("STheatre\<C-X>s\<F2>\<C-Y>\<Esc>", 'tx')
+  call assert_equal(['Theater'], getline(1, '$'))
+  call assert_match('(^S^N^P)', g:msg)
+
+  bwipe!
+  set spell& spelllang& showmode&
+  unlet g:msg
+endfunc
+
+func Test_spellrepall()
   new
   set spell
   call assert_fails('spellrepall', 'E752:')
@@ -762,8 +809,8 @@ endfunc
 func Test_zz_sal_and_addition()
   set enc=latin1
   set spellfile=
-  call writefile(g:test_data_dic1, "Xtest.dic")
-  call writefile(g:test_data_aff_sal, "Xtest.aff")
+  call writefile(g:test_data_dic1, "Xtest.dic", 'D')
+  call writefile(g:test_data_aff_sal, "Xtest.aff", 'D')
   mkspell! Xtest Xtest
   set spl=Xtest.latin1.spl spell
   call assert_equal('kbltykk', soundfold('goobledygoook'))
@@ -771,7 +818,7 @@ func Test_zz_sal_and_addition()
   call assert_equal('*fls kswts tl', soundfold('oeverloos gezwets edale'))
 
   "also use an addition file
-  call writefile(["/regions=usgbnz", "elequint/2", "elekwint/3"], "Xtest.latin1.add")
+  call writefile(["/regions=usgbnz", "elequint/2", "elekwint/3"], "Xtest.latin1.add", 'D')
   mkspell! Xtest.latin1.add.spl Xtest.latin1.add
 
   bwipe!
@@ -808,10 +855,9 @@ endfunc
 
 func Test_region_error()
   messages clear
-  call writefile(["/regions=usgbnz", "elequint/0"], "Xtest.latin1.add")
+  call writefile(["/regions=usgbnz", "elequint/0"], "Xtest.latin1.add", 'D')
   mkspell! Xtest.latin1.add.spl Xtest.latin1.add
   call assert_match('Invalid region nr in Xtest.latin1.add line 2: 0', execute('messages'))
-  call delete('Xtest.latin1.add')
   call delete('Xtest.latin1.add.spl')
 endfunc
 
@@ -884,6 +930,16 @@ func Test_spell_good_word_invalid()
   bwipe!
 endfunc
 
+func Test_spell_good_word_slash()
+  " This caused E1280.
+  new
+  norm afoo /
+  1
+  norm zG
+
+  bwipe!
+endfunc
+
 func LoadAffAndDic(aff_contents, dic_contents)
   set enc=latin1
   set spellfile=
@@ -936,6 +992,7 @@ func Test_spell_screendump()
   CheckScreendump
 
   let lines =<< trim END
+       call test_override('alloc_lines', 1)
        call setline(1, [
              \ "This is some text without any spell errors.  Everything",
              \ "should just be black, nothing wrong here.",
@@ -946,13 +1003,102 @@ func Test_spell_screendump()
              \ ])
        set spell spelllang=en_nz
   END
-  call writefile(lines, 'XtestSpell')
+  call writefile(lines, 'XtestSpell', 'D')
   let buf = RunVimInTerminal('-S XtestSpell', {'rows': 8})
   call VerifyScreenDump(buf, 'Test_spell_1', {})
 
   " clean up
   call StopVimInTerminal(buf)
-  call delete('XtestSpell')
+endfunc
+
+func Test_spell_screendump_spellcap()
+  CheckScreendump
+
+  let lines =<< trim END
+       call test_override('alloc_lines', 1)
+       call setline(1, [
+             \ "   This line has a sepll error. and missing caps and trailing spaces.   ",
+             \ "another missing cap here.",
+             \ "",
+             \ "and here.",
+             \ "    ",
+             \ "and here."
+             \ ])
+       set spell spelllang=en
+  END
+  call writefile(lines, 'XtestSpellCap', 'D')
+  let buf = RunVimInTerminal('-S XtestSpellCap', {'rows': 8})
+  call VerifyScreenDump(buf, 'Test_spell_2', {})
+
+  " After adding word missing Cap in next line is updated
+  call term_sendkeys(buf, "3GANot\<Esc>")
+  call VerifyScreenDump(buf, 'Test_spell_3', {})
+
+  " Deleting a full stop removes missing Cap in next line
+  call term_sendkeys(buf, "5Gdd\<C-L>k$x")
+  call VerifyScreenDump(buf, 'Test_spell_4', {})
+
+  " Undo also updates the next line (go to command line to remove message)
+  call term_sendkeys(buf, "u:\<Esc>")
+  call VerifyScreenDump(buf, 'Test_spell_5', {})
+
+  " Folding an empty line does not remove Cap in next line
+  call term_sendkeys(buf, "uzfk:\<Esc>")
+  call VerifyScreenDump(buf, 'Test_spell_6', {})
+
+  " Folding the end of a sentence does not remove Cap in next line
+  " and editing a line does not remove Cap in current line
+  call term_sendkeys(buf, "Jzfkk$x")
+  call VerifyScreenDump(buf, 'Test_spell_7', {})
+
+  " Cap is correctly applied in the first row of a window
+  call term_sendkeys(buf, "\<C-E>\<C-L>")
+  call VerifyScreenDump(buf, 'Test_spell_8', {})
+
+  " Adding an empty line does not remove Cap in "mod_bot" area
+  call term_sendkeys(buf, "zbO\<Esc>")
+  call VerifyScreenDump(buf, 'Test_spell_9', {})
+
+  " Multiple empty lines does not remove Cap in the line after
+  call term_sendkeys(buf, "O\<Esc>\<C-L>")
+  call VerifyScreenDump(buf, 'Test_spell_10', {})
+
+  " clean up
+  call StopVimInTerminal(buf)
+endfunc
+
+func Test_spell_compatible()
+  CheckScreendump
+
+  let lines =<< trim END
+       call test_override('alloc_lines', 1)
+       call setline(1, [
+             \ "test "->repeat(20),
+             \ "",
+             \ "end",
+             \ ])
+       set spell cpo+=$
+  END
+  call writefile(lines, 'XtestSpellComp', 'D')
+  let buf = RunVimInTerminal('-S XtestSpellComp', {'rows': 8})
+
+  call term_sendkeys(buf, "51|C")
+  call VerifyScreenDump(buf, 'Test_spell_compatible_1', {})
+
+  call term_sendkeys(buf, "x")
+  call VerifyScreenDump(buf, 'Test_spell_compatible_2', {})
+
+  " clean up
+  call StopVimInTerminal(buf)
+endfunc
+
+func Test_z_equal_with_large_count()
+  split
+  set spell
+  call setline(1, "ff")
+  norm 0z=337203685477580
+  set nospell
+  bwipe!
 endfunc
 
 let g:test_data_aff1 = [

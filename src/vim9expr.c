@@ -8,7 +8,7 @@
  */
 
 /*
- * vim9cmds.c: Dealing with compiled function expressions
+ * vim9expr.c: Dealing with compiled function expressions
  */
 
 #define USING_FLOAT_STUFF
@@ -93,18 +93,20 @@ compile_member(int is_slice, int *keeping_dict, cctx_T *cctx)
     vartype = typep->type_curr->tt_type;
     idxtype = (((type2_T *)stack->ga_data) + stack->ga_len - 1)->type_curr;
     // If the index is a string, the variable must be a Dict.
-    if ((typep->type_curr == &t_any || typep->type_curr == &t_unknown)
+    if ((typep->type_curr->tt_type == VAR_ANY
+		|| typep->type_curr->tt_type == VAR_UNKNOWN)
 						       && idxtype == &t_string)
 	vartype = VAR_DICT;
     if (vartype == VAR_STRING || vartype == VAR_LIST || vartype == VAR_BLOB)
     {
-	if (need_type(idxtype, &t_number, -1, 0, cctx, FALSE, FALSE) == FAIL)
+	if (need_type(idxtype, &t_number, FALSE,
+					    -1, 0, cctx, FALSE, FALSE) == FAIL)
 	    return FAIL;
 	if (is_slice)
 	{
 	    idxtype = get_type_on_stack(cctx, 1);
-	    if (need_type(idxtype, &t_number, -2, 0, cctx,
-							 FALSE, FALSE) == FAIL)
+	    if (need_type(idxtype, &t_number, FALSE,
+					    -2, 0, cctx, FALSE, FALSE) == FAIL)
 		return FAIL;
 	}
     }
@@ -134,13 +136,13 @@ compile_member(int is_slice, int *keeping_dict, cctx_T *cctx)
 	}
 	else
 	{
-	    if (need_type(typep->type_curr, &t_dict_any, -2, 0, cctx,
-							 FALSE, FALSE) == FAIL)
+	    if (need_type(typep->type_curr, &t_dict_any, FALSE,
+					    -2, 0, cctx, FALSE, FALSE) == FAIL)
 		return FAIL;
 	    typep->type_curr = &t_any;
 	    typep->type_decl = &t_any;
 	}
-	if (may_generate_2STRING(-1, FALSE, cctx) == FAIL
+	if (may_generate_2STRING(-1, TOSTRING_NONE, cctx) == FAIL
 		|| generate_instr_drop(cctx, ISN_MEMBER, 1) == FAIL)
 	    return FAIL;
 	if (keeping_dict != NULL)
@@ -172,8 +174,8 @@ compile_member(int is_slice, int *keeping_dict, cctx_T *cctx)
 		return FAIL;
 	}
     }
-    else if (vartype == VAR_LIST || typep->type_curr == &t_any
-					     || typep->type_curr == &t_unknown)
+    else if (vartype == VAR_LIST || typep->type_curr->tt_type == VAR_ANY
+				 || typep->type_curr->tt_type == VAR_UNKNOWN)
     {
 	if (is_slice)
 	{
@@ -184,6 +186,18 @@ compile_member(int is_slice, int *keeping_dict, cctx_T *cctx)
 	    // a copy is made so the member type is no longer declared
 	    if (typep->type_decl->tt_type == VAR_LIST)
 		typep->type_decl = &t_list_any;
+
+	    // a copy is made, the composite is no longer "const"
+	    if (typep->type_curr->tt_flags & TTFLAG_CONST)
+	    {
+		type_T *type = copy_type(typep->type_curr, cctx->ctx_type_list);
+
+		if (type != typep->type_curr)  // did get a copy
+		{
+		    type->tt_flags &= ~(TTFLAG_CONST | TTFLAG_STATIC);
+		    typep->type_curr = type;
+		}
+	    }
 	}
 	else
 	{
@@ -222,6 +236,9 @@ compile_member(int is_slice, int *keeping_dict, cctx_T *cctx)
 	    case VAR_JOB:
 	    case VAR_CHANNEL:
 	    case VAR_INSTR:
+	    case VAR_CLASS:
+	    case VAR_OBJECT:
+	    case VAR_TYPEALIAS:
 	    case VAR_UNKNOWN:
 	    case VAR_ANY:
 	    case VAR_VOID:
@@ -236,6 +253,282 @@ compile_member(int is_slice, int *keeping_dict, cctx_T *cctx)
 }
 
 /*
+ * Returns TRUE if the current function is inside the class "cl" or one of the
+ * parent classes.
+ */
+    static int
+inside_class_hierarchy(cctx_T *cctx_arg, class_T *cl)
+{
+    for (cctx_T *cctx = cctx_arg; cctx != NULL; cctx = cctx->ctx_outer)
+    {
+	if (cctx->ctx_ufunc != NULL && cctx->ctx_ufunc->uf_class != NULL)
+	{
+	    class_T	*clp = cctx->ctx_ufunc->uf_class;
+	    while (clp != NULL)
+	    {
+		if (clp == cl)
+		    return TRUE;
+		clp = clp->class_extends;
+	    }
+	}
+    }
+
+    return FALSE;
+}
+
+/*
+ * Compile ".member" coming after an object or class.
+ */
+    static int
+compile_class_object_index(cctx_T *cctx, char_u **arg, type_T *type)
+{
+    int m_idx;
+
+    if (VIM_ISWHITE((*arg)[1]))
+    {
+	semsg(_(e_no_white_space_allowed_after_str_str), ".", *arg);
+	return FAIL;
+    }
+
+    class_T *cl = type->tt_class;
+    int is_super = ((type->tt_flags & TTFLAG_SUPER) == TTFLAG_SUPER);
+    if (type == &t_super)
+    {
+	if (cctx->ctx_ufunc == NULL || cctx->ctx_ufunc->uf_class == NULL)
+	{
+	    emsg(_(e_using_super_not_in_class_method));
+	    return FAIL;
+	}
+	is_super = TRUE;
+	cl = cctx->ctx_ufunc->uf_class;
+	// Remove &t_super from the stack.
+	--cctx->ctx_type_stack.ga_len;
+    }
+    else if (type->tt_type == VAR_CLASS)
+    {
+	garray_T *instr = &cctx->ctx_instr;
+	if (instr->ga_len > 0)
+	{
+	    isn_T *isn = ((isn_T *)instr->ga_data) + instr->ga_len - 1;
+	    if (isn->isn_type == ISN_LOADSCRIPT)
+	    {
+		// The class was recognized as a script item.  We only need
+		// to know what class it is, drop the instruction.
+		--instr->ga_len;
+		vim_free(isn->isn_arg.script.scriptref);
+	    }
+	}
+    }
+
+    if (cl == NULL)
+    {
+	// TODO: this should not give an error but be handled at runtime
+	emsg(_(e_incomplete_type));
+	return FAIL;
+    }
+
+    ++*arg;
+    char_u *name = *arg;
+    char_u *name_end = find_name_end(name, NULL, NULL, FNE_CHECK_START);
+    if (name_end == name)
+	return FAIL;
+    size_t len = name_end - name;
+
+    if (*name_end == '(')
+    {
+	int	function_count;
+	int	child_count;
+	ufunc_T	**functions;
+
+	if (type->tt_type == VAR_CLASS)
+	{
+	    function_count = cl->class_class_function_count;
+	    child_count = cl->class_class_function_count_child;
+	    functions = cl->class_class_functions;
+	}
+	else
+	{
+	    // type->tt_type == VAR_OBJECT: method call
+	    // When compiling Func and doing "super.SomeFunc()", must be in the
+	    // class context that defines Func.
+	    if (is_super)
+		cl = cctx->ctx_ufunc->uf_defclass;
+
+	    function_count = cl->class_obj_method_count;
+	    child_count = cl->class_obj_method_count_child;
+	    functions = cl->class_obj_methods;
+	}
+
+	ufunc_T *ufunc = NULL;
+	int fi;
+	for (fi = is_super ? child_count : 0; fi < function_count; ++fi)
+	{
+	    ufunc_T *fp = functions[fi];
+	    // Use a separate pointer to avoid that ASAN complains about
+	    // uf_name[] only being 4 characters.
+	    char_u *ufname = (char_u *)fp->uf_name;
+	    if (STRNCMP(name, ufname, len) == 0 && ufname[len] == NUL)
+	    {
+		ufunc = fp;
+		break;
+	    }
+	}
+
+	ocmember_T  *ocm = NULL;
+	if (ufunc == NULL)
+	{
+	    // could be a funcref in a member variable
+	    ocm = member_lookup(cl, type->tt_type, name, len, &m_idx);
+	    if (ocm == NULL || ocm->ocm_type->tt_type != VAR_FUNC)
+	    {
+		method_not_found_msg(cl, type->tt_type, name, len);
+		return FAIL;
+	    }
+	    if (type->tt_type == VAR_CLASS)
+	    {
+		// Remove the class type from the stack
+		--cctx->ctx_type_stack.ga_len;
+		if (generate_CLASSMEMBER(cctx, TRUE, cl, m_idx) == FAIL)
+		    return FAIL;
+	    }
+	    else
+	    {
+		int status;
+
+		if (IS_INTERFACE(cl))
+		    status = generate_GET_ITF_MEMBER(cctx, cl, m_idx,
+							ocm->ocm_type);
+		else
+		    status = generate_GET_OBJ_MEMBER(cctx, m_idx,
+							ocm->ocm_type);
+		if (status == FAIL)
+		    return FAIL;
+	    }
+	}
+
+	if (is_super && ufunc != NULL && IS_ABSTRACT_METHOD(ufunc))
+	{
+	    // Trying to invoke an abstract method in a super class is not
+	    // allowed.
+	    semsg(_(e_abstract_method_str_direct), ufunc->uf_name,
+		    ufunc->uf_defclass->class_name);
+	    return FAIL;
+	}
+
+	// A private object method can be used only inside the class where it
+	// is defined or in one of the child classes.
+	// A private class method can be used only in the class where it is
+	// defined.
+	if (ocm == NULL && *ufunc->uf_name == '_' &&
+		((type->tt_type == VAR_OBJECT
+		  && !inside_class_hierarchy(cctx, cl))
+		 || (type->tt_type == VAR_CLASS
+		     && cctx->ctx_ufunc->uf_class != cl)))
+	{
+	    semsg(_(e_cannot_access_protected_method_str), name);
+	    return FAIL;
+	}
+
+	// Compile the arguments and call the class function or object method.
+	// The object method will know that the object is on the stack, just
+	// before the arguments.
+	*arg = skipwhite(name_end + 1);
+	int argcount = 0;
+	if (compile_arguments(arg, cctx, &argcount, CA_NOT_SPECIAL) == FAIL)
+	    return FAIL;
+
+	if (ocm != NULL)
+	    return generate_PCALL(cctx, argcount, name, ocm->ocm_type, TRUE);
+	if (type->tt_type == VAR_OBJECT
+		     && (cl->class_flags & (CLASS_INTERFACE | CLASS_EXTENDED)))
+	    return generate_CALL(cctx, ufunc, cl, fi, argcount, is_super);
+	return generate_CALL(cctx, ufunc, NULL, 0, argcount, FALSE);
+    }
+
+    if (type->tt_type == VAR_OBJECT)
+    {
+	ocmember_T *m = object_member_lookup(cl, name, len, &m_idx);
+	if (m_idx >= 0)
+	{
+	    if (*name == '_' && !inside_class(cctx, cl))
+	    {
+		emsg_var_cl_define(e_cannot_access_protected_variable_str,
+							m->ocm_name, 0, cl);
+		return FAIL;
+	    }
+
+	    *arg = name_end;
+	    if (cl->class_flags & (CLASS_INTERFACE | CLASS_EXTENDED))
+		return generate_GET_ITF_MEMBER(cctx, cl, m_idx, m->ocm_type);
+	    return generate_GET_OBJ_MEMBER(cctx, m_idx, m->ocm_type);
+	}
+
+	// Could be an object method reference: "obj.Func".
+	m_idx = object_method_idx(cl, name, len);
+	if (m_idx >= 0)
+	{
+	    ufunc_T *fp = cl->class_obj_methods[m_idx];
+	    // Private object methods are not accessible outside the class
+	    if (*name == '_' && !inside_class(cctx, cl))
+	    {
+		semsg(_(e_cannot_access_protected_method_str), fp->uf_name);
+		return FAIL;
+	    }
+	    *arg = name_end;
+	    // Remove the object type from the stack
+	    --cctx->ctx_type_stack.ga_len;
+	    return generate_FUNCREF(cctx, fp, cl, TRUE, m_idx, NULL);
+	}
+
+	member_not_found_msg(cl, VAR_OBJECT, name, len);
+    }
+    else
+    {
+	// load class member
+	int idx;
+	ocmember_T *m = class_member_lookup(cl, name, len, &idx);
+	if (m != NULL)
+	{
+	    // Note: type->tt_type = VAR_CLASS
+	    // A private class variable can be accessed only in the class where
+	    // it is defined.
+	    if (*name == '_' && cctx->ctx_ufunc->uf_class != cl)
+	    {
+		emsg_var_cl_define(e_cannot_access_protected_variable_str,
+							m->ocm_name, 0, cl);
+		return FAIL;
+	    }
+
+	    *arg = name_end;
+	    // Remove the class type from the stack
+	    --cctx->ctx_type_stack.ga_len;
+	    return generate_CLASSMEMBER(cctx, TRUE, cl, idx);
+	}
+
+	// Could be a class method reference: "class.Func".
+	m_idx = class_method_idx(cl, name, len);
+	if (m_idx >= 0)
+	{
+	    ufunc_T *fp = cl->class_class_functions[m_idx];
+	    // Private class methods are not accessible outside the class
+	    if (*name == '_' && !inside_class(cctx, cl))
+	    {
+		semsg(_(e_cannot_access_protected_method_str), fp->uf_name);
+		return FAIL;
+	    }
+	    *arg = name_end;
+	    // Remove the class type from the stack
+	    --cctx->ctx_type_stack.ga_len;
+	    return generate_FUNCREF(cctx, fp, cl, FALSE, m_idx, NULL);
+	}
+
+	member_not_found_msg(cl, VAR_CLASS, name, len);
+    }
+
+    return FAIL;
+}
+
+/*
  * Generate an instruction to load script-local variable "name", without the
  * leading "s:".
  * Also finds imported variables.
@@ -245,11 +538,12 @@ compile_load_scriptvar(
 	cctx_T *cctx,
 	char_u *name,	    // variable NUL terminated
 	char_u *start,	    // start of variable
-	char_u **end)	    // end of variable, may be NULL
+	char_u **end,	    // end of variable, may be NULL
+	imported_T *import) // found imported item, can be NULL
 {
     scriptitem_T    *si;
     int		    idx;
-    imported_T	    *import;
+    imported_T	    *imp;
 
     if (!SCRIPT_ID_VALID(current_sctx.sc_sid))
 	return FAIL;
@@ -264,8 +558,14 @@ compile_load_scriptvar(
 	return OK;
     }
 
-    import = end == NULL ? NULL : find_imported(name, 0, FALSE);
-    if (import != NULL)
+    if (end == NULL)
+	imp = NULL;
+    else if (import == NULL)
+	imp = find_imported(name, 0, FALSE);
+    else
+	imp = import;
+
+    if (imp != NULL)
     {
 	char_u	*p = skipwhite(*end);
 	char_u	*exp_name;
@@ -274,6 +574,9 @@ compile_load_scriptvar(
 	type_T	*type;
 	int	done = FALSE;
 	int	res = OK;
+
+	check_script_symlink(imp->imp_sid);
+	import_check_sourced_sid(&imp->imp_sid);
 
 	// Need to lookup the member.
 	if (*p != '.')
@@ -295,11 +598,11 @@ compile_load_scriptvar(
 	cc = *p;
 	*p = NUL;
 
-	si = SCRIPT_ITEM(import->imp_sid);
+	si = SCRIPT_ITEM(imp->imp_sid);
 	if (si->sn_import_autoload && si->sn_state == SN_STATE_NOT_LOADED)
 	    // "import autoload './dir/script.vim'" or
 	    // "import autoload './autoload/script.vim'" - load script first
-	    res = generate_SOURCE(cctx, import->imp_sid);
+	    res = generate_SOURCE(cctx, imp->imp_sid);
 
 	if (res == OK)
 	{
@@ -313,7 +616,7 @@ compile_load_scriptvar(
 		// name.  If a '(' follows it must be a function.  Otherwise we
 		// don't know, it can be "script.Func".
 		if (cc == '(' || paren_follows_after_expr)
-		    res = generate_PUSHFUNC(cctx, auto_name, &t_func_any);
+		    res = generate_PUSHFUNC(cctx, auto_name, &t_func_any, TRUE);
 		else
 		    res = generate_AUTOLOAD(cctx, auto_name, &t_any);
 		vim_free(auto_name);
@@ -328,17 +631,17 @@ compile_load_scriptvar(
 		{
 		    char_u sid_name[MAX_FUNC_NAME_LEN];
 
-		    func_name_with_sid(exp_name, import->imp_sid, sid_name);
-		    res = generate_PUSHFUNC(cctx, sid_name, &t_func_any);
+		    func_name_with_sid(exp_name, imp->imp_sid, sid_name);
+		    res = generate_PUSHFUNC(cctx, sid_name, &t_func_any, TRUE);
 		}
 		else
 		    res = generate_OLDSCRIPT(cctx, ISN_LOADEXPORT, exp_name,
-						      import->imp_sid, &t_any);
+						      imp->imp_sid, &t_any);
 		done = TRUE;
 	    }
 	    else
 	    {
-		idx = find_exported(import->imp_sid, exp_name, &ufunc, &type,
+		idx = find_exported(imp->imp_sid, exp_name, &ufunc, &type,
 							     cctx, NULL, TRUE);
 	    }
 	}
@@ -353,14 +656,14 @@ compile_load_scriptvar(
 	    if (ufunc != NULL)
 	    {
 		// function call or function reference
-		generate_PUSHFUNC(cctx, ufunc->uf_name, NULL);
+		generate_PUSHFUNC(cctx, ufunc->uf_name, NULL, TRUE);
 		return OK;
 	    }
 	    return FAIL;
 	}
 
 	generate_VIM9SCRIPT(cctx, ISN_LOADSCRIPT,
-		import->imp_sid,
+		imp->imp_sid,
 		idx,
 		type);
 	return OK;
@@ -387,7 +690,27 @@ generate_funcref(cctx_T *cctx, char_u *name, int has_g_prefix)
     if (func_needs_compiling(ufunc, compile_type)
 	      && compile_def_function(ufunc, TRUE, compile_type, NULL) == FAIL)
 	return FAIL;
-    return generate_PUSHFUNC(cctx, ufunc->uf_name, ufunc->uf_func_type);
+    return generate_PUSHFUNC(cctx, ufunc->uf_name, ufunc->uf_func_type, TRUE);
+}
+
+/*
+ * Returns TRUE if compiling a class method.
+ */
+    static int
+compiling_a_class_method(cctx_T *cctx)
+{
+    // For an object method, the FC_OBJECT flag will be set.
+    // For a constructor method, the FC_NEW flag will be set.
+    // Excluding these methods, the others are class methods.
+    // When compiling a closure function inside an object method,
+    // cctx->ctx_outer->ctx_func will point to the object method.
+    return cctx->ctx_ufunc != NULL
+	&& (cctx->ctx_ufunc->uf_flags & (FC_OBJECT|FC_NEW)) == 0
+	&& (cctx->ctx_outer == NULL
+		|| cctx->ctx_outer->ctx_ufunc == NULL
+		|| cctx->ctx_outer->ctx_ufunc->uf_class == NULL
+		|| (cctx->ctx_outer->ctx_ufunc->uf_flags
+		    & (FC_OBJECT|FC_NEW)) == 0);
 }
 
 /*
@@ -451,12 +774,11 @@ compile_load(
 			      vim_free(name);
 			      return FAIL;
 			  }
-			  if (is_expr && ASCII_ISUPPER(*name)
-					     && find_func(name, FALSE) != NULL)
+			  if (is_expr && find_func(name, FALSE) != NULL)
 			      res = generate_funcref(cctx, name, FALSE);
 			  else
 			      res = compile_load_scriptvar(cctx, name,
-								   NULL, &end);
+							    NULL, &end, NULL);
 			  break;
 		case 'g': if (vim_strchr(name, AUTOLOAD_CHAR) == NULL)
 			  {
@@ -495,14 +817,25 @@ compile_load(
     {
 	size_t	    len = end - *arg;
 	int	    idx;
+	int	    method_idx;
 	int	    gen_load = FALSE;
 	int	    gen_load_outer = 0;
+	int	    outer_loop_depth = -1;
+	int	    outer_loop_idx = -1;
 
-	name = vim_strnsave(*arg, end - *arg);
+	name = vim_strnsave(*arg, len);
 	if (name == NULL)
 	    return FAIL;
 
-	if (vim_strchr(name, AUTOLOAD_CHAR) != NULL)
+	if (STRCMP(name, "super") == 0 && compiling_a_class_method(cctx))
+	{
+	    // super.SomeFunc() in a class function: push &t_super type, this
+	    // is recognized in compile_subscript().
+	    res = push_type_stack(cctx, &t_super);
+	    if (*end != '.')
+		emsg(_(e_super_must_be_followed_by_dot));
+	}
+	else if (vim_strchr(name, AUTOLOAD_CHAR) != NULL)
 	{
 	    script_autoload(name, FALSE);
 	    res = generate_LOAD(cctx, ISN_LOADAUTO, 0, name, &t_any);
@@ -515,24 +848,59 @@ compile_load(
 	}
 	else
 	{
-	    lvar_T lvar;
+	    lvar_T  lvar;
+	    class_T *cl = NULL;
 
 	    if (lookup_local(*arg, len, &lvar, cctx) == OK)
 	    {
 		type = lvar.lv_type;
 		idx = lvar.lv_idx;
 		if (lvar.lv_from_outer != 0)
+		{
 		    gen_load_outer = lvar.lv_from_outer;
+		    outer_loop_depth = lvar.lv_loop_depth;
+		    outer_loop_idx = lvar.lv_loop_idx;
+		}
 		else
 		    gen_load = TRUE;
 	    }
+	    else if (cctx->ctx_ufunc->uf_defclass != NULL &&
+		    (((idx =
+		       cctx_class_member_idx(cctx, *arg, len, &cl)) >= 0)
+		     || ((method_idx =
+			     cctx_class_method_idx(cctx, *arg, len, &cl)) >= 0)))
+	    {
+		// Referencing a class variable or method without the class
+		// name.  A class variable or method can be referenced without
+		// the class name only in the class where the function is
+		// defined.
+		if (cctx->ctx_ufunc->uf_defclass == cl)
+		{
+		    if (idx >= 0)
+			res = generate_CLASSMEMBER(cctx, TRUE, cl, idx);
+		    else
+		    {
+			ufunc_T *fp = cl->class_class_functions[method_idx];
+			res = generate_FUNCREF(cctx, fp, cl, FALSE, method_idx,
+									NULL);
+		    }
+		}
+		else
+		{
+		    semsg(_(e_class_variable_str_accessible_only_inside_class_str),
+			    name, cl->class_name);
+		    res = FAIL;
+		}
+	    }
 	    else
 	    {
+		imported_T *imp = NULL;
+
 		// "var" can be script-local even without using "s:" if it
 		// already exists in a Vim9 script or when it's imported.
 		if (script_var_exists(*arg, len, cctx, NULL) == OK
-				      || find_imported(name, 0, FALSE) != NULL)
-		   res = compile_load_scriptvar(cctx, name, *arg, &end);
+			    || (imp = find_imported(name, 0, FALSE)) != NULL)
+		    res = compile_load_scriptvar(cctx, name, *arg, &end, imp);
 
 		// When evaluating an expression and the name starts with an
 		// uppercase letter it can be a user defined function.
@@ -545,7 +913,8 @@ compile_load(
 	    res = generate_LOAD(cctx, ISN_LOAD, idx, NULL, type);
 	if (gen_load_outer > 0)
 	{
-	    res = generate_LOADOUTER(cctx, idx, gen_load_outer, type);
+	    res = generate_LOADOUTER(cctx, idx, gen_load_outer,
+				       outer_loop_depth, outer_loop_idx, type);
 	    cctx->ctx_outer_used = TRUE;
 	}
     }
@@ -582,7 +951,15 @@ compile_string(isn_T *isn, cctx_T *cctx, int str_offset)
     cctx->ctx_instr.ga_len = 0;
     cctx->ctx_instr.ga_maxlen = 0;
     cctx->ctx_instr.ga_data = NULL;
+
+    // avoid peeking a next line
+    int galen_save = cctx->ctx_ufunc->uf_lines.ga_len;
+    cctx->ctx_ufunc->uf_lines.ga_len = 0;
+
     expr_res = compile_expr0(&s, cctx);
+
+    cctx->ctx_ufunc->uf_lines.ga_len = galen_save;
+
     s = skipwhite(s);
     trailing_error = *s != NUL;
 
@@ -611,19 +988,10 @@ compile_string(isn_T *isn, cctx_T *cctx, int str_offset)
 }
 
 /*
- * List of special functions for "compile_arguments".
- */
-typedef enum {
-    CA_NOT_SPECIAL,
-    CA_SEARCHPAIR,	    // {skip} in searchpair() and searchpairpos()
-    CA_SUBSTITUTE,	    // {sub} in substitute(), when prefixed with \=
-} ca_special_T;
-
-/*
  * Compile the argument expressions.
  * "arg" points to just after the "(" and is advanced to after the ")"
  */
-    static int
+    int
 compile_arguments(
 	char_u	     **arg,
 	cctx_T	     *cctx,
@@ -672,7 +1040,7 @@ compile_arguments(
 	    // {sub} argument of substitute() can be compiled if it starts
 	    // with \=
 	    if (isn->isn_type == ISN_PUSHS && isn->isn_arg.string[0] == '\\'
-		    && isn->isn_arg.string[1] == '=')
+					      && isn->isn_arg.string[1] == '=')
 		compile_string(isn, cctx, 2);
 	}
 
@@ -698,6 +1066,32 @@ failret:
 }
 
 /*
+ * Compile a builtin method call of an object (e.g. string(), len(), empty(),
+ * etc.) if the class implements it.
+ */
+    static int
+compile_builtin_method_call(cctx_T *cctx, class_builtin_T builtin_method)
+{
+    type_T	*type = get_decl_type_on_stack(cctx, 0);
+    int		res = FAIL;
+
+    // If the built in function is invoked on an object and the class
+    // implements the corresponding built in method, then invoke the object
+    // method.
+    if (type->tt_type == VAR_OBJECT)
+    {
+	int	method_idx;
+	ufunc_T *uf = class_get_builtin_method(type->tt_class, builtin_method,
+							&method_idx);
+	if (uf != NULL)
+	    res = generate_CALL(cctx, uf, type->tt_class, method_idx, 0, FALSE);
+    }
+
+    return res;
+}
+
+
+/*
  * Compile a function call:  name(arg1, arg2)
  * "arg" points to "name", "arg + varlen" to the "(".
  * "argcount_init" is 1 for "value->method()"
@@ -720,7 +1114,6 @@ compile_call(
     char_u	namebuf[MAX_FUNC_NAME_LEN];
     char_u	fname_buf[FLEN_FIXED + 1];
     char_u	*tofree = NULL;
-    int		error = FCERR_NONE;
     ufunc_T	*ufunc = NULL;
     int		res = FAIL;
     int		is_autoload;
@@ -791,6 +1184,7 @@ compile_call(
     if (generate_ppconst(cctx, ppconst) == FAIL)
 	return FAIL;
 
+    funcerror_T	error;
     name = fname_trans_sid(namebuf, fname_buf, &tofree, &error);
 
     // We handle the "skip" argument of searchpair() and searchpairpos()
@@ -827,6 +1221,8 @@ compile_call(
 	    if (STRCMP(name, "add") == 0 && argcount == 2)
 	    {
 		type_T	    *type = get_decl_type_on_stack(cctx, 1);
+		if (check_type_is_value(get_type_on_stack(cctx, 0)) == FAIL)
+		    goto theend;
 
 		// add() can be compiled to instructions if we know the type
 		if (type->tt_type == VAR_LIST)
@@ -841,6 +1237,29 @@ compile_call(
 		    res = generate_BLOBAPPEND(cctx);
 		    idx = -1;
 		}
+	    }
+
+	    if ((STRCMP(name, "writefile") == 0 && argcount > 2)
+		    || (STRCMP(name, "mkdir") == 0 && argcount > 1))
+	    {
+		// May have the "D" or "R" flag, reserve a variable for a
+		// deferred function call.
+		if (get_defer_var_idx(cctx) == 0)
+		    idx = -1;
+	    }
+
+	    class_builtin_T	builtin_method = CLASS_BUILTIN_INVALID;
+	    if (STRCMP(name, "string") == 0)
+		builtin_method = CLASS_BUILTIN_STRING;
+	    else if (STRCMP(name, "empty") == 0)
+		builtin_method = CLASS_BUILTIN_EMPTY;
+	    else if (STRCMP(name, "len") == 0)
+		builtin_method = CLASS_BUILTIN_LEN;
+	    if (builtin_method != CLASS_BUILTIN_INVALID)
+	    {
+		res = compile_builtin_method_call(cctx, builtin_method);
+		if (res == OK)
+		    idx = -1;
 	    }
 
 	    if (idx >= 0)
@@ -858,6 +1277,9 @@ compile_call(
     if (lookup_local(namebuf, varlen, NULL, cctx) == FAIL
 	    && arg_exists(namebuf, varlen, NULL, NULL, NULL, cctx) != OK)
     {
+	class_T		*cl = NULL;
+	int		mi = 0;
+
 	// If we can find the function by name generate the right call.
 	// Skip global functions here, a local funcref takes precedence.
 	ufunc = find_func(name, FALSE);
@@ -865,7 +1287,7 @@ compile_call(
 	{
 	    if (!func_is_global(ufunc))
 	    {
-		res = generate_CALL(cctx, ufunc, argcount);
+		res = generate_CALL(cctx, ufunc, NULL, 0, argcount, FALSE);
 		goto theend;
 	    }
 	    if (!has_g_namespace
@@ -876,6 +1298,24 @@ compile_call(
 		goto theend;
 	    }
 	}
+	else if ((mi = cctx_class_method_idx(cctx, name, varlen, &cl)) >= 0)
+	{
+	    // Class method invocation without the class name.
+	    // A class method can be referenced without the class name only in
+	    // the class where the function is defined.
+	    if (cctx->ctx_ufunc->uf_defclass == cl)
+	    {
+		res = generate_CALL(cctx, cl->class_class_functions[mi], NULL,
+							0, argcount, FALSE);
+	    }
+	    else
+	    {
+		semsg(_(e_class_method_str_accessible_only_inside_class_str),
+			name, cl->class_name);
+		res = FAIL;
+	    }
+	    goto theend;
+	}
     }
 
     // If the name is a variable, load it and use PCALL.
@@ -885,16 +1325,16 @@ compile_call(
     if (!has_g_namespace && !is_autoload
 	    && compile_load(&p, namebuf + varlen, cctx, FALSE, FALSE) == OK)
     {
-	type_T	    *type = get_type_on_stack(cctx, 0);
+	type_T	    *s_type = get_type_on_stack(cctx, 0);
 
-	res = generate_PCALL(cctx, argcount, namebuf, type, FALSE);
+	res = generate_PCALL(cctx, argcount, namebuf, s_type, FALSE);
 	goto theend;
     }
 
     // If we can find a global function by name generate the right call.
     if (ufunc != NULL)
     {
-	res = generate_CALL(cctx, ufunc, argcount);
+	res = generate_CALL(cctx, ufunc, NULL, 0, argcount, FALSE);
 	goto theend;
     }
 
@@ -976,6 +1416,7 @@ compile_list(char_u **arg, cctx_T *cctx, ppconst_T *ppconst)
     int		count = 0;
     int		is_const;
     int		is_all_const = TRUE;	// reset when non-const encountered
+    int		must_end = FALSE;
 
     for (;;)
     {
@@ -994,6 +1435,11 @@ compile_list(char_u **arg, cctx_T *cctx, ppconst_T *ppconst)
 	    ++p;
 	    break;
 	}
+	if (must_end)
+	{
+	    semsg(_(e_missing_comma_in_list_str), p);
+	    return FAIL;
+	}
 	if (compile_expr0_ext(&p, cctx, &is_const) == FAIL)
 	    return FAIL;
 	if (!is_const)
@@ -1008,6 +1454,8 @@ compile_list(char_u **arg, cctx_T *cctx, ppconst_T *ppconst)
 		return FAIL;
 	    }
 	}
+	else
+	    must_end = TRUE;
 	whitep = p;
 	p = skipwhite(p);
     }
@@ -1084,6 +1532,7 @@ compile_lambda(char_u **arg, cctx_T *cctx)
 
 	*arg = ((char_u **)cctx->ctx_ufunc->uf_lines.ga_data)[cctx->ctx_lnum]
 									 + off;
+	evalarg.eval_using_cmdline = FALSE;
     }
 
     clear_evalarg(&evalarg, NULL);
@@ -1096,7 +1545,7 @@ compile_lambda(char_u **arg, cctx_T *cctx)
 	// The function reference count will be 1.  When the ISN_FUNCREF
 	// instruction is deleted the reference count is decremented and the
 	// function is freed.
-	return generate_FUNCREF(cctx, ufunc, NULL);
+	return generate_FUNCREF(cctx, ufunc, NULL, FALSE, 0, NULL);
     }
 
     func_ptr_unref(ufunc);
@@ -1164,7 +1613,10 @@ compile_dict(char_u **arg, cctx_T *cctx, ppconst_T *ppconst)
     if (d == NULL)
 	return FAIL;
     if (generate_ppconst(cctx, ppconst) == FAIL)
+    {
+	dict_unref(d);
 	return FAIL;
+    }
     for (;;)
     {
 	char_u	    *key = NULL;
@@ -1198,7 +1650,7 @@ compile_dict(char_u **arg, cctx_T *cctx, ppconst_T *ppconst)
 	    }
 	    if (isn->isn_type == ISN_PUSHS)
 		key = isn->isn_arg.string;
-	    else if (may_generate_2STRING(-1, FALSE, cctx) == FAIL)
+	    else if (may_generate_2STRING(-1, TOSTRING_NONE, cctx) == FAIL)
 		return FAIL;
 	    *arg = skipwhite(*arg);
 	    if (**arg != ']')
@@ -1226,7 +1678,7 @@ compile_dict(char_u **arg, cctx_T *cctx, ppconst_T *ppconst)
 	    item = dict_find(d, key, -1);
 	    if (item != NULL)
 	    {
-		semsg(_(e_duplicate_key_in_dicitonary), key);
+		semsg(_(e_duplicate_key_in_dictionary_str), key);
 		goto failret;
 	    }
 	    item = dictitem_alloc(key);
@@ -1244,7 +1696,7 @@ compile_dict(char_u **arg, cctx_T *cctx, ppconst_T *ppconst)
 	    if (*skipwhite(*arg) == ':')
 		semsg(_(e_no_white_space_allowed_before_str_str), ":", *arg);
 	    else
-		semsg(_(e_missing_colon_in_dictionary), *arg);
+		semsg(_(e_missing_colon_in_dictionary_str), *arg);
 	    return FAIL;
 	}
 	whitep = *arg + 1;
@@ -1276,7 +1728,7 @@ compile_dict(char_u **arg, cctx_T *cctx, ppconst_T *ppconst)
 	    break;
 	if (**arg != ',')
 	{
-	    semsg(_(e_missing_comma_in_dictionary), *arg);
+	    semsg(_(e_missing_comma_in_dictionary_str), *arg);
 	    goto failret;
 	}
 	if (IS_WHITE_OR_NUL(*whitep))
@@ -1307,7 +1759,7 @@ compile_dict(char_u **arg, cctx_T *cctx, ppconst_T *ppconst)
 failret:
     if (*arg == NULL)
     {
-	semsg(_(e_missing_dict_end), _("[end of lines]"));
+	semsg(_(e_missing_dict_end_str), _("[end of lines]"));
 	*arg = (char_u *)"";
     }
     dict_unref(d);
@@ -1478,14 +1930,12 @@ apply_leader(typval_T *rettv, int numeric_only, char_u *start, char_u **end)
 	if (*p == '-' || *p == '+')
 	{
 	    // only '-' has an effect, for '+' we only check the type
-#ifdef FEAT_FLOAT
 	    if (rettv->v_type == VAR_FLOAT)
 	    {
 		if (*p == '-')
 		    rettv->vval.v_float = -rettv->vval.v_float;
 	    }
 	    else
-#endif
 	    {
 		varnumber_T	val;
 		int		error = FALSE;
@@ -1595,7 +2045,7 @@ get_compare_type(char_u *p, int *len, int *type_is)
 			if (p[2] == 'n' && p[3] == 'o' && p[4] == 't')
 			    *len = 5;
 			i = p[*len];
-			if (!isalnum(i) && i != '_')
+			if (!SAFE_isalnum(i) && i != '_')
 			{
 			    type = *len == 2 ? EXPR_IS : EXPR_ISNOT;
 			    *type_is = TRUE;
@@ -1633,15 +2083,16 @@ bool_on_stack(cctx_T *cctx)
     if (type == &t_bool)
 	return OK;
 
-    if (type == &t_any
-	    || type == &t_unknown
-	    || type == &t_number
-	    || type == &t_number_bool)
+    if (type->tt_type == VAR_ANY
+	    || type->tt_type == VAR_UNKNOWN
+	    || type->tt_type == VAR_NUMBER
+	    || type == &t_number_bool
+	    || type == &t_const_number_bool)
 	// Number 0 and 1 are OK to use as a bool.  "any" could also be a bool.
 	// This requires a runtime type check.
 	return generate_COND2BOOL(cctx);
 
-    return need_type(type, &t_bool, -1, 0, cctx, FALSE, FALSE);
+    return need_type(type, &t_bool, FALSE, -1, 0, cctx, FALSE, FALSE);
 }
 
 /*
@@ -1673,22 +2124,14 @@ compile_leader(cctx_T *cctx, int numeric_only, char_u *start, char_u **end)
 	    --p;
 	if (*p == '-' || *p == '+')
 	{
-	    int		negate = *p == '-';
-	    isn_T	*isn;
-	    type_T	*type;
-
-	    type = get_type_on_stack(cctx, 0);
-	    if (type != &t_float && need_type(type, &t_number,
-					    -1, 0, cctx, FALSE, FALSE) == FAIL)
+	    type_T *type = get_type_on_stack(cctx, 0);
+	    if (type->tt_type != VAR_FLOAT && need_type(type, &t_number,
+				     FALSE, -1, 0, cctx, FALSE, FALSE) == FAIL)
 		return FAIL;
 
 	    // only '-' has an effect, for '+' we only check the type
-	    if (negate)
-	    {
-		isn = generate_instr(cctx, ISN_NEGATENR);
-		if (isn == NULL)
-		    return FAIL;
-	    }
+	    if (*p == '-' && generate_instr(cctx, ISN_NEGATENR) == NULL)
+		return FAIL;
 	}
 	else if (numeric_only)
 	{
@@ -1768,17 +2211,19 @@ compile_subscript(
     for (;;)
     {
 	char_u *p = skipwhite(*arg);
+	type_T *type;
 
 	if (*p == NUL || (VIM_ISWHITE(**arg) && vim9_comment_start(p)))
 	{
 	    char_u *next = peek_next_line_from_context(cctx);
 
-	    // If a following line starts with "->{" or "->X" advance to that
-	    // line, so that a line break before "->" is allowed.
+	    // If a following line starts with "->{", "->(" or "->X" advance to
+	    // that line, so that a line break before "->" is allowed.
 	    // Also if a following line starts with ".x".
 	    if (next != NULL &&
 		    ((next[0] == '-' && next[1] == '>'
 				 && (next[2] == '{'
+				       || next[2] == '('
 				       || ASCII_ISALPHA(*skipwhite(next + 2))))
 		    || (next[0] == '.' && eval_isdictc(next[1]))))
 	    {
@@ -1794,7 +2239,6 @@ compile_subscript(
 	// is not a function call.
 	if (**arg == '(')
 	{
-	    type_T	*type;
 	    int		argcount = 0;
 
 	    if (generate_ppconst(cctx, ppconst) == FAIL)
@@ -1881,7 +2325,6 @@ compile_subscript(
 		int	    argcount = 1;
 		garray_T    *stack = &cctx->ctx_type_stack;
 		int	    type_idx_start = stack->ga_len;
-		type_T	    *type;
 		int	    expr_isn_start = cctx->ctx_instr.ga_len;
 		int	    expr_isn_end;
 		int	    arg_isn_count;
@@ -2074,27 +2517,44 @@ compile_subscript(
 		return FAIL;
 	    ppconst->pp_is_const = FALSE;
 
-	    *arg = p + 1;
-	    if (IS_WHITE_OR_NUL(**arg))
+	    type = get_type_on_stack(cctx, 0);
+	    if (type != &t_unknown
+		    && (type->tt_type == VAR_CLASS
+					       || type->tt_type == VAR_OBJECT))
 	    {
-		emsg(_(e_missing_name_after_dot));
-		return FAIL;
+		// class member: SomeClass.varname
+		// class method: SomeClass.SomeMethod()
+		// class constructor: SomeClass.new()
+		// object member: someObject.varname, this.varname
+		// object method: someObject.SomeMethod(), this.SomeMethod()
+		*arg = p;
+		if (compile_class_object_index(cctx, arg, type) == FAIL)
+		    return FAIL;
 	    }
-	    p = *arg;
-	    if (eval_isdictc(*p))
-		while (eval_isnamec(*p))
-		    MB_PTR_ADV(p);
-	    if (p == *arg)
+	    else
 	    {
-		semsg(_(e_syntax_error_at_str), *arg);
-		return FAIL;
+		*arg = p + 1;
+		if (IS_WHITE_OR_NUL(**arg))
+		{
+		    emsg(_(e_missing_name_after_dot));
+		    return FAIL;
+		}
+		p = *arg;
+		if (eval_isdictc(*p))
+		    while (eval_isnamec(*p))
+			MB_PTR_ADV(p);
+		if (p == *arg)
+		{
+		    semsg(_(e_syntax_error_at_str), *arg);
+		    return FAIL;
+		}
+		if (keeping_dict && generate_instr(cctx, ISN_CLEARDICT) == NULL)
+		    return FAIL;
+		if (generate_STRINGMEMBER(cctx, *arg, p - *arg) == FAIL)
+		    return FAIL;
+		keeping_dict = TRUE;
+		*arg = p;
 	    }
-	    if (keeping_dict && generate_instr(cctx, ISN_CLEARDICT) == NULL)
-		return FAIL;
-	    if (generate_STRINGMEMBER(cctx, *arg, p - *arg) == FAIL)
-		return FAIL;
-	    keeping_dict = TRUE;
-	    *arg = p;
 	}
 	else
 	    break;
@@ -2375,7 +2835,7 @@ compile_expr9(
     if (compile_subscript(arg, cctx, start_leader, &end_leader,
 							     ppconst) == FAIL)
 	return FAIL;
-    if (ppconst->pp_used > 0)
+    if ((ppconst->pp_used > 0) && (cctx->ctx_skip != SKIP_YES))
     {
 	// apply the '!', '-' and '+' before the constant
 	rettv = &ppconst->pp_tv[ppconst->pp_used - 1];
@@ -2425,12 +2885,13 @@ compile_expr8(char_u **arg, cctx_T *cctx, ppconst_T *ppconst)
 	type_T	    *actual;
 	where_T	    where = WHERE_INIT;
 
+	where.wt_kind = WT_CAST;
 	generate_ppconst(cctx, ppconst);
 	actual = get_type_on_stack(cctx, 0);
 	if (check_type_maybe(want_type, actual, FALSE, where) != OK)
 	{
-	    if (need_type(actual, want_type, -1, 0, cctx, FALSE, FALSE)
-								       == FAIL)
+	    if (need_type_where(actual, want_type, FALSE, -1, where, cctx, FALSE, FALSE)
+		    == FAIL)
 		return FAIL;
 	}
     }
@@ -2606,8 +3067,8 @@ compile_expr6(char_u **arg, cctx_T *cctx, ppconst_T *ppconst)
 	    ppconst->pp_is_const = FALSE;
 	    if (*op == '.')
 	    {
-		if (may_generate_2STRING(-2, FALSE, cctx) == FAIL
-			|| may_generate_2STRING(-1, FALSE, cctx) == FAIL)
+		if (may_generate_2STRING(-2, TOSTRING_NONE, cctx) == FAIL
+			|| may_generate_2STRING(-1, TOSTRING_NONE, cctx) == FAIL)
 		    return FAIL;
 		if (generate_CONCAT(cctx, 2) == FAIL)
 		    return FAIL;
@@ -2671,7 +3132,7 @@ compile_expr5(char_u **arg, cctx_T *cctx, ppconst_T *ppconst)
 	{
 	    type_T	*t = get_type_on_stack(cctx, 0);
 
-	    if (need_type(t, &t_number, 0, 0, cctx, FALSE, FALSE) == FAIL)
+	    if (need_type(t, &t_number, FALSE, 0, 0, cctx, FALSE, FALSE) == FAIL)
 	    {
 		emsg(_(e_bitshift_ops_must_be_number));
 		return FAIL;
@@ -2709,7 +3170,7 @@ compile_expr5(char_u **arg, cctx_T *cctx, ppconst_T *ppconst)
 		if (tv2->v_type != VAR_NUMBER)
 		    emsg(_(e_bitshift_ops_must_be_number));
 		else
-		    emsg(_(e_bitshift_ops_must_be_postive));
+		    emsg(_(e_bitshift_ops_must_be_positive));
 		return FAIL;
 	    }
 
@@ -2726,8 +3187,8 @@ compile_expr5(char_u **arg, cctx_T *cctx, ppconst_T *ppconst)
 	}
 	else
 	{
-	    if (need_type(get_type_on_stack(cctx, 0), &t_number, 0, 0, cctx,
-			FALSE, FALSE) == FAIL)
+	    if (need_type(get_type_on_stack(cctx, 0), &t_number, FALSE,
+					     0, 0, cctx, FALSE, FALSE) == FAIL)
 	    {
 		emsg(_(e_bitshift_ops_must_be_number));
 		return FAIL;

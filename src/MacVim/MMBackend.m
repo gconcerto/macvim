@@ -28,6 +28,7 @@
  */
 
 #import "MMBackend.h"
+#include "gui_macvim.pro"
 
 
 
@@ -47,19 +48,14 @@
 static unsigned MMServerMax = 1000;
 
 // TODO: Move to separate file.
-static int eventModifierFlagsToVimModMask(int modifierFlags);
-static int eventModifierFlagsToVimMouseModMask(int modifierFlags);
+static unsigned eventModifierFlagsToVimModMask(unsigned modifierFlags);
+static unsigned eventModifierFlagsToVimMouseModMask(unsigned modifierFlags);
 static int eventButtonNumberToVimMouseButton(int buttonNumber);
 
 // In gui_macvim.m
 vimmenu_T *menu_for_descriptor(NSArray *desc);
 
 static id evalExprCocoa(NSString * expr, NSString ** errstr);
-
-void im_preedit_start_macvim();
-void im_preedit_end_macvim();
-void im_preedit_abandon_macvim();
-void im_preedit_changed_macvim(char *preedit_string, int start_index, int cursor_index);
 
 enum {
     MMBlinkStateNone = 0,
@@ -149,9 +145,6 @@ static struct specialkey
 };
 
 
-extern GuiFont gui_mch_retain_font(GuiFont font);
-
-
 @interface NSString (MMServerNameCompare)
 - (NSComparisonResult)serverNameCompare:(NSString *)string;
 @end
@@ -178,6 +171,7 @@ extern GuiFont gui_mch_retain_font(GuiFont font);
 - (void)handleToggleToolbar;
 - (void)handleScrollbarEvent:(NSData *)data;
 - (void)handleSetFont:(NSData *)data;
+- (void)handleCellSize:(NSData *)data;
 - (void)handleDropFiles:(NSData *)data;
 - (void)handleDropString:(NSData *)data;
 - (void)startOdbEditWithArguments:(NSDictionary *)args;
@@ -235,11 +229,8 @@ extern GuiFont gui_mch_retain_font(GuiFont font);
     serverReplyDict = [[NSMutableDictionary alloc] init];
 
     NSBundle *mainBundle = [NSBundle mainBundle];
-    NSString *path = [mainBundle pathForResource:@"Colors" ofType:@"plist"];
-    if (path)
-        colorDict = [[NSDictionary dictionaryWithContentsOfFile:path] retain];
 
-    path = [mainBundle pathForResource:@"SystemColors" ofType:@"plist"];
+    NSString *path = [mainBundle pathForResource:@"SystemColors" ofType:@"plist"];
     if (path)
         sysColorDict = [[NSDictionary dictionaryWithContentsOfFile:path]
             retain];
@@ -248,7 +239,7 @@ extern GuiFont gui_mch_retain_font(GuiFont font);
     if (path)
         actionDict = [[NSDictionary dictionaryWithContentsOfFile:path] retain];
 
-    if (!(colorDict && sysColorDict && actionDict)) {
+    if (!(sysColorDict && actionDict)) {
         ASLogNotice(@"Failed to load dictionaries.%@", MMSymlinkWarningString);
     }
 
@@ -273,9 +264,9 @@ extern GuiFont gui_mch_retain_font(GuiFont font);
     [outputQueue release];  outputQueue = nil;
     [drawData release];  drawData = nil;
     [connection release];  connection = nil;
+    [appProxy release];  appProxy = nil;
     [actionDict release];  actionDict = nil;
     [sysColorDict release];  sysColorDict = nil;
-    [colorDict release];  colorDict = nil;
     [vimServerConnection release];  vimServerConnection = nil;
 #ifdef FEAT_BEVAL
     [lastToolTip release];  lastToolTip = nil;
@@ -297,6 +288,17 @@ extern GuiFont gui_mch_retain_font(GuiFont font);
 - (void)setSpecialColor:(int)color
 {
     specialColor = MM_COLOR(color);
+}
+
+- (void)setTablineColors:(int[6])colors
+{
+    unsigned tabColors[6];
+    for (int i = 0; i < 6; i++) {
+        tabColors[i] = MM_COLOR(colors[i]);
+    }
+    NSMutableData *data = [NSMutableData data];
+    [data appendBytes:&tabColors length:sizeof(tabColors)];
+    [self queueMessage:SetTablineColorsMsgID data:data];
 }
 
 - (void)setDefaultColorsBackground:(int)bg foreground:(int)fg
@@ -770,32 +772,36 @@ extern GuiFont gui_mch_retain_font(GuiFont font);
 
 - (void)updateTabBar
 {
+    // Update the tab bar with the most up-to-date info, including number of
+    // tabs and titles/tooltips. MacVim would also like to know which specific
+    // tabs were moved/added/deleted in order for animation to work, but Vim
+    // does not have specific callbacks to listen to that. Instead, since the
+    // tabpage_T memory address is constant per tab, we use that as a permanent
+    // identifier for each GUI tab so MacVim can do the association.
     NSMutableData *data = [NSMutableData data];
 
+    // 1. Current selected tab index
     int idx = tabpage_index(curtab) - 1;
     [data appendBytes:&idx length:sizeof(int)];
 
     tabpage_T *tp;
+    // 2. Unique id for all the tabs
+    // Do these first so they appear as a consecutive memory block.
     for (tp = first_tabpage; tp != NULL; tp = tp->tp_next) {
-        // Count the number of windows in the tabpage.
-        //win_T *wp = tp->tp_firstwin;
-        //int wincount;
-        //for (wincount = 0; wp != NULL; wp = wp->w_next, ++wincount);
-        //[data appendBytes:&wincount length:sizeof(int)];
-
-        int tabProp = MMTabInfoCount;
-        [data appendBytes:&tabProp length:sizeof(int)];
-        for (tabProp = MMTabLabel; tabProp < MMTabInfoCount; ++tabProp) {
+        [data appendBytes:&tp length:sizeof(void*)];
+    }
+    // Null terminate the unique IDs.
+    tp = 0;
+    [data appendBytes:&tp length:sizeof(void*)];
+    // 3. Labels and tooltips of each tab
+    for (tp = first_tabpage; tp != NULL; tp = tp->tp_next) {
+        for (int tabProp = MMTabLabel; tabProp < MMTabInfoCount; ++tabProp) {
             // This function puts the label of the tab in the global 'NameBuff'.
             get_tabline_label(tp, (tabProp == MMTabToolTip));
-            NSString *s = [NSString stringWithVimString:NameBuff];
-            int len = [s lengthOfBytesUsingEncoding:NSUTF8StringEncoding];
-            if (len < 0)
-                len = 0;
-
-            [data appendBytes:&len length:sizeof(int)];
+            size_t len = STRLEN(NameBuff);
+            [data appendBytes:&len length:sizeof(size_t)];
             if (len > 0)
-                [data appendBytes:[s UTF8String] length:len];
+                [data appendBytes:NameBuff length:len];
         }
     }
 
@@ -1104,6 +1110,20 @@ extern GuiFont gui_mch_retain_font(GuiFont font);
     [self queueMessage:SetPreEditPositionMsgID data:data];
 }
 
+- (void)showDefinition:(NSString *)text row:(int)row col:(int)col
+{
+    NSMutableData *data = [NSMutableData data];
+    [data appendBytes:&row length:sizeof(int)];
+    [data appendBytes:&col length:sizeof(int)];
+
+    NSUInteger len = [text lengthOfBytesUsingEncoding:NSUTF8StringEncoding];
+    [data appendBytes:&len length:sizeof(NSUInteger)];
+    if (len > 0)
+        [data appendBytes:[text UTF8String] length:len];
+
+    [self queueMessage:ShowDefinitionMsgID data:data];
+}
+
 - (int)lookupColorWithKey:(NSString *)key
 {
     if (!(key && [key length] > 0))
@@ -1115,30 +1135,14 @@ extern GuiFont gui_mch_retain_font(GuiFont font);
                componentsJoinedByString:@""];
 
     if (stripKey && [stripKey length] > 0) {
-        // First of all try to lookup key in the color dictionary; note that
-        // all keys in this dictionary are lowercase with no whitespace.
-        id obj = [colorDict objectForKey:stripKey];
-        if (obj) return [obj intValue];
-
-        // The key was not in the dictionary; is it perhaps of the form
-        // #rrggbb?
-        if ([stripKey length] > 1 && [stripKey characterAtIndex:0] == '#') {
-            NSScanner *scanner = [NSScanner scannerWithString:stripKey];
-            [scanner setScanLocation:1];
-            unsigned hex = 0;
-            if ([scanner scanHexInt:&hex]) {
-                return (int)hex;
-            }
-        }
-
-        // As a last resort, check if it is one of the system defined colors.
-        // The keys in this dictionary are also lowercase with no whitespace.
-        obj = [sysColorDict objectForKey:stripKey];
+        // Check if it is one of the system defined colors. The keys in this
+        // dictionary are also lowercase with no whitespace.
+        id obj = [sysColorDict objectForKey:stripKey];
         if (obj) {
             NSColor *col = [NSColor performSelector:NSSelectorFromString(obj)];
             if (col) {
                 CGFloat r, g, b, a;
-                col = [col colorUsingColorSpaceName:NSCalibratedRGBColorSpace];
+                col = [col colorUsingColorSpace:NSColorSpace.sRGBColorSpace];
                 [col getRed:&r green:&g blue:&b alpha:&a];
                 return (((int)(r*255+.5f) & 0xff) << 16)
                      + (((int)(g*255+.5f) & 0xff) << 8)
@@ -1147,7 +1151,6 @@ extern GuiFont gui_mch_retain_font(GuiFont font);
         }
     }
 
-    ASLogNotice(@"No color with key %@ found.", stripKey);
     return INVALCOLOR;
 }
 
@@ -1180,7 +1183,7 @@ extern GuiFont gui_mch_retain_font(GuiFont font);
 - (void)setFullScreenBackgroundColor:(int)color
 {
     NSMutableData *data = [NSMutableData data];
-    color = MM_COLOR(color);
+    color = MM_COLOR_WITH_TRANSP(color,p_transp);
     [data appendBytes:&color length:sizeof(int)];
 
     [self queueMessage:SetFullScreenColorMsgID data:data];
@@ -1305,6 +1308,9 @@ extern GuiFont gui_mch_retain_font(GuiFont font);
         // modified files when we get here.
         isTerminating = YES;
         getout(0);
+    } else if (UpdateCellSizeMsgID == msgid) {
+        // Immediately handle simple state updates to they can be reflected in Vim.
+        [self handleCellSize:data];
     } else {
         // First remove previous instances of this message from the input
         // queue, else the input queue may fill up as a result of Vim not being
@@ -1357,53 +1363,219 @@ extern GuiFont gui_mch_retain_font(GuiFont font);
     return eval;
 }
 
-- (BOOL)starRegisterToPasteboard:(byref NSPasteboard *)pboard
+- (BOOL)hasSelectedText
 {
-    // TODO: This method should share code with clip_mch_request_selection().
+    return (VIsual_active && (State & MODE_NORMAL));
+}
 
-    if (VIsual_active && (State & MODE_NORMAL) && clip_star.available) {
-        // If there is no pasteboard, return YES to indicate that there is text
-        // to copy.
-        if (!pboard)
-            return YES;
-
-        // The code below used to be clip_copy_selection() but it is now
-        // static, so do it manually.
-        clip_update_selection(&clip_star);
-        clip_free_selection(&clip_star);
-        clip_get_selection(&clip_star);
-        clip_gen_set_selection(&clip_star);
-
-        // Get the text to put on the pasteboard.
-        long_u llen = 0; char_u *str = 0;
-        int type = clip_convert_selection(&str, &llen, &clip_star);
-        if (type < 0)
-            return NO;
+/// Returns the currently selected text.
+- (NSString *)selectedText
+{
+    if (VIsual_active && (State & MODE_NORMAL)) {
+        // This is basically doing the following:
+        // - join(getregion(getpos("."), getpos("v"), { type: visualmode() }),"\n")
+        // - Add extra "\n" if we have a linewise selection
         
-        // TODO: Avoid overflow.
-        int len = (int)llen;
-        if (output_conv.vc_type != CONV_NONE) {
-            char_u *conv_str = string_convert(&output_conv, str, &len);
-            if (conv_str) {
-                vim_free(str);
-                str = conv_str;
+        // Call getpos()
+        typval_T pos1, pos2;
+        {
+            typval_T arg_posmark;
+            init_tv(&arg_posmark);
+            arg_posmark.v_type = VAR_STRING;
+
+            arg_posmark.vval.v_string = (char_u*)".";
+            typval_T args1[1] = { arg_posmark };
+            f_getpos(args1, &pos1);
+            if (pos1.v_type != VAR_LIST)
+                return nil;
+
+            arg_posmark.vval.v_string = (char_u*)"v";
+            typval_T args2[1] = { arg_posmark };
+            f_getpos(args2, &pos2);
+            if (pos2.v_type != VAR_LIST) {
+                list_unref(pos1.vval.v_list);
+                return nil;
             }
         }
 
-        NSString *string = [[NSString alloc]
-            initWithBytes:str length:len encoding:NSUTF8StringEncoding];
+        // Call getregion()
+        typval_T arg_opts;
+        init_tv(&arg_opts);
+        arg_opts.v_type = VAR_DICT;
+        arg_opts.vval.v_dict = dict_alloc();
+        arg_opts.vval.v_dict->dv_refcount += 1;
 
-        NSArray *types = [NSArray arrayWithObject:NSStringPboardType];
-        [pboard declareTypes:types owner:nil];
-        BOOL ok = [pboard setString:string forType:NSStringPboardType];
-    
-        [string release];
-        vim_free(str);
+        char_u visualmode[2] = { VIsual_mode, '\0' };
+        dict_add_string(arg_opts.vval.v_dict, "type", visualmode);
 
-        return ok;
+        typval_T args[3] = { pos1, pos2, arg_opts };
+        typval_T regionLines;
+        f_getregion(args, &regionLines);
+
+        // Join the results
+        NSMutableArray *returnLines = [NSMutableArray array];
+        if (regionLines.v_type == VAR_LIST) {
+            list_T *lines = regionLines.vval.v_list;
+            for (listitem_T *item = lines->lv_first; item != NULL; item = item->li_next) {
+                if (item->li_tv.v_type == VAR_STRING) {
+                    char_u *str = item->li_tv.vval.v_string;
+                    if (output_conv.vc_type != CONV_NONE) {
+                        char_u *conv_str = string_convert(&output_conv, str, NULL);
+                        if (conv_str) {
+                            [returnLines addObject:[NSString stringWithUTF8String:(char*)conv_str]];
+                            vim_free(conv_str);
+                        }
+                    } else {
+                        [returnLines addObject:[NSString stringWithUTF8String:(char*)str]];
+                    }
+                }
+            }
+            list_unref(lines);
+        }
+        dict_unref(arg_opts.vval.v_dict);
+        list_unref(pos1.vval.v_list);
+        list_unref(pos2.vval.v_list);
+
+        if (VIsual_mode == 'V')
+            [returnLines addObject:@""]; // need trailing endline for linewise
+        return [returnLines componentsJoinedByString:@"\n"];
+    }
+    return nil;
+}
+
+/// Replace the selected text in visual mode with the new suppiled one.
+- (oneway void)replaceSelectedText:(in bycopy NSString *)text
+{
+    if (VIsual_active && (State & MODE_NORMAL)) {
+        // The only real way Vim has in doing this consistently is to use the
+        // register put functionality as there is no generic API for this.
+        // We find an arbitrary register ('0'), back it up, replace it with our
+        // own content, paste it in, then restore the register to old value.
+        yankreg_T *target_reg = get_y_register(0);
+        yankreg_T backup_reg = *target_reg;
+        target_reg->y_array = NULL;
+        target_reg->y_size = 0;
+
+        // If selection is blockwise, we try to match it. Only do it if input
+        // and selected text have same number of lines, as otherwise it could
+        // be awkward.
+        int yank_type = MAUTO;
+        char_u *vimtext = [text vimStringSave];
+        if (VIsual_mode == Ctrl_V) {
+            long text_lines = string_count(vimtext, (char_u*)"\n", FALSE) + 1;
+
+            linenr_T v1 = VIsual.lnum;
+            linenr_T v2 = curwin->w_cursor.lnum;
+            long num_lines = v1 > v2 ? v1 - v2 + 1 : v2 - v1 + 1;
+
+            if (text_lines == num_lines)
+                yank_type = MBLOCK;
+        }
+        write_reg_contents_ex('0', vimtext, -1, FALSE, yank_type, -1);
+        vim_free(vimtext);
+
+        oparg_T oap;
+        CLEAR_FIELD(oap);
+        oap.regname = '0';
+
+        cmdarg_T cap;
+        CLEAR_FIELD(cap);
+        cap.oap = &oap;
+        cap.cmdchar = 'P';
+        cap.count1 = 1;
+
+        nv_put(&cap);
+
+        // Clean up the temporary register, and restore the old state.
+        yankreg_T *old_y_current = get_y_current();
+        set_y_current(target_reg);
+        free_yank_all();
+        set_y_current(old_y_current);
+        *target_reg = backup_reg;
+
+        // nv_put does not trigger a redraw command as it's done on a higher
+        // level, so just do a manual one here to make sure it's done.
+        [self redrawScreen];
+    }
+}
+
+/// Returns whether the provided mouse screen position is on a visually
+/// selected range of text.
+///
+/// If yes, also return the starting row/col of the selection.
+- (BOOL)mouseScreenposIsSelection:(int)row column:(int)column selRow:(byref int *)startRow selCol:(byref int *)startCol
+{
+    // The code here is adopted from mouse.c's handling of popup_setpos.
+    // Unfortunately this logic is a little tricky to do in pure Vim script
+    // because there isn't a function to allow you to query screen pos to
+    // window pos. Even getmousepos() doesn't work the way you expect it to if
+    // you click on the placeholder rows after the last line (they all return
+    // the same 'column').
+    if (!VIsual_active)
+        return NO;
+
+    // We set mouse_row / mouse_col without caching/restoring, because it
+    // hoenstly makes sense to update them. If in the future we want a version
+    // that isn't mouse-related, then we may want to resotre them at the end of
+    // the function.
+    mouse_row = row;
+    mouse_col = column;
+
+    pos_T    m_pos;
+
+    if (mouse_row < curwin->w_winrow
+            || mouse_row > (curwin->w_winrow + curwin->w_height))
+    {
+        return NO;
+    }
+    else if (get_fpos_of_mouse(&m_pos) != IN_BUFFER)
+    {
+        return NO;
+    }
+    else if (VIsual_mode == 'V')
+    {
+        if ((curwin->w_cursor.lnum <= VIsual.lnum
+                    && (m_pos.lnum < curwin->w_cursor.lnum
+                        || VIsual.lnum < m_pos.lnum))
+                || (VIsual.lnum < curwin->w_cursor.lnum
+                    && (m_pos.lnum < VIsual.lnum
+                        || curwin->w_cursor.lnum < m_pos.lnum)))
+        {
+            return NO;
+        }
+    }
+    else if ((LTOREQ_POS(curwin->w_cursor, VIsual)
+                && (LT_POS(m_pos, curwin->w_cursor)
+                    || LT_POS(VIsual, m_pos)))
+            || (LT_POS(VIsual, curwin->w_cursor)
+                && (LT_POS(m_pos, VIsual)
+                    || LT_POS(curwin->w_cursor, m_pos))))
+    {
+        return NO;
+    }
+    else if (VIsual_mode == Ctrl_V)
+    {
+        colnr_T leftcol, rightcol;
+        getvcols(curwin, &curwin->w_cursor, &VIsual,
+                 &leftcol, &rightcol);
+        getvcol(curwin, &m_pos, NULL, &m_pos.col, NULL);
+        if (m_pos.col < leftcol || m_pos.col > rightcol)
+            return NO;
     }
 
-    return NO;
+    // Now, also return the selection's coordinates back to caller
+    pos_T*  visualStart = LT_POS(curwin->w_cursor, VIsual) ? &curwin->w_cursor : &VIsual;
+    int     srow = 0;
+    int     scol = 0, ccol = 0, ecol = 0;
+    textpos2screenpos(curwin, visualStart, &srow, &scol, &ccol, &ecol);
+    srow = srow > 0 ? srow - 1 : 0; // convert from 1-indexed to 0-indexed.
+    scol = scol > 0 ? scol - 1 : 0;
+    if (VIsual_mode == 'V')
+        scol = 0;
+    *startRow = srow;
+    *startCol = scol;
+
+    return YES;
 }
 
 - (oneway void)addReply:(in bycopy NSString *)reply
@@ -1548,11 +1720,11 @@ extern GuiFont gui_mch_retain_font(GuiFont font);
 {
     NSArray *list = nil;
 
-    if ([self connection]) {
-        id proxy = [connection rootProxy];
-        [proxy setProtocolForProxy:@protocol(MMAppProtocol)];
-
+    if ([self connection] && [connection isValid]) {
         @try {
+            id proxy = [connection rootProxy];
+            [proxy setProtocolForProxy:@protocol(MMAppProtocol)];
+
             list = [proxy serverList];
         }
         @catch (NSException *ex) {
@@ -1582,7 +1754,7 @@ extern GuiFont gui_mch_retain_font(GuiFont font);
     return nil;
 }
 
-- (NSString *)waitForReplyOnPort:(int)port
+- (NSString *)waitForReplyOnPort:(int)port timeout:(NSTimeInterval)timeout
 {
     ASLogDebug(@"port=%d", port);
     
@@ -1593,13 +1765,16 @@ extern GuiFont gui_mch_retain_font(GuiFont font);
     NSNumber *key = [NSNumber numberWithInt:port];
     NSMutableArray *replies = nil;
     NSString *reply = nil;
+    NSDate *limitDate = timeout > 0
+        ? [NSDate dateWithTimeIntervalSinceNow:timeout] : [NSDate distantFuture];
 
     // Wait for reply as long as the connection to the server is valid (unless
     // user interrupts wait with Ctrl-C).
     while (!got_int && [conn isValid] &&
-            !(replies = [serverReplyDict objectForKey:key])) {
+            !(replies = [serverReplyDict objectForKey:key]) &&
+            (timeout <= 0 || [limitDate timeIntervalSinceNow] > 0)) {
         [[NSRunLoop currentRunLoop] runMode:NSDefaultRunLoopMode
-                                 beforeDate:[NSDate distantFuture]];
+                                 beforeDate:limitDate];
     }
 
     if (replies) {
@@ -1813,6 +1988,25 @@ extern GuiFont gui_mch_retain_font(GuiFont font);
     if (numTabs < 0)
         numTabs = 0;
 
+    // Custom hacks to deal with cmdline_row not being perfect for our use cases.
+    int cmdline_row_adjusted = cmdline_row;
+    if (State == MODE_HITRETURN) {
+        // When we are in hit-return mode, Vim does a weird thing and sets
+        // cmdline_row to be the 2nd-to-last row, which would make pinning
+        // cmdline to bottom look weird. This is done in msg_start() and
+        // wait_return().
+        // Instead of modifying Vim, we just hack around this by manually
+        // increasing the row by one. This would make the pin happen right at
+        // the "Hit Enter..." prompt.
+        cmdline_row_adjusted++;
+    } else if (State == MODE_ASKMORE) {
+        // In "more" mode, Vim sometimes set cmdline_row, sometimes it doesn't.
+        // Silver lining is that it always only takes one row and doesn't wrap
+        // like hit-enter, so we know we can always just pin it to the last row
+        // and be done with the hack.
+        cmdline_row_adjusted = Rows - 1;
+    }
+
     NSDictionary *vimState = [NSDictionary dictionaryWithObjectsAndKeys:
         [[NSFileManager defaultManager] currentDirectoryPath], @"pwd",
         [NSNumber numberWithInt:p_mh], @"p_mh",
@@ -1820,6 +2014,7 @@ extern GuiFont gui_mch_retain_font(GuiFont font);
         [NSNumber numberWithInt:numTabs], @"numTabs",
         [NSNumber numberWithInt:fuoptions_flags], @"fullScreenOptions",
         [NSNumber numberWithLong:p_mouset], @"p_mouset",
+        [NSNumber numberWithInt:cmdline_row_adjusted], @"cmdline_row", // Used for pinning cmdline to bottom of window
         nil];
 
     // Put the state before all other messages.
@@ -1866,7 +2061,7 @@ extern GuiFont gui_mch_retain_font(GuiFont font);
 
         int row = *((int*)bytes);  bytes += sizeof(int);
         int col = *((int*)bytes);  bytes += sizeof(int);
-        int flags = *((int*)bytes);  bytes += sizeof(int);
+        unsigned flags = *((unsigned*)bytes);  bytes += sizeof(unsigned);
         float dy = *((float*)bytes);  bytes += sizeof(float);
         float dx = *((float*)bytes);  bytes += sizeof(float);
 
@@ -1907,7 +2102,7 @@ extern GuiFont gui_mch_retain_font(GuiFont font);
         int row = *((int*)bytes);  bytes += sizeof(int);
         int col = *((int*)bytes);  bytes += sizeof(int);
         int button = *((int*)bytes);  bytes += sizeof(int);
-        int flags = *((int*)bytes);  bytes += sizeof(int);
+        unsigned flags = *((unsigned*)bytes);  bytes += sizeof(unsigned);
         int repeat = *((int*)bytes);  bytes += sizeof(int);
 
         button = eventButtonNumberToVimMouseButton(button);
@@ -1921,7 +2116,7 @@ extern GuiFont gui_mch_retain_font(GuiFont font);
 
         int row = *((int*)bytes);  bytes += sizeof(int);
         int col = *((int*)bytes);  bytes += sizeof(int);
-        int flags = *((int*)bytes);  bytes += sizeof(int);
+        unsigned flags = *((unsigned*)bytes);  bytes += sizeof(unsigned);
 
         flags = eventModifierFlagsToVimMouseModMask(flags);
 
@@ -1932,7 +2127,7 @@ extern GuiFont gui_mch_retain_font(GuiFont font);
 
         int row = *((int*)bytes);  bytes += sizeof(int);
         int col = *((int*)bytes);  bytes += sizeof(int);
-        int flags = *((int*)bytes);  bytes += sizeof(int);
+        unsigned flags = *((unsigned*)bytes);  bytes += sizeof(unsigned);
 
         flags = eventModifierFlagsToVimMouseModMask(flags);
 
@@ -1976,10 +2171,8 @@ extern GuiFont gui_mch_retain_font(GuiFont font);
         const void *bytes = [data bytes];
         int idx = *((int*)bytes) + 1;
         send_tabline_menu_event(idx, TABLINE_MENU_CLOSE);
-        [self redrawScreen];
     } else if (AddNewTabMsgID == msgid) {
         send_tabline_menu_event(0, TABLINE_MENU_NEW);
-        [self redrawScreen];
     } else if (DraggedTabMsgID == msgid) {
         if (!data) return;
         const void *bytes = [data bytes];
@@ -2029,8 +2222,6 @@ extern GuiFont gui_mch_retain_font(GuiFont font);
         [self queueMessage:msgid data:d];
 
         gui_resize_shell(cols, rows);
-    } else if (ResizeViewMsgID == msgid) {
-        [self queueMessage:msgid data:data];
     } else if (ExecuteMenuMsgID == msgid) {
         NSDictionary *attrs = [NSDictionary dictionaryWithData:data];
         if (attrs) {
@@ -2102,8 +2293,12 @@ extern GuiFont gui_mch_retain_font(GuiFont font);
         [self setImState:YES];
     } else if (DeactivatedImMsgID == msgid) {
         [self setImState:NO];
-    } else if (BackingPropertiesChangedMsgID == msgid) {
+    } else if (RedrawMsgID == msgid) {
         [self redrawScreen];
+    } else if (LoopBackMsgID == msgid) {
+        // This is a debug message used for confirming a message has been
+        // received and echoed back to caller for synchronization purpose.
+        [self queueMessage:msgid data:nil];
     } else {
         ASLogWarn(@"Unknown message received (msgid=%d)", msgid);
     }
@@ -2314,6 +2509,14 @@ extern GuiFont gui_mch_retain_font(GuiFont font);
 
     ASLogNotice(@"Main connection was lost before process had a chance "
                 "to terminate; preserving swap files.");
+
+    // Just release the connection, in case some autocmd's end up triggering
+    // IPC calls during shutdown. If other code use isValid checks this is a
+    // little unnecessary, but it just helps prevent issues with code that use
+    // the connection or proxy without checking for validity first.
+    [connection release];  connection = nil;
+    [appProxy release];  appProxy = nil;
+
     getout_preserve_modified(1);
 }
 
@@ -2380,7 +2583,7 @@ extern GuiFont gui_mch_retain_font(GuiFont font);
 
     const void *bytes = [data bytes];
     int32_t ident = *((int32_t*)bytes);  bytes += sizeof(int32_t);
-    int hitPart = *((int*)bytes);  bytes += sizeof(int);
+    unsigned hitPart = *((unsigned*)bytes);  bytes += sizeof(unsigned);
     float fval = *((float*)bytes);  bytes += sizeof(float);
     scrollbar_T *sb = gui_find_scrollbar(ident);
 
@@ -2399,12 +2602,14 @@ extern GuiFont gui_mch_retain_font(GuiFont font);
         case NSScrollerIncrementPage:
             value += (size > 2 ? size - 2 : 1);
             break;
+#if MAC_OS_X_VERSION_MIN_REQUIRED < MAC_OS_X_VERSION_10_7
         case NSScrollerDecrementLine:
             --value;
             break;
         case NSScrollerIncrementLine:
             ++value;
             break;
+#endif
         case NSScrollerKnob:
             isStillDragging = YES;
             // fall through ...
@@ -2481,8 +2686,18 @@ extern GuiFont gui_mch_retain_font(GuiFont font);
         CONVERT_FROM_UTF8_FREE(ws);
     }
     CONVERT_FROM_UTF8_FREE(s);
+}
 
-    [self redrawScreen];
+- (void)handleCellSize:(NSData *)data
+{
+    if (!data) return;
+
+    const void *bytes = [data bytes];
+
+    // Don't use gui.char_width/height because for simplicity we set those to
+    // 1. We store the cell size separately (it's only used for
+    // getcellpixels()).
+    memcpy(&_cellSize, bytes, sizeof(NSSize));
 }
 
 - (void)handleDropFiles:(NSData *)data
@@ -2536,7 +2751,7 @@ extern GuiFont gui_mch_retain_font(GuiFont font);
 #ifdef FEAT_DND
     char_u  dropkey[3] = { CSI, KS_EXTRA, (char_u)KE_DROP };
     const void *bytes = [data bytes];
-    int len = *((int*)bytes);  bytes += sizeof(int);
+    int len = *((int*)bytes);  bytes += sizeof(int); // unused
     NSMutableString *string = [NSMutableString stringWithUTF8String:bytes];
 
     // Replace unrecognized end-of-line sequences with \x0a (line feed).
@@ -2549,7 +2764,7 @@ extern GuiFont gui_mch_retain_font(GuiFont font);
                                        options:0 range:range];
     }
 
-    len = [string lengthOfBytesUsingEncoding:NSUTF8StringEncoding];
+    len = (int)[string lengthOfBytesUsingEncoding:NSUTF8StringEncoding];
     char_u *s = (char_u*)[string UTF8String];
     if (input_conv.vc_type != CONV_NONE)
         s = string_convert(&input_conv, s, &len);
@@ -2940,7 +3155,7 @@ extern GuiFont gui_mch_retain_font(GuiFont font);
 
             // Force screen redraw (does it have to be this complicated?).
             // (This code was taken from the end of gui_handle_drop().)
-            update_screen(NOT_VALID);
+            update_screen(UPD_NOT_VALID);
             setcursor();
             out_flush();
             gui_update_cursor(FALSE, FALSE);
@@ -3087,7 +3302,7 @@ extern GuiFont gui_mch_retain_font(GuiFont font);
     vim_free(filename_vim);
 
     // Force screen redraw (see handleOpenWithArguments:).
-    update_screen(NOT_VALID);
+    update_screen(UPD_NOT_VALID);
     setcursor();
     out_flush();
     gui_update_cursor(FALSE, FALSE);
@@ -3132,7 +3347,7 @@ extern GuiFont gui_mch_retain_font(GuiFont font);
     vim_free(path_vim);
 
     // Force screen redraw (see handleOpenWithArguments:).
-    update_screen(NOT_VALID);
+    update_screen(UPD_NOT_VALID);
     setcursor();
     out_flush();
     gui_update_cursor(FALSE, FALSE);
@@ -3174,7 +3389,7 @@ extern GuiFont gui_mch_retain_font(GuiFont font);
     char_u *ptr = NULL;
     char_u *cpo_save = p_cpo;
     p_cpo = (char_u *)"Bk";
-    char_u *str = replace_termcodes((char_u *)string, &ptr, REPTERM_DO_LT, NULL);
+    char_u *str = replace_termcodes((char_u *)string, &ptr, 0, REPTERM_DO_LT, NULL);
     p_cpo = cpo_save;
 
     if (*ptr != NUL)	/* trailing CTRL-V results in nothing */
@@ -3218,8 +3433,8 @@ extern GuiFont gui_mch_retain_font(GuiFont font);
 - (void)redrawScreen
 {
     // Force screen redraw (does it have to be this complicated?).
-    redraw_all_later(CLEAR);
-    update_screen(NOT_VALID);
+    redraw_all_later(UPD_CLEAR);
+    update_screen(UPD_NOT_VALID);
     setcursor();
     out_flush();
     gui_update_cursor(FALSE, FALSE);
@@ -3289,9 +3504,9 @@ extern GuiFont gui_mch_retain_font(GuiFont font);
 - (void)handleGesture:(NSData *)data
 {
     const void *bytes = [data bytes];
-    int flags = *((int*)bytes);  bytes += sizeof(int);
+    unsigned flags = *((int*)bytes);  bytes += sizeof(int);
     int gesture = *((int*)bytes);  bytes += sizeof(int);
-    int modifiers = eventModifierFlagsToVimModMask(flags);
+    unsigned modifiers = eventModifierFlagsToVimModMask(flags);
     char_u string[6];
 
     string[3] = CSI;
@@ -3533,7 +3748,7 @@ extern GuiFont gui_mch_retain_font(GuiFont font);
 
 
 
-static int eventModifierFlagsToVimModMask(int modifierFlags)
+static unsigned eventModifierFlagsToVimModMask(unsigned modifierFlags)
 {
     int modMask = 0;
 
@@ -3549,9 +3764,9 @@ static int eventModifierFlagsToVimModMask(int modifierFlags)
     return modMask;
 }
 
-static int eventModifierFlagsToVimMouseModMask(int modifierFlags)
+static unsigned eventModifierFlagsToVimMouseModMask(unsigned modifierFlags)
 {
-    int modMask = 0;
+    unsigned modMask = 0;
 
     if (modifierFlags & NSEventModifierFlagShift)
         modMask |= MOUSE_SHIFT;
@@ -3565,9 +3780,9 @@ static int eventModifierFlagsToVimMouseModMask(int modifierFlags)
 
 static int eventButtonNumberToVimMouseButton(int buttonNumber)
 {
-    static int mouseButton[] = { MOUSE_LEFT, MOUSE_RIGHT, MOUSE_MIDDLE };
+    static int mouseButton[] = { MOUSE_LEFT, MOUSE_RIGHT, MOUSE_MIDDLE, MOUSE_X1, MOUSE_X2 };
 
-    return (buttonNumber >= 0 && buttonNumber < 3)
+    return (buttonNumber >= 0 && buttonNumber < 5)
             ? mouseButton[buttonNumber] : -1;
 }
 

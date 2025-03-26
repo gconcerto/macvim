@@ -1,8 +1,9 @@
 " Vim support file to define the default menus
 " You can also use this as a start for your own set of menus.
 "
-" Maintainer:	Bram Moolenaar <Bram@vim.org>
-" Last Change:	2022 Mar 02
+" Maintainer:	The Vim Project <https://github.com/vim/vim>
+" Last Change:	2023 Aug 10
+" Former Maintainer:	Bram Moolenaar <Bram@vim.org>
 
 " Note that ":an" (short for ":anoremenu") is often used to make a menu work
 " in all modes and avoid side effects from mappings defined by the user.
@@ -81,15 +82,16 @@ if has("gui_macvim")
   an <silent> 9998.301 Window.Minimize\ All	    <Nop>
   an <silent> 9998.310 Window.Zoom		    <Nop>
   an <silent> 9998.311 Window.Zoom\ All		    <Nop>
+  an 9998.318 Window.-SEP1-			    <Nop>
   an <silent> 9998.320 Window.Toggle\ Full\ Screen\ Mode :set invfullscreen<CR>
   tln <silent> 9998.320 Window.Toggle\ Full\ Screen\ Mode <C-W>:set invfullscreen<CR>
-  an 9998.330 Window.-SEP1-			    <Nop>
+  an 9998.330 Window.-SEP2-			    <Nop>
   " TODO! Grey out if no tabs are visible.
   an <silent> 9998.340 Window.Show\ Next\ Tab	    :tabnext<CR>
   tln <silent> 9998.340 Window.Show\ Next\ Tab	<C-W>:tabnext<CR>
   an <silent> 9998.350 Window.Show\ Previous\ Tab :tabprevious<CR>
   tln <silent> 9998.350 Window.Show\ Previous\ Tab <C-W>:tabprevious<CR>
-  an 9998.360 Window.-SEP2-			    <Nop>
+  an 9998.360 Window.-SEP3-			    <Nop>
   an <silent> 9998.370 Window.Bring\ All\ To\ Front <Nop>
   an <silent> 9998.380 Window.Stay\ in\ Front <Nop>
   an <silent> 9998.390 Window.Stay\ in\ Back <Nop>
@@ -101,16 +103,18 @@ if has("gui_macvim")
   an 9999.1 &Help.MacVim\ Help		    :h gui_mac<CR>
   tln 9999.1 &Help.MacVim\ Help		    <C-W>:h gui_mac<CR>
   an <silent> 9999.2 &Help.MacVim\ Website   <Nop>
-  an 9999.3 &Help.Release\ Notes        <Cmd>silent !open https://github.com/macvim-dev/macvim/releases<CR>
-  tln 9999.3 &Help.Release\ Notes        <Cmd>silent !open https://github.com/macvim-dev/macvim/releases<CR>
-  an 9999.4 &Help.-sep0-		    <Nop>
+  an 9999.3 &Help.What's\ New        <Nop>
+  tln 9999.3 &Help.What's\ New        <Nop>
+  an 9999.4 &Help.Release\ Notes        <Cmd>silent !open https://github.com/macvim-dev/macvim/releases<CR>
+  tln 9999.4 &Help.Release\ Notes        <Cmd>silent !open https://github.com/macvim-dev/macvim/releases<CR>
+  an 9999.5 &Help.-sep0-		    <Nop>
 endif
 if has("gui_macvim")
   " Run vimtutor in GUI mode. Need to make sure to override the PATH so we use
   " this app instead of accidentally opening another installed Vim/MacVim.
-  an 9999.5 &Help.Vim\ Tutor       :silent !PATH="$VIM/../../bin":/usr/bin:/bin:/usr/sbin:/sbin $VIM/../../bin/vimtutor -g&<CR>
-  tln 9999.5 &Help.Vim\ Tutor      <C-W>:silent !PATH="$VIM/../../bin":/usr/bin:/bin:/usr/sbin:/sbin $VIM/../../bin/vimtutor -g&<CR>
-  an 9999.6 &Help.-sep-vim-tutor-  <Nop>
+  an 9999.6 &Help.Vim\ Tutor       :silent call system('PATH="$VIM/../../bin":/usr/bin:/bin:/usr/sbin:/sbin $VIM/../../bin/vimtutor -g&')<CR>
+  tln 9999.6 &Help.Vim\ Tutor      <C-W>:silent call system('PATH="$VIM/../../bin":/usr/bin:/bin:/usr/sbin:/sbin $VIM/../../bin/vimtutor -g&')<CR>
+  an 9999.7 &Help.-sep-vim-tutor-  <Nop>
 endif
 an 9999.10 &Help.&Overview<Tab><F1>	:help<CR>
 an 9999.20 &Help.&User\ Manual		:help usr_toc<CR>
@@ -156,7 +160,9 @@ enddef
 
 " File menu
 if has("gui_macvim")
-  an <silent> 10.290 &File.New\ Window		    <Nop>
+  an <silent> 10.290 &File.New\ Window                          <Nop>
+  an <silent> 10.291 &File.New\ Clean\ Window		        <Nop>
+  an <silent> 10.292 &File.New\ Clean\ Window\ (No\ Defaults)   <Nop>
   an  10.295 &File.New\ Tab			    :tabnew<CR>
   tln 10.295 &File.New\ Tab			    <C-W>:tabnew<CR>
   an <silent> 10.310 &File.Open…		    <Nop>
@@ -165,6 +171,7 @@ if has("gui_macvim")
   an <silent> 10.330 &File.Close\ Window<Tab>:qa    :conf qa<CR>
   tln <silent> 10.330 &File.Close\ Window<Tab>:qa   <C-W>:conf qa<CR>
   an <silent> 10.332 &File.Close<Tab>:q		    :conf q<CR>
+  tln <silent> 10.332 &File.Close<Tab>:q		    <C-W>:conf q<CR>
   an <silent> 10.341 &File.Save\ All		    :browse conf wa<CR>
   an 10.350 &File.Save\ As…<Tab>:sav	    :browse confirm saveas<CR>
 else
@@ -173,7 +180,7 @@ if !has("gui_macvim")
   an 10.310 &File.&Open\.\.\.<Tab>:e		:browse confirm e<CR>
 endif
 an 10.320 &File.Sp&lit-Open\.\.\.<Tab>:sp	:browse sp<CR>
-an 10.320 &File.Open\ Tab\.\.\.<Tab>:tabnew	:browse tabnew<CR>
+an 10.320 &File.Open\ &Tab\.\.\.<Tab>:tabnew	:browse tabnew<CR>
 if !has("gui_macvim")
   an 10.325 &File.&New<Tab>:enew		:confirm enew<CR>
   an <silent> 10.330 &File.&Close<Tab>:close
@@ -182,6 +189,12 @@ if !has("gui_macvim")
 	\ else <Bar>
 	\   confirm close <Bar>
 	\ endif<CR>
+  tln <silent> 10.330 &File.&Close<Tab>:close
+      \ <C-W>:if winheight(2) < 0 && tabpagewinnr(2) == 0 <Bar>
+      \   confirm enew <Bar>
+      \ else <Bar>
+      \   confirm close <Bar>
+      \ endif<CR>
 endif
 an 10.335 &File.-SEP1-				<Nop>
 an <silent> 10.340 &File.&Save<Tab>:w		:if expand("%") == ""<Bar>browse confirm w<Bar>else<Bar>confirm w<Bar>endif<CR>
@@ -400,7 +413,7 @@ def s:TextWidth()
     # Remove leading zeros to avoid it being used as an octal number.
     # But keep a zero by itself.
     var tw = substitute(n, "^0*", "", "")
-    &tw = tw == '' ? 0 : tw
+    &tw = tw == '' ? 0 : str2nr(tw)
   endif
 enddef
 
@@ -539,7 +552,7 @@ if has("spell")
   an <silent> 40.335.270 &Tools.&Spelling.&Find\ More\ Languages	:call <SID>SpellLang()<CR>
 
   let s:undo_spelllang = ['aun &Tools.&Spelling.&Find\ More\ Languages']
-  def s:SpellLang()
+  def s:SpellLang(encChanged = false)
     for cmd in s:undo_spelllang
       exe "silent! " .. cmd
     endfor
@@ -547,7 +560,8 @@ if has("spell")
 
     var enc = &enc == "iso-8859-15" ? "latin1" : &enc
 
-    if !exists("g:menutrans_set_lang_to")
+    # Reset g:menutrans_set_lang_to when called for the EncodingChanged event.
+    if !exists("g:menutrans_set_lang_to") || encChanged
       g:menutrans_set_lang_to = 'Set Language to'
     endif
 
@@ -575,12 +589,12 @@ if has("spell")
     else
       echomsg "Found " .. found .. " more spell files"
     endif
+
     # Need to redo this when 'encoding' is changed.
     augroup spellmenu
-    au! EncodingChanged * call <SID>SpellLang()
+    au! EncodingChanged * call SpellLang(true)
     augroup END
   enddef
-
 endif
 
 " Tools.Fold Menu
@@ -671,7 +685,9 @@ def s:XxdBack()
     exe ':%!' .. g:xxdprogram .. ' -r'
   endif
   set ft=
-  doautocmd filetypedetect BufReadPost
+  if exists('#filetypedetect') && exists('#BufReadPost')
+    doautocmd filetypedetect BufReadPost
+  endif
   &mod = mod
 enddef
 
@@ -1003,6 +1019,11 @@ an 70.410 &Window.Min\ Widt&h<Tab>^W1\|			<C-W>1\|
 endif " !has("gui_macvim")
 
 " The popup menu
+if has("gui_macvim")
+  vnoremenu 1.05 PopUp.Look\ Up     :<C-U>call macvim#ShowDefinitionSelected()<CR>
+  vnoremenu 1.06 PopUp.-SEPLookUp-      <Nop>
+endif
+
 an 1.10 PopUp.&Undo			u
 an 1.15 PopUp.-SEP1-			<Nop>
 vnoremenu 1.20 PopUp.Cu&t		"+x
@@ -1209,7 +1230,7 @@ else
   endif
   tmenu ToolBar.LoadSesn	Choose a session to load
   tmenu ToolBar.SaveSesn	Save current session
-  tmenu ToolBar.RunScript	Choose a Vim Script to run
+  tmenu ToolBar.RunScript	Choose a Vim script to run
   tmenu ToolBar.Make		Make current project (:make)
   tmenu ToolBar.RunCtags	Build tags in current directory tree (!ctags -R .)
   tmenu ToolBar.TagJump		Jump to tag under cursor
@@ -1237,6 +1258,69 @@ def s:SaveVimSesn()
 enddef
 
 endif
+
+
+if has("gui_macvim")
+  "
+  " Set up menu key equivalents (these should always have the 'D' modifier
+  " set), action bindings, and alternate items.
+  "
+  " Note: menu items which should execute an action are bound to <Nop>; the
+  " action message is specified here via the :macmenu command.
+  "
+  macm File.New\ Window				key=<D-n> action=newWindow:
+  macm File.New\ Clean\ Window		        key=<D-N> action=newWindowClean:
+  macm File.New\ Clean\ Window\ (No\ Defaults)  key=<D-M-N> action=newWindowCleanNoDefaults: alt=YES
+  macm File.New\ Tab				key=<D-t>
+  macm File.Open…				key=<D-o> action=fileOpen:
+  macm File.Open\ Tab\.\.\.<Tab>:tabnew		key=<D-T>
+  macm File.Open\ Recent			action=recentFilesDummy:
+  macm File.Close\ Window<Tab>:qa		key=<D-W>
+  macm File.Close				key=<D-w> action=performClose:
+  macm File.Save<Tab>:w				key=<D-s>
+  macm File.Save\ All				key=<D-M-s> alt=YES
+  macm File.Save\ As…<Tab>:sav		key=<D-S>
+  macm File.Print				key=<D-p>
+
+  macm Edit.Undo<Tab>u				key=<D-z> action=undo:
+  macm Edit.Redo<Tab>^R				key=<D-Z> action=redo:
+  macm Edit.Cut<Tab>"+x				key=<D-x> action=cut:
+  macm Edit.Copy<Tab>"+y			key=<D-c> action=copy:
+  macm Edit.Paste<Tab>"+gP			key=<D-v> action=paste:
+  macm Edit.Select\ All<Tab>ggVG		key=<D-a> action=selectAll:
+  macm Edit.Find.Find…			key=<D-f>
+  macm Edit.Find.Find\ Next			key=<D-g> action=findNext:
+  macm Edit.Find.Find\ Previous			key=<D-G> action=findPrevious:
+  macm Edit.Find.Use\ Selection\ for\ Find	key=<D-e> action=useSelectionForFind:
+  macm Edit.Font.Show\ Fonts			action=orderFrontFontPanel:
+  macm Edit.Font.Bigger				key=<D-=> action=fontSizeUp:
+  macm Edit.Font.Smaller			key=<D--> action=fontSizeDown:
+
+  macm Tools.Spelling.To\ Next\ Error<Tab>]s	key=<D-;>
+  macm Tools.Spelling.Suggest\ Corrections<Tab>z=   key=<D-:>
+  macm Tools.Make<Tab>:make			key=<D-b>
+  macm Tools.List\ Errors<Tab>:cl		key=<D-l>
+  macm Tools.Next\ Error<Tab>:cn		key=<D-C-Right>
+  macm Tools.Previous\ Error<Tab>:cp		key=<D-C-Left>
+  macm Tools.Older\ List<Tab>:cold		key=<D-C-Up>
+  macm Tools.Newer\ List<Tab>:cnew		key=<D-C-Down>
+
+  macm Window.Minimize		key=<D-m>	action=performMiniaturize:
+  macm Window.Minimize\ All	key=<D-M-m>	action=miniaturizeAll:	alt=YES
+  macm Window.Zoom		key=<D-C-z>	action=performZoom:
+  macm Window.Zoom\ All		key=<D-M-C-z>	action=zoomAll:		alt=YES
+  macm Window.Toggle\ Full\ Screen\ Mode	key=<D-C-f>
+  macm Window.Show\ Next\ Tab			key=<D-}>
+  macm Window.Show\ Previous\ Tab		key=<D-{>
+  macm Window.Bring\ All\ To\ Front		action=arrangeInFront:
+  macm Window.Stay\ in\ Front 	action=stayInFront:
+  macm Window.Stay\ in\ Back 	action=stayInBack:
+  macm Window.Stay\ Level\ Normal action=stayLevelNormal:
+
+  macm Help.MacVim\ Help			key=<D-?>
+  macm Help.MacVim\ Website			action=openWebsite:
+  macm Help.What's\ New			    action=showWhatsNew:
+endif " if has("gui_macvim")
 
 endif " !exists("did_install_default_menus")
 
@@ -1293,65 +1377,6 @@ let &cpo = s:cpo_save
 unlet s:cpo_save
 
 
-if has("gui_macvim")
-  "
-  " Set up menu key equivalents (these should always have the 'D' modifier
-  " set), action bindings, and alternate items.
-  "
-  " Note: menu items which should execute an action are bound to <Nop>; the
-  " action message is specified here via the :macmenu command.
-  "
-  macm File.New\ Window				key=<D-n> action=newWindow:
-  macm File.New\ Tab				key=<D-t>
-  macm File.Open…				key=<D-o> action=fileOpen:
-  macm File.Open\ Tab\.\.\.<Tab>:tabnew		key=<D-T>
-  macm File.Open\ Recent			action=recentFilesDummy:
-  macm File.Close\ Window<Tab>:qa		key=<D-W>
-  macm File.Close				key=<D-w> action=performClose:
-  macm File.Save<Tab>:w				key=<D-s>
-  macm File.Save\ All				key=<D-M-s> alt=YES
-  macm File.Save\ As…<Tab>:sav		key=<D-S>
-  macm File.Print				key=<D-p>
-
-  macm Edit.Undo<Tab>u				key=<D-z> action=undo:
-  macm Edit.Redo<Tab>^R				key=<D-Z> action=redo:
-  macm Edit.Cut<Tab>"+x				key=<D-x> action=cut:
-  macm Edit.Copy<Tab>"+y			key=<D-c> action=copy:
-  macm Edit.Paste<Tab>"+gP			key=<D-v> action=paste:
-  macm Edit.Select\ All<Tab>ggVG		key=<D-a> action=selectAll:
-  macm Edit.Find.Find…			key=<D-f>
-  macm Edit.Find.Find\ Next			key=<D-g> action=findNext:
-  macm Edit.Find.Find\ Previous			key=<D-G> action=findPrevious:
-  macm Edit.Find.Use\ Selection\ for\ Find	key=<D-e> action=useSelectionForFind:
-  macm Edit.Font.Show\ Fonts			action=orderFrontFontPanel:
-  macm Edit.Font.Bigger				key=<D-=> action=fontSizeUp:
-  macm Edit.Font.Smaller			key=<D--> action=fontSizeDown:
-
-  macm Tools.Spelling.To\ Next\ Error<Tab>]s	key=<D-;>
-  macm Tools.Spelling.Suggest\ Corrections<Tab>z=   key=<D-:>
-  macm Tools.Make<Tab>:make			key=<D-b>
-  macm Tools.List\ Errors<Tab>:cl		key=<D-l>
-  macm Tools.Next\ Error<Tab>:cn		key=<D-C-Right>
-  macm Tools.Previous\ Error<Tab>:cp		key=<D-C-Left>
-  macm Tools.Older\ List<Tab>:cold		key=<D-C-Up>
-  macm Tools.Newer\ List<Tab>:cnew		key=<D-C-Down>
-
-  macm Window.Minimize		key=<D-m>	action=performMiniaturize:
-  macm Window.Minimize\ All	key=<D-M-m>	action=miniaturizeAll:	alt=YES
-  macm Window.Zoom		key=<D-C-z>	action=performZoom:
-  macm Window.Zoom\ All		key=<D-M-C-z>	action=zoomAll:		alt=YES
-  macm Window.Toggle\ Full\ Screen\ Mode	key=<D-C-f>
-  macm Window.Show\ Next\ Tab			key=<D-}>
-  macm Window.Show\ Previous\ Tab		key=<D-{>
-  macm Window.Bring\ All\ To\ Front		action=arrangeInFront:
-  macm Window.Stay\ in\ Front 	action=stayInFront:
-  macm Window.Stay\ in\ Back 	action=stayInBack:
-  macm Window.Stay\ Level\ Normal action=stayLevelNormal:
-
-  macm Help.MacVim\ Help			key=<D-?>
-  macm Help.MacVim\ Website			action=openWebsite:
-endif
-
 if has("touchbar")
   " Set up default Touch Bar buttons.
   " 1. Smart fullscreen icon that toggles between going full screen or not.
@@ -1396,4 +1421,4 @@ if has("touchbar")
   endif
 endif
 
-" vim: set sw=2 :
+" vim: set sw=2 tabstop=8 :

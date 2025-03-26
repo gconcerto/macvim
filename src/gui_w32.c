@@ -29,6 +29,12 @@
 # include "gui_dwrite.h"
 #endif
 
+// values for "dead_key"
+#define DEAD_KEY_OFF			0	// no dead key
+#define DEAD_KEY_SET_DEFAULT		1	// dead key pressed
+#define DEAD_KEY_TRANSIENT_IN_ON_CHAR	2	// wait for next key press
+#define DEAD_KEY_SKIP_ON_CHAR		3	// skip next _OnChar()
+
 #if defined(FEAT_DIRECTX)
 static DWriteContext *s_dwc = NULL;
 static int s_directx_enabled = 0;
@@ -43,6 +49,86 @@ static int gui_mswin_get_menu_height(int fix_window);
 #else
 # define gui_mswin_get_menu_height(fix_window)	0
 #endif
+
+typedef struct keycode_trans_strategy {
+    void (*ptr_on_char) (HWND /*hwnd UNUSED*/, UINT /*cch*/, int /*cRepeat UNUSED*/);
+    void (*ptr_on_sys_char) (HWND /*hwnd UNUSED*/, UINT /*cch*/, int /*cRepeat UNUSED*/);
+    void (*ptr_process_message_usual_key) (UINT /*vk*/, const MSG* /*pmsg*/);
+    int  (*ptr_get_active_modifiers)(void);
+    int  (*is_experimental)(void);
+} keycode_trans_strategy;
+
+// forward declarations for input instance initializer
+static void _OnChar_experimental(HWND /*hwnd UNUSED*/, UINT /*cch*/, int /*cRepeat UNUSED*/);
+static void _OnSysChar_experimental(HWND /*hwnd UNUSED*/, UINT /*cch*/, int /*cRepeat UNUSED*/);
+static void process_message_usual_key_experimental(UINT /*vk*/, const MSG* /*pmsg*/);
+static int  get_active_modifiers_experimental(void);
+static int  is_experimental_true(void);
+
+keycode_trans_strategy keycode_trans_strategy_experimental = {
+      _OnChar_experimental      // ptr_on_char
+    , _OnSysChar_experimental // ptr_on_sys_char
+    , process_message_usual_key_experimental // ptr_process_message_usual_key
+    , get_active_modifiers_experimental
+    , is_experimental_true
+};
+
+// forward declarations for input instance initializer
+static void _OnChar_classic(HWND /*hwnd UNUSED*/, UINT /*cch*/, int /*cRepeat UNUSED*/);
+static void _OnSysChar_classic(HWND /*hwnd UNUSED*/, UINT /*cch*/, int /*cRepeat UNUSED*/);
+static void process_message_usual_key_classic(UINT /*vk*/, const MSG* /*pmsg*/);
+static int  get_active_modifiers_classic(void);
+static int  is_experimental_false(void);
+
+keycode_trans_strategy keycode_trans_strategy_classic = {
+      _OnChar_classic      // ptr_on_char
+    , _OnSysChar_classic // ptr_on_sys_char
+    , process_message_usual_key_classic // ptr_process_message_usual_key
+    , get_active_modifiers_classic
+    , is_experimental_false
+};
+
+keycode_trans_strategy *keycode_trans_strategy_used = NULL;
+
+static int is_experimental_true(void)
+{
+    return 1;
+}
+
+static int is_experimental_false(void)
+{
+    return 0;
+}
+
+/*
+ * Initialize the keycode translation strategy.
+ */
+static void keycode_trans_strategy_init(void)
+{
+    const char *strategy = NULL;
+
+    // set default value as fallback
+    keycode_trans_strategy_used = &keycode_trans_strategy_classic;
+
+    strategy = getenv("VIM_KEYCODE_TRANS_STRATEGY");
+    if (strategy == NULL)
+    {
+	return;
+    }
+
+    if (STRICMP(strategy, "classic") == 0)
+    {
+	keycode_trans_strategy_used = &keycode_trans_strategy_classic;
+	return;
+    }
+
+    if (STRICMP(strategy, "experimental") == 0)
+    {
+	keycode_trans_strategy_used = &keycode_trans_strategy_experimental;
+	return;
+    }
+
+}
 
 #if defined(FEAT_RENDER_OPTIONS) || defined(PROTO)
     int
@@ -188,15 +274,9 @@ gui_mch_set_rendering_options(char_u *s)
 
 // cproto fails on missing include files
 #ifndef PROTO
-
-# ifndef __MINGW32__
-#  include <shellapi.h>
-# endif
-# if defined(FEAT_TOOLBAR) || defined(FEAT_BEVAL_GUI) || defined(FEAT_GUI_TABLINE)
-#  include <commctrl.h>
-# endif
+# include <shellapi.h>
+# include <commctrl.h>
 # include <windowsx.h>
-
 #endif // PROTO
 
 #ifdef FEAT_MENU
@@ -220,6 +300,10 @@ gui_mch_set_rendering_options(char_u *s)
 
 #ifndef WM_DPICHANGED
 # define WM_DPICHANGED			0x02E0
+#endif
+
+#ifndef WM_GETDPISCALEDSIZE
+# define WM_GETDPISCALEDSIZE		0x02E4
 #endif
 
 #ifndef WM_MOUSEHWHEEL
@@ -375,6 +459,7 @@ typedef enum DPI_AWARENESS {
 static int		s_dpi = DEFAULT_DPI;
 static BOOL		s_in_dpichanged = FALSE;
 static DPI_AWARENESS	s_process_dpi_aware = DPI_AWARENESS_INVALID;
+static RECT		s_suggested_rect;
 
 static UINT (WINAPI *pGetDpiForSystem)(void) = NULL;
 static UINT (WINAPI *pGetDpiForWindow)(HWND hwnd) = NULL;
@@ -382,16 +467,6 @@ static int (WINAPI *pGetSystemMetricsForDpi)(int, UINT) = NULL;
 //static INT (WINAPI *pGetWindowDpiAwarenessContext)(HWND hwnd) = NULL;
 static DPI_AWARENESS_CONTEXT (WINAPI *pSetThreadDpiAwarenessContext)(DPI_AWARENESS_CONTEXT dpiContext) = NULL;
 static DPI_AWARENESS (WINAPI *pGetAwarenessFromDpiAwarenessContext)(DPI_AWARENESS_CONTEXT) = NULL;
-
-    static UINT WINAPI
-stubGetDpiForSystem(void)
-{
-    HWND hwnd = GetDesktopWindow();
-    HDC hdc = GetWindowDC(hwnd);
-    UINT dpi = GetDeviceCaps(hdc, LOGPIXELSY);
-    ReleaseDC(hwnd, hdc);
-    return dpi;
-}
 
     static int WINAPI
 stubGetSystemMetricsForDpi(int nIndex, UINT dpi UNUSED)
@@ -430,12 +505,12 @@ directx_enabled(void)
     static void
 directx_binddc(void)
 {
-    if (s_textArea != NULL)
-    {
-	RECT	rect;
-	GetClientRect(s_textArea, &rect);
-	DWriteContext_BindDC(s_dwc, s_hdc, &rect);
-    }
+    if (s_textArea == NULL)
+	return;
+
+    RECT	rect;
+    GetClientRect(s_textArea, &rect);
+    DWriteContext_BindDC(s_dwc, s_hdc, &rect);
 }
 #endif
 
@@ -533,7 +608,7 @@ static int	s_y_pending;
 static UINT	s_kFlags_pending;
 static UINT_PTR	s_wait_timer = 0;	  // Timer for get char from user
 static int	s_timed_out = FALSE;
-static int	dead_key = 0;		  // 0: no dead key, 1: dead key pressed
+static int	dead_key = DEAD_KEY_OFF;
 static UINT	surrogate_pending_ch = 0; // 0: no surrogate pending,
 					  // else a high surrogate
 
@@ -659,14 +734,14 @@ gui_mswin_rm_blink_timer(void)
 {
     MSG msg;
 
-    if (blink_timer != 0)
-    {
-	KillTimer(NULL, blink_timer);
-	// Eat spurious WM_TIMER messages
-	while (PeekMessageW(&msg, s_hwnd, WM_TIMER, WM_TIMER, PM_REMOVE))
-	    ;
-	blink_timer = 0;
-    }
+    if (blink_timer == 0)
+	return;
+
+    KillTimer(NULL, blink_timer);
+    // Eat spurious WM_TIMER messages
+    while (PeekMessageW(&msg, s_hwnd, WM_TIMER, WM_TIMER, PM_REMOVE))
+	;
+    blink_timer = 0;
 }
 
 /*
@@ -735,7 +810,7 @@ _OnDeadChar(
     UINT ch UNUSED,
     int cRepeat UNUSED)
 {
-    dead_key = 1;
+    dead_key = DEAD_KEY_SET_DEFAULT;
 }
 
 /*
@@ -832,8 +907,17 @@ char_to_string(int ch, char_u *string, int slen, int had_alt)
     return len;
 }
 
+/*
+ * Experimental implementation, introduced in v8.2.4807
+ * "processing key event in Win32 GUI is not ideal"
+ *
+ * TODO: since introduction, this experimental function started
+ * to be used as well outside of original key press/processing
+ * area, and usages not via "get_active_modifiers_via_ptr" should
+ * be watched.
+ */
     static int
-get_active_modifiers(void)
+get_active_modifiers_experimental(void)
 {
     int modifiers = 0;
 
@@ -848,8 +932,55 @@ get_active_modifiers(void)
 	modifiers |= MOD_MASK_ALT;
     if ((modifiers & MOD_MASK_CTRL) && (GetKeyState(VK_RMENU) & 0x8000))
 	modifiers &= ~MOD_MASK_CTRL;
+    // Add RightALT only if it is hold alone (without Ctrl), because if AltGr
+    // is pressed, Windows claims that Ctrl is hold as well. That way we can
+    // recognize Right-ALT alone and be sure that not AltGr is hold.
+    if (!(GetKeyState(VK_CONTROL) & 0x8000)
+	    &&  (GetKeyState(VK_RMENU) & 0x8000)
+	    && !(GetKeyState(VK_LMENU) & 0x8000)) // seems AltGr has both set
+	modifiers |= MOD_MASK_ALT;
 
     return modifiers;
+}
+
+/*
+ * "Classic" implementation, existing prior to v8.2.4807
+ */
+    static int
+get_active_modifiers_classic(void)
+{
+    int modifiers = 0;
+
+    if (GetKeyState(VK_SHIFT) & 0x8000)
+	modifiers |= MOD_MASK_SHIFT;
+    /*
+     * Don't use caps-lock as shift, because these are special keys
+     * being considered here, and we only want letters to get
+     * shifted -- webb
+     */
+    /*
+    if (GetKeyState(VK_CAPITAL) & 0x0001)
+	modifiers ^= MOD_MASK_SHIFT;
+    */
+    if (GetKeyState(VK_CONTROL) & 0x8000)
+	modifiers |= MOD_MASK_CTRL;
+    if (GetKeyState(VK_MENU) & 0x8000)
+	modifiers |= MOD_MASK_ALT;
+
+    return modifiers;
+}
+
+    static int
+get_active_modifiers(void)
+{
+    return get_active_modifiers_experimental();
+}
+
+    static int
+get_active_modifiers_via_ptr(void)
+{
+    // marshal to corresponding implementation
+    return keycode_trans_strategy_used->ptr_get_active_modifiers();
 }
 
 /*
@@ -861,16 +992,42 @@ _OnChar(
     UINT cch,
     int cRepeat UNUSED)
 {
+    // marshal to corresponding implementation
+    keycode_trans_strategy_used->ptr_on_char(hwnd, cch, cRepeat);
+}
+
+/*
+ * Experimental implementation, introduced in v8.2.4807
+ * "processing key event in Win32 GUI is not ideal"
+ */
+    static void
+_OnChar_experimental(
+    HWND hwnd UNUSED,
+    UINT cch,
+    int cRepeat UNUSED)
+{
     char_u	string[40];
     int		len = 0;
     int		modifiers;
     int		ch = cch;   // special keys are negative
 
-    dead_key = 0;
+    if (dead_key == DEAD_KEY_SKIP_ON_CHAR)
+	return;
 
-    modifiers = get_active_modifiers();
+    //  keep DEAD_KEY_TRANSIENT_IN_ON_CHAR value for later handling in
+    //  process_message()
+    if (dead_key != DEAD_KEY_TRANSIENT_IN_ON_CHAR)
+	dead_key = DEAD_KEY_OFF;
+
+    modifiers = get_active_modifiers_experimental();
 
     ch = simplify_key(ch, &modifiers);
+
+    // Some keys need adjustment when the Ctrl modifier is used.
+    ++no_reduce_keys;
+    ch = may_adjust_key_for_ctrl(modifiers, ch);
+    --no_reduce_keys;
+
     // remove the SHIFT modifier for keys where it's already included, e.g.,
     // '(' and '*'
     modifiers = may_remove_shift_modifier(modifiers, ch);
@@ -899,10 +1056,103 @@ _OnChar(
 }
 
 /*
+ * "Classic" implementation, existing prior to v8.2.4807
+ */
+    static void
+_OnChar_classic(
+    HWND hwnd UNUSED,
+    UINT ch,
+    int cRepeat UNUSED)
+{
+    char_u	string[40];
+    int		len = 0;
+
+    dead_key = 0;
+
+    len = char_to_string(ch, string, 40, FALSE);
+    if (len == 1 && string[0] == Ctrl_C && ctrl_c_interrupts)
+    {
+	trash_input_buf();
+	got_int = TRUE;
+    }
+
+    add_to_input_buf(string, len);
+}
+
+/*
  * Alt-Key hit, add it to the input buffer.
  */
     static void
 _OnSysChar(
+    HWND hwnd UNUSED,
+    UINT cch,
+    int cRepeat UNUSED)
+{
+    // marshal to corresponding implementation
+    keycode_trans_strategy_used->ptr_on_sys_char(hwnd, cch, cRepeat);
+}
+
+/*
+ * Experimental implementation, introduced in v8.2.4807
+ * "processing key event in Win32 GUI is not ideal"
+ */
+    static void
+_OnSysChar_experimental(
+    HWND hwnd UNUSED,
+    UINT cch,
+    int cRepeat UNUSED)
+{
+    char_u	string[40]; // Enough for multibyte character
+    int		len;
+    int		modifiers;
+    int		ch = cch;   // special keys are negative
+
+    dead_key = DEAD_KEY_OFF;
+
+    // OK, we have a character key (given by ch) which was entered with the
+    // ALT key pressed. Eg, if the user presses Alt-A, then ch == 'A'. Note
+    // that the system distinguishes Alt-a and Alt-A (Alt-Shift-a unless
+    // CAPSLOCK is pressed) at this point.
+    modifiers = get_active_modifiers_experimental();
+    ch = simplify_key(ch, &modifiers);
+    // remove the SHIFT modifier for keys where it's already included, e.g.,
+    // '(' and '*'
+    modifiers = may_remove_shift_modifier(modifiers, ch);
+
+    // Unify modifiers somewhat.  No longer use ALT to set the 8th bit.
+    ch = extract_modifiers(ch, &modifiers, FALSE, NULL);
+    if (ch == CSI)
+	ch = K_CSI;
+
+    len = 0;
+    if (modifiers)
+    {
+	string[len++] = CSI;
+	string[len++] = KS_MODIFIER;
+	string[len++] = modifiers;
+    }
+
+    if (IS_SPECIAL((int)ch))
+    {
+	string[len++] = CSI;
+	string[len++] = K_SECOND((int)ch);
+	string[len++] = K_THIRD((int)ch);
+    }
+    else
+    {
+	// Although the documentation isn't clear about it, we assume "ch" is
+	// a Unicode character.
+	len += char_to_string(ch, string + len, 40 - len, TRUE);
+    }
+
+    add_to_input_buf(string, len);
+}
+
+/*
+ * "Classic" implementation, existing prior to v8.2.4807
+ */
+    static void
+_OnSysChar_classic(
     HWND hwnd UNUSED,
     UINT cch,
     int cRepeat UNUSED)
@@ -914,11 +1164,18 @@ _OnSysChar(
 
     dead_key = 0;
 
+    // TRACE("OnSysChar(%d, %c)\n", ch, ch);
+
     // OK, we have a character key (given by ch) which was entered with the
     // ALT key pressed. Eg, if the user presses Alt-A, then ch == 'A'. Note
     // that the system distinguishes Alt-a and Alt-A (Alt-Shift-a unless
     // CAPSLOCK is pressed) at this point.
-    modifiers = get_active_modifiers();
+    modifiers = MOD_MASK_ALT;
+    if (GetKeyState(VK_SHIFT) & 0x8000)
+	modifiers |= MOD_MASK_SHIFT;
+    if (GetKeyState(VK_CONTROL) & 0x8000)
+	modifiers |= MOD_MASK_CTRL;
+
     ch = simplify_key(ch, &modifiers);
     // remove the SHIFT modifier for keys where it's already included, e.g.,
     // '(' and '*'
@@ -1011,63 +1268,64 @@ _OnMouseButtonDown(
 	else
 	    button = MOUSE_LEFT;
     }
-    if (button >= 0)
+
+    if (button < 0)
+	return;
+
+    repeated_click = ((int)(currentTime - s_prevTime) < p_mouset);
+
+    /*
+     * Holding down the left and right buttons simulates pushing the middle
+     * button.
+     */
+    if (repeated_click
+	    && ((button == MOUSE_LEFT && s_button_pending == MOUSE_RIGHT)
+		|| (button == MOUSE_RIGHT
+		    && s_button_pending == MOUSE_LEFT)))
     {
-	repeated_click = ((int)(currentTime - s_prevTime) < p_mouset);
-
 	/*
-	 * Holding down the left and right buttons simulates pushing the middle
-	 * button.
+	 * Hmm, gui.c will ignore more than one button down at a time, so
+	 * pretend we let go of it first.
 	 */
-	if (repeated_click
-		&& ((button == MOUSE_LEFT && s_button_pending == MOUSE_RIGHT)
-		    || (button == MOUSE_RIGHT
-					  && s_button_pending == MOUSE_LEFT)))
-	{
-	    /*
-	     * Hmm, gui.c will ignore more than one button down at a time, so
-	     * pretend we let go of it first.
-	     */
-	    gui_send_mouse_event(MOUSE_RELEASE, x, y, FALSE, 0x0);
-	    button = MOUSE_MIDDLE;
-	    repeated_click = FALSE;
-	    s_button_pending = -1;
-	    _OnMouseEvent(button, x, y, repeated_click, keyFlags);
-	}
-	else if ((repeated_click)
-		|| (mouse_model_popup() && (button == MOUSE_RIGHT)))
-	{
-	    if (s_button_pending > -1)
-	    {
-		_OnMouseEvent(s_button_pending, x, y, FALSE, keyFlags);
-		s_button_pending = -1;
-	    }
-	    // TRACE("Button down at x %d, y %d\n", x, y);
-	    _OnMouseEvent(button, x, y, repeated_click, keyFlags);
-	}
-	else
-	{
-	    /*
-	     * If this is the first press (i.e. not a multiple click) don't
-	     * action immediately, but store and wait for:
-	     * i) button-up
-	     * ii) mouse move
-	     * iii) another button press
-	     * before using it.
-	     * This enables us to make left+right simulate middle button,
-	     * without left or right being actioned first.  The side-effect is
-	     * that if you click and hold the mouse without dragging, the
-	     * cursor doesn't move until you release the button. In practice
-	     * this is hardly a problem.
-	     */
-	    s_button_pending = button;
-	    s_x_pending = x;
-	    s_y_pending = y;
-	    s_kFlags_pending = keyFlags;
-	}
-
-	s_prevTime = currentTime;
+	gui_send_mouse_event(MOUSE_RELEASE, x, y, FALSE, 0x0);
+	button = MOUSE_MIDDLE;
+	repeated_click = FALSE;
+	s_button_pending = -1;
+	_OnMouseEvent(button, x, y, repeated_click, keyFlags);
     }
+    else if ((repeated_click)
+	    || (mouse_model_popup() && (button == MOUSE_RIGHT)))
+    {
+	if (s_button_pending > -1)
+	{
+	    _OnMouseEvent(s_button_pending, x, y, FALSE, keyFlags);
+	    s_button_pending = -1;
+	}
+	// TRACE("Button down at x %d, y %d\n", x, y);
+	_OnMouseEvent(button, x, y, repeated_click, keyFlags);
+    }
+    else
+    {
+	/*
+	 * If this is the first press (i.e. not a multiple click) don't
+	 * action immediately, but store and wait for:
+	 * i) button-up
+	 * ii) mouse move
+	 * iii) another button press
+	 * before using it.
+	 * This enables us to make left+right simulate middle button,
+	 * without left or right being actioned first.  The side-effect is
+	 * that if you click and hold the mouse without dragging, the
+	 * cursor doesn't move until you release the button. In practice
+	 * this is hardly a problem.
+	 */
+	s_button_pending = button;
+	s_x_pending = x;
+	s_y_pending = y;
+	s_kFlags_pending = keyFlags;
+    }
+
+    s_prevTime = currentTime;
 }
 
     static void
@@ -1210,23 +1468,23 @@ _OnFindRepl(void)
 	flags = FRD_REPLACEALL;
     }
 
-    if (flags != 0)
-    {
-	char_u	*p, *q;
+    if (flags == 0)
+	return;
 
-	// Call the generic GUI function to do the actual work.
-	if (s_findrep_struct.Flags & FR_WHOLEWORD)
-	    flags |= FRD_WHOLE_WORD;
-	if (s_findrep_struct.Flags & FR_MATCHCASE)
-	    flags |= FRD_MATCH_CASE;
-	down = (s_findrep_struct.Flags & FR_DOWN) != 0;
-	p = utf16_to_enc(s_findrep_struct.lpstrFindWhat, NULL);
-	q = utf16_to_enc(s_findrep_struct.lpstrReplaceWith, NULL);
-	if (p != NULL && q != NULL)
-	    gui_do_findrepl(flags, p, q, down);
-	vim_free(p);
-	vim_free(q);
-    }
+    char_u	*p, *q;
+
+    // Call the generic GUI function to do the actual work.
+    if (s_findrep_struct.Flags & FR_WHOLEWORD)
+	flags |= FRD_WHOLE_WORD;
+    if (s_findrep_struct.Flags & FR_MATCHCASE)
+	flags |= FRD_MATCH_CASE;
+    down = (s_findrep_struct.Flags & FR_DOWN) != 0;
+    p = utf16_to_enc(s_findrep_struct.lpstrFindWhat, NULL);
+    q = utf16_to_enc(s_findrep_struct.lpstrReplaceWith, NULL);
+    if (p != NULL && q != NULL)
+	gui_do_findrepl(flags, p, q, down);
+    vim_free(p);
+    vim_free(q);
 }
 #endif
 
@@ -1559,7 +1817,7 @@ GetAverageFontSize(HDC hdc, SIZE *size)
  * Get the character size of a font.
  */
     static void
-GetFontSize(GuiFont font)
+GetFontSize(GuiFont font, int *char_width, int *char_height)
 {
     HWND    hwnd = GetDesktopWindow();
     HDC	    hdc = GetWindowDC(hwnd);
@@ -1570,12 +1828,23 @@ GetFontSize(GuiFont font)
     GetTextMetrics(hdc, &tm);
     GetAverageFontSize(hdc, &size);
 
-    gui.char_width = size.cx + tm.tmOverhang;
-    gui.char_height = tm.tmHeight + p_linespace;
+    if (char_width)
+	*char_width = size.cx + tm.tmOverhang;
+    if (char_height)
+	*char_height = tm.tmHeight + p_linespace;
 
     SelectFont(hdc, hfntOld);
 
     ReleaseDC(hwnd, hdc);
+}
+
+/*
+ * Update the character size in "gui" structure with the specified font.
+ */
+    static void
+UpdateFontSize(GuiFont font)
+{
+    GetFontSize(font, &gui.char_width, &gui.char_height);
 }
 
 /*
@@ -1584,7 +1853,7 @@ GetFontSize(GuiFont font)
     int
 gui_mch_adjust_charheight(void)
 {
-    GetFontSize(gui.norm_font);
+    UpdateFontSize(gui.norm_font);
     return OK;
 }
 
@@ -1844,14 +2113,14 @@ gui_mch_draw_part_cursor(
  * dead key's nominal character and re-post the original message.
  */
     static void
-outputDeadKey_rePost(MSG originalMsg)
+outputDeadKey_rePost_Ex(MSG originalMsg, int dead_key2set)
 {
     static MSG deadCharExpel;
 
-    if (!dead_key)
+    if (dead_key == DEAD_KEY_OFF)
 	return;
 
-    dead_key = 0;
+    dead_key = dead_key2set;
 
     // Make Windows generate the dead key's character
     deadCharExpel.message = originalMsg.message;
@@ -1863,6 +2132,146 @@ outputDeadKey_rePost(MSG originalMsg)
     // re-generate the current character free of the dead char influence
     PostMessage(originalMsg.hwnd, originalMsg.message, originalMsg.wParam,
 							  originalMsg.lParam);
+}
+
+/*
+ * Wrapper for outputDeadKey_rePost_Ex which always reset dead_key value.
+ */
+    static void
+outputDeadKey_rePost(MSG originalMsg)
+{
+    outputDeadKey_rePost_Ex(originalMsg, DEAD_KEY_OFF);
+}
+
+/*
+ * Refactored out part of process_message(), responsible for
+ * handling the case of "not a special key"
+ */
+static void process_message_usual_key(UINT vk, const MSG *pmsg)
+{
+    // marshal to corresponding implementation
+    keycode_trans_strategy_used->ptr_process_message_usual_key(vk, pmsg);
+}
+
+/*
+ * Experimental implementation, introduced in v8.2.4807
+ * "processing key event in Win32 GUI is not ideal"
+ */
+static void process_message_usual_key_experimental(UINT vk, const MSG *pmsg)
+{
+    WCHAR	ch[8];
+    int		len;
+    int		i;
+    UINT	scan_code;
+    BYTE	keyboard_state[256];
+
+    // Construct the state table with only a few modifiers, we don't
+    // really care about the presence of Ctrl/Alt as those modifiers are
+    // handled by Vim separately.
+    memset(keyboard_state, 0, 256);
+    if (GetKeyState(VK_SHIFT) & 0x8000)
+	keyboard_state[VK_SHIFT] = 0x80;
+    if (GetKeyState(VK_CAPITAL) & 0x0001)
+	keyboard_state[VK_CAPITAL] = 0x01;
+    // Alt-Gr is synthesized as Alt + Ctrl.
+    if ((GetKeyState(VK_RMENU) & 0x8000)
+				 && (GetKeyState(VK_CONTROL) & 0x8000))
+    {
+	keyboard_state[VK_MENU] = 0x80;
+	keyboard_state[VK_CONTROL] = 0x80;
+    }
+
+    // Translate the virtual key according to the current keyboard
+    // layout.
+    scan_code = MapVirtualKey(vk, MAPVK_VK_TO_VSC);
+    // Convert the scan-code into a sequence of zero or more unicode
+    // codepoints.
+    // If this is a dead key ToUnicode returns a negative value.
+    len = ToUnicode(vk, scan_code, keyboard_state, ch, ARRAY_LENGTH(ch),
+	    0);
+    if (len < 0)
+	dead_key = DEAD_KEY_SET_DEFAULT;
+
+    if (len <= 0)
+    {
+	int wm_char = NUL;
+
+	if (dead_key == DEAD_KEY_SET_DEFAULT
+		&& (GetKeyState(VK_CONTROL) & 0x8000))
+	{
+	    if (   // AZERTY CTRL+dead_circumflex
+		   (vk == 221 && scan_code == 26)
+		   // QWERTZ CTRL+dead_circumflex
+		|| (vk == 220 && scan_code == 41))
+		wm_char = '[';
+	    if (   // QWERTZ CTRL+dead_two-overdots
+		   (vk == 192 && scan_code == 27))
+		wm_char = ']';
+	}
+	if (wm_char != NUL)
+	{
+	    // post WM_CHAR='[' - which will be interpreted with CTRL
+	    // still hold as ESC
+	    PostMessageW(pmsg->hwnd, WM_CHAR, wm_char, pmsg->lParam);
+	    // ask _OnChar() to not touch this state, wait for next key
+	    // press and maintain knowledge that we are "poisoned" with
+	    // "dead state"
+	    dead_key = DEAD_KEY_TRANSIENT_IN_ON_CHAR;
+	}
+	return;
+    }
+
+    // Post the message as TranslateMessage would do.
+    if (pmsg->message == WM_KEYDOWN)
+    {
+	for (i = 0; i < len; i++)
+	    PostMessageW(pmsg->hwnd, WM_CHAR, ch[i], pmsg->lParam);
+    }
+    else
+    {
+	for (i = 0; i < len; i++)
+	    PostMessageW(pmsg->hwnd, WM_SYSCHAR, ch[i], pmsg->lParam);
+    }
+}
+
+/*
+ * "Classic" implementation, existing prior to v8.2.4807
+ */
+static void process_message_usual_key_classic(UINT vk, const MSG *pmsg)
+{
+    char_u	string[40];
+
+    // Some keys need C-S- where they should only need C-.
+    // Ignore 0xff, Windows XP sends it when NUMLOCK has changed since
+    // system startup (Helmut Stiegler, 2003 Oct 3).
+    if (vk != 0xff
+	    && (GetKeyState(VK_CONTROL) & 0x8000)
+	    && !(GetKeyState(VK_SHIFT) & 0x8000)
+	    && !(GetKeyState(VK_MENU) & 0x8000))
+    {
+	// CTRL-6 is '^'; Japanese keyboard maps '^' to vk == 0xDE
+	if (vk == '6' || MapVirtualKey(vk, 2) == (UINT)'^')
+	{
+	    string[0] = Ctrl_HAT;
+	    add_to_input_buf(string, 1);
+	}
+	// vk == 0xBD AZERTY for CTRL-'-', but CTRL-[ for * QWERTY!
+	else if (vk == 0xBD)	// QWERTY for CTRL-'-'
+	{
+	    string[0] = Ctrl__;
+	    add_to_input_buf(string, 1);
+	}
+	// CTRL-2 is '@'; Japanese keyboard maps '@' to vk == 0xC0
+	else if (vk == '2' || MapVirtualKey(vk, 2) == (UINT)'@')
+	{
+	    string[0] = Ctrl_AT;
+	    add_to_input_buf(string, 1);
+	}
+	else
+	    TranslateMessage(pmsg);
+    }
+    else
+	TranslateMessage(pmsg);
 }
 
 /*
@@ -1881,7 +2290,14 @@ process_message(void)
 #ifdef FEAT_MENU
     static char_u k10[] = {K_SPECIAL, 'k', ';', 0};
 #endif
-    BYTE	keyboard_state[256];
+    static int  keycode_trans_strategy_initialized = 0;
+
+    // lazy initialize - first time only
+    if (!keycode_trans_strategy_initialized)
+    {
+	keycode_trans_strategy_initialized = 1;
+	keycode_trans_strategy_init();
+    }
 
     GetMessageW(&msg, NULL, 0, 0);
 
@@ -1936,8 +2352,51 @@ process_message(void)
 	 *   for some reason TranslateMessage() do not trigger a call
 	 *   immediately to _OnChar() (or _OnSysChar()).
 	 */
-	if (dead_key)
+
+	/*
+	 * We are at the moment after WM_CHAR with DEAD_KEY_SKIP_ON_CHAR event
+	 * was handled by _WndProc, this keypress we want to process normally
+	 */
+	if (keycode_trans_strategy_used->is_experimental()
+		&& dead_key == DEAD_KEY_SKIP_ON_CHAR)
 	{
+	    dead_key = DEAD_KEY_OFF;
+	}
+
+	if (dead_key != DEAD_KEY_OFF)
+	{
+	    /*
+	     * Expel the dead key pressed with Ctrl in a special way.
+	     *
+	     * After dead key was pressed with Ctrl in some cases, ESC was
+	     * artificially injected and handled by _OnChar(), now we are
+	     * dealing with completely new key press from the user. If we don't
+	     * do anything, ToUnicode() call will interpret this vk+scan_code
+	     * under influence of "dead-modifier". To prevent this we translate
+	     * this message replacing current char from user with VK_SPACE,
+	     * which will cause WM_CHAR with dead_key's character itself. Using
+	     * DEAD_KEY_SKIP_ON_CHAR value of dead_char we force _OnChar() to
+	     * ignore this one WM_CHAR event completely. Afterwards (due to
+	     * usage of PostMessage), this procedure is scheduled to be called
+	     * again with user char and on next entry we will clean
+	     * DEAD_KEY_SKIP_ON_CHAR. We cannot use original
+	     * outputDeadKey_rePost() since we do not wish to reset dead_key
+	     * value.
+	     */
+	    if (keycode_trans_strategy_used->is_experimental() &&
+		    dead_key == DEAD_KEY_TRANSIENT_IN_ON_CHAR)
+	    {
+		outputDeadKey_rePost_Ex(msg,
+				       /*dead_key2set=*/DEAD_KEY_SKIP_ON_CHAR);
+		return;
+	    }
+
+	    if (dead_key != DEAD_KEY_SET_DEFAULT)
+	    {
+		// should never happen - is there a way to make ASSERT here?
+		return;
+	    }
+
 	    /*
 	     * If a dead key was pressed and the user presses VK_SPACE,
 	     * VK_BACK, or VK_ESCAPE it means that he actually wants to deal
@@ -1952,7 +2411,7 @@ process_message(void)
 	     */
 	    if ((vk == VK_SPACE || vk == VK_BACK || vk == VK_ESCAPE))
 	    {
-		dead_key = 0;
+		dead_key = DEAD_KEY_OFF;
 		TranslateMessage(&msg);
 		return;
 	    }
@@ -1987,7 +2446,7 @@ process_message(void)
 	{
 	    // ignore VK_SPACE when ALT key pressed: system menu
 	    if (special_keys[i].key_sym == vk
-		    && (vk != VK_SPACE || !(GetKeyState(VK_LMENU) & 0x8000)))
+		    && (vk != VK_SPACE || !(GetKeyState(VK_MENU) & 0x8000)))
 	    {
 		/*
 		 * Behave as expected if we have a dead key and the special key
@@ -1995,7 +2454,8 @@ process_message(void)
 		 * character output (such as a NUMPAD printable character or
 		 * the TAB key, etc...).
 		 */
-		if (dead_key && (special_keys[i].vim_code0 == 'K'
+		if (dead_key == DEAD_KEY_SET_DEFAULT
+			&& (special_keys[i].vim_code0 == 'K'
 						|| vk == VK_TAB || vk == CAR))
 		{
 		    outputDeadKey_rePost(msg);
@@ -2011,7 +2471,7 @@ process_message(void)
 							  NULL, NULL) == NULL)
 		    break;
 #endif
-		modifiers = get_active_modifiers();
+		modifiers = get_active_modifiers_via_ptr();
 
 		if (special_keys[i].vim_code1 == NUL)
 		    key = special_keys[i].vim_code0;
@@ -2052,51 +2512,7 @@ process_message(void)
 	// Not a special key.
 	if (special_keys[i].key_sym == 0)
 	{
-	    WCHAR	ch[8];
-	    int		len;
-	    int		i;
-	    UINT	scan_code;
-
-	    // Construct the state table with only a few modifiers, we don't
-	    // really care about the presence of Ctrl/Alt as those modifiers are
-	    // handled by Vim separately.
-	    memset(keyboard_state, 0, 256);
-	    if (GetKeyState(VK_SHIFT) & 0x8000)
-		keyboard_state[VK_SHIFT] = 0x80;
-	    if (GetKeyState(VK_CAPITAL) & 0x0001)
-		keyboard_state[VK_CAPITAL] = 0x01;
-	    // Alt-Gr is synthesized as Alt + Ctrl.
-	    if ((GetKeyState(VK_RMENU) & 0x8000)
-					 && (GetKeyState(VK_CONTROL) & 0x8000))
-	    {
-		keyboard_state[VK_MENU] = 0x80;
-		keyboard_state[VK_CONTROL] = 0x80;
-	    }
-
-	    // Translate the virtual key according to the current keyboard
-	    // layout.
-	    scan_code = MapVirtualKey(vk, MAPVK_VK_TO_VSC);
-	    // Convert the scan-code into a sequence of zero or more unicode
-	    // codepoints.
-	    // If this is a dead key ToUnicode returns a negative value.
-	    len = ToUnicode(vk, scan_code, keyboard_state, ch, ARRAY_LENGTH(ch),
-		    0);
-	    dead_key = len < 0;
-
-	    if (len <= 0)
-		return;
-
-	    // Post the message as TranslateMessage would do.
-	    if (msg.message == WM_KEYDOWN)
-	    {
-		for (i = 0; i < len; i++)
-		    PostMessageW(msg.hwnd, WM_CHAR, ch[i], msg.lParam);
-	    }
-	    else
-	    {
-		for (i = 0; i < len; i++)
-		    PostMessageW(msg.hwnd, WM_SYSCHAR, ch[i], msg.lParam);
-	    }
+	    process_message_usual_key(vk, &msg);
 	}
     }
 #ifdef FEAT_MBYTE_IME
@@ -2532,11 +2948,7 @@ show_tabline_popup_menu(void)
     POINT	    pt;
 
     // When ignoring events don't show the menu.
-    if (hold_gui_events
-# ifdef FEAT_CMDWIN
-	    || cmdwin_type != 0
-# endif
-       )
+    if (hold_gui_events || cmdwin_type != 0)
 	return;
 
     tab_pmenu = CreatePopupMenu();
@@ -2837,11 +3249,11 @@ gui_mch_replace_dialog(exarg_T *eap)
     void
 gui_mch_mousehide(int hide)
 {
-    if (hide != gui.pointer_hidden)
-    {
-	ShowCursor(!hide);
-	gui.pointer_hidden = hide;
-    }
+    if (hide == gui.pointer_hidden)
+	return;
+
+    ShowCursor(!hide);
+    gui.pointer_hidden = hide;
 }
 
 #ifdef FEAT_MENU
@@ -2898,33 +3310,33 @@ _OnDestroy(HWND hwnd)
 _OnPaint(
     HWND hwnd)
 {
-    if (!IsMinimized(hwnd))
+    if (IsMinimized(hwnd))
+	return;
+
+    PAINTSTRUCT ps;
+
+    out_flush();	    // make sure all output has been processed
+    (void)BeginPaint(hwnd, &ps);
+
+    // prevent multi-byte characters from misprinting on an invalid
+    // rectangle
+    if (has_mbyte)
     {
-	PAINTSTRUCT ps;
+	RECT rect;
 
-	out_flush();	    // make sure all output has been processed
-	(void)BeginPaint(hwnd, &ps);
-
-	// prevent multi-byte characters from misprinting on an invalid
-	// rectangle
-	if (has_mbyte)
-	{
-	    RECT rect;
-
-	    GetClientRect(hwnd, &rect);
-	    ps.rcPaint.left = rect.left;
-	    ps.rcPaint.right = rect.right;
-	}
-
-	if (!IsRectEmpty(&ps.rcPaint))
-	{
-	    gui_redraw(ps.rcPaint.left, ps.rcPaint.top,
-		    ps.rcPaint.right - ps.rcPaint.left + 1,
-		    ps.rcPaint.bottom - ps.rcPaint.top + 1);
-	}
-
-	EndPaint(hwnd, &ps);
+	GetClientRect(hwnd, &rect);
+	ps.rcPaint.left = rect.left;
+	ps.rcPaint.right = rect.right;
     }
+
+    if (!IsRectEmpty(&ps.rcPaint))
+    {
+	gui_redraw(ps.rcPaint.left, ps.rcPaint.top,
+		ps.rcPaint.right - ps.rcPaint.left + 1,
+		ps.rcPaint.bottom - ps.rcPaint.top + 1);
+    }
+
+    EndPaint(hwnd, &ps);
 }
 
     static void
@@ -3416,7 +3828,7 @@ gui_mch_init_font(char_u *font_name, int fontset UNUSED)
     gui_mch_free_font(gui.norm_font);
     gui.norm_font = font;
     current_font_height = lfOrig.lfHeight;
-    GetFontSize(font);
+    UpdateFontSize(font);
 
     p = logfont2name(lfOrig);
     if (p != NULL)
@@ -3809,21 +4221,21 @@ _OnDropFiles(
 
     DragFinish(hDrop);
 
-    if (fnames != NULL)
-    {
-	int kbd_modifiers = get_active_modifiers();
+    if (fnames == NULL)
+	return;
 
-	if ((kbd_modifiers & MOD_MASK_SHIFT) != 0)
-	    modifiers |= MOUSE_SHIFT;
-	if ((kbd_modifiers & MOD_MASK_CTRL) != 0)
-	    modifiers |= MOUSE_CTRL;
-	if ((kbd_modifiers & MOD_MASK_ALT) != 0)
-	    modifiers |= MOUSE_ALT;
+    int kbd_modifiers = get_active_modifiers();
 
-	gui_handle_drop(pt.x, pt.y, modifiers, fnames, cFiles);
+    if ((kbd_modifiers & MOD_MASK_SHIFT) != 0)
+	modifiers |= MOUSE_SHIFT;
+    if ((kbd_modifiers & MOD_MASK_CTRL) != 0)
+	modifiers |= MOUSE_CTRL;
+    if ((kbd_modifiers & MOD_MASK_ALT) != 0)
+	modifiers |= MOUSE_ALT;
 
-	s_need_activate = TRUE;
-    }
+    gui_handle_drop(pt.x, pt.y, modifiers, fnames, cFiles);
+
+    s_need_activate = TRUE;
 }
 
     static int
@@ -4366,11 +4778,11 @@ show_sizing_tip(int cols, int rows)
     static void
 destroy_sizing_tip(void)
 {
-    if (hwndTip != NULL)
-    {
-	DestroyWindow(hwndTip);
-	hwndTip = NULL;
-    }
+    if (hwndTip == NULL)
+	return;
+
+    DestroyWindow(hwndTip);
+    hwndTip = NULL;
 }
 
     static int
@@ -4638,12 +5050,48 @@ _OnMenuSelect(HWND hwnd, WPARAM wParam, LPARAM lParam)
 }
 #endif
 
+    static BOOL
+_OnGetDpiScaledSize(HWND hwnd, UINT dpi, SIZE *size)
+{
+    int		old_width, old_height;
+    int		new_width, new_height;
+    LOGFONTW	lf;
+    HFONT	font;
+
+    //TRACE("DPI: %d, SIZE=(%d,%d), s_dpi: %d", dpi, size->cx, size->cy, s_dpi);
+
+    // Calculate new approximate size.
+    GetFontSize(gui.norm_font, &old_width, &old_height);    // Current size
+    GetObjectW((HFONT)gui.norm_font, sizeof(lf), &lf);
+    lf.lfHeight = lf.lfHeight * (int)dpi / s_dpi;
+    font = CreateFontIndirectW(&lf);
+    if (font)
+    {
+	GetFontSize((GuiFont)font, &new_width, &new_height);	// New size
+	DeleteFont(font);
+    }
+    else
+    {
+	new_width = old_width;
+	new_height = old_height;
+    }
+    size->cx = size->cx * new_width / old_width;
+    size->cy = size->cy * new_height / old_height;
+    //TRACE("New approx. SIZE=(%d,%d)", size->cx, size->cy);
+
+    return TRUE;
+}
+
     static LRESULT
-_OnDpiChanged(HWND hwnd, UINT xdpi UNUSED, UINT ydpi, RECT *rc UNUSED)
+_OnDpiChanged(HWND hwnd, UINT xdpi UNUSED, UINT ydpi, RECT *rc)
 {
     s_dpi = ydpi;
     s_in_dpichanged = TRUE;
     //TRACE("DPI: %d", ydpi);
+
+    s_suggested_rect = *rc;
+    //TRACE("Suggested pos&size: %d,%d %d,%d", rc->left, rc->top,
+    //		rc->right - rc->left, rc->bottom - rc->top);
 
     update_scrollbar_size();
     update_toolbar_size();
@@ -4797,6 +5245,8 @@ _WndProc(
 	    return DefWindowProcW(hwnd, uMsg, wParam, lParam);
 	return 1L;
 #endif
+    case WM_GETDPISCALEDSIZE:
+	return _OnGetDpiScaledSize(hwnd, (UINT)wParam, (SIZE *)lParam);
     case WM_DPICHANGED:
 	return _OnDpiChanged(hwnd, (UINT)LOWORD(wParam), (UINT)HIWORD(wParam),
 		(RECT*)lParam);
@@ -5072,6 +5522,9 @@ gui_mch_prepare(int *argc, char **argv)
     }
 
 #ifdef FEAT_OLE
+# ifdef VIMDLL
+    if (mch_is_gui_executable())
+# endif
     {
 	int	bDoRestart = FALSE;
 
@@ -5136,7 +5589,7 @@ load_dpi_func(void)
 
 fail:
     // Disable PerMonitorV2 APIs.
-    pGetDpiForSystem = stubGetDpiForSystem;
+    pGetDpiForSystem = vimGetDpiForSystem;
     pGetDpiForWindow = NULL;
     pGetSystemMetricsForDpi = stubGetSystemMetricsForDpi;
     pSetThreadDpiAwarenessContext = NULL;
@@ -5454,7 +5907,12 @@ gui_mch_set_shellsize(
     if (IsZoomed(s_hwnd) && starting == 0)
 	ShowWindow(s_hwnd, SW_SHOWNORMAL);
 
-    GetWindowRect(s_hwnd, &window_rect);
+    if (s_in_dpichanged)
+	// Use the suggested position when in WM_DPICHANGED.
+	window_rect = s_suggested_rect;
+    else
+	// Use current position.
+	GetWindowRect(s_hwnd, &window_rect);
 
     // compute the size of the outside of the window
     win_width = width + (pGetSystemMetricsForDpi(SM_CXFRAME, s_dpi) +
@@ -5471,20 +5929,35 @@ gui_mch_set_shellsize(
     window_rect.bottom = window_rect.top + win_height;
 
     // If the window is going off the screen, move it on to the screen.
-    if ((direction & RESIZE_HOR) && window_rect.right > workarea_rect.right)
-	OffsetRect(&window_rect, workarea_rect.right - window_rect.right, 0);
+    // Don't adjust the position when in WM_DPICHANGED.
+    if (!s_in_dpichanged)
+    {
+	if ((direction & RESIZE_HOR)
+		&& window_rect.right > workarea_rect.right)
+	    OffsetRect(&window_rect,
+		    workarea_rect.right - window_rect.right, 0);
 
-    if ((direction & RESIZE_HOR) && window_rect.left < workarea_rect.left)
-	OffsetRect(&window_rect, workarea_rect.left - window_rect.left, 0);
+	if ((direction & RESIZE_HOR)
+		&& window_rect.left < workarea_rect.left)
+	    OffsetRect(&window_rect,
+		    workarea_rect.left - window_rect.left, 0);
 
-    if ((direction & RESIZE_VERT) && window_rect.bottom > workarea_rect.bottom)
-	OffsetRect(&window_rect, 0, workarea_rect.bottom - window_rect.bottom);
+	if ((direction & RESIZE_VERT)
+		&& window_rect.bottom > workarea_rect.bottom)
+	    OffsetRect(&window_rect,
+		    0, workarea_rect.bottom - window_rect.bottom);
 
-    if ((direction & RESIZE_VERT) && window_rect.top < workarea_rect.top)
-	OffsetRect(&window_rect, 0, workarea_rect.top - window_rect.top);
+	if ((direction & RESIZE_VERT)
+		&& window_rect.top < workarea_rect.top)
+	    OffsetRect(&window_rect,
+		    0, workarea_rect.top - window_rect.top);
+    }
 
     MoveWindow(s_hwnd, window_rect.left, window_rect.top,
 						win_width, win_height, TRUE);
+
+    //TRACE("New pos: %d,%d  New size: %d,%d",
+    //	    window_rect.left, window_rect.top, win_width, win_height);
 
     SetActiveWindow(s_hwnd);
     SetFocus(s_hwnd);
@@ -5749,64 +6222,64 @@ im_set_active(int active)
     }
 # endif
 
-    if (pImmGetContext)	    // if NULL imm32.dll wasn't loaded (yet)
+    if (!pImmGetContext)    // if NULL imm32.dll wasn't loaded (yet)
+	return;
+
+    if (p_imdisable)
     {
-	if (p_imdisable)
+	if (hImcOld == (HIMC)0)
 	{
-	    if (hImcOld == (HIMC)0)
-	    {
-		hImcOld = pImmGetContext(s_hwnd);
-		if (hImcOld)
-		    pImmAssociateContext(s_hwnd, (HIMC)0);
-	    }
-	    active = FALSE;
+	    hImcOld = pImmGetContext(s_hwnd);
+	    if (hImcOld)
+		pImmAssociateContext(s_hwnd, (HIMC)0);
 	}
-	else if (hImcOld != (HIMC)0)
+	active = FALSE;
+    }
+    else if (hImcOld != (HIMC)0)
+    {
+	pImmAssociateContext(s_hwnd, hImcOld);
+	hImcOld = (HIMC)0;
+    }
+
+    hImc = pImmGetContext(s_hwnd);
+    if (!hImc)
+	return;
+
+    /*
+     * for Korean ime
+     */
+    HKL hKL = GetKeyboardLayout(0);
+
+    if (LOWORD(hKL) == MAKELANGID(LANG_KOREAN, SUBLANG_KOREAN))
+    {
+	static DWORD dwConversionSaved = 0, dwSentenceSaved = 0;
+	static BOOL bSaved = FALSE;
+
+	if (active)
 	{
-	    pImmAssociateContext(s_hwnd, hImcOld);
-	    hImcOld = (HIMC)0;
+	    // if we have a saved conversion status, restore it
+	    if (bSaved)
+		pImmSetConversionStatus(hImc, dwConversionSaved,
+			dwSentenceSaved);
+	    bSaved = FALSE;
 	}
-
-	hImc = pImmGetContext(s_hwnd);
-	if (hImc)
+	else
 	{
-	    /*
-	     * for Korean ime
-	     */
-	    HKL hKL = GetKeyboardLayout(0);
-
-	    if (LOWORD(hKL) == MAKELANGID(LANG_KOREAN, SUBLANG_KOREAN))
+	    // save conversion status and disable korean
+	    if (pImmGetConversionStatus(hImc, &dwConversionSaved,
+			&dwSentenceSaved))
 	    {
-		static DWORD dwConversionSaved = 0, dwSentenceSaved = 0;
-		static BOOL bSaved = FALSE;
-
-		if (active)
-		{
-		    // if we have a saved conversion status, restore it
-		    if (bSaved)
-			pImmSetConversionStatus(hImc, dwConversionSaved,
-							     dwSentenceSaved);
-		    bSaved = FALSE;
-		}
-		else
-		{
-		    // save conversion status and disable korean
-		    if (pImmGetConversionStatus(hImc, &dwConversionSaved,
-							    &dwSentenceSaved))
-		    {
-			bSaved = TRUE;
-			pImmSetConversionStatus(hImc,
-				dwConversionSaved & ~(IME_CMODE_NATIVE
-						       | IME_CMODE_FULLSHAPE),
-				dwSentenceSaved);
-		    }
-		}
+		bSaved = TRUE;
+		pImmSetConversionStatus(hImc,
+			dwConversionSaved & ~(IME_CMODE_NATIVE
+			    | IME_CMODE_FULLSHAPE),
+			dwSentenceSaved);
 	    }
-
-	    pImmSetOpenStatus(hImc, active);
-	    pImmReleaseContext(s_hwnd, hImc);
 	}
     }
+
+    pImmSetOpenStatus(hImc, active);
+    pImmReleaseContext(s_hwnd, hImc);
 }
 
 /*
@@ -6110,13 +6583,11 @@ gui_mch_draw_string(
 	// handled here.
 	int		i;
 	int		wlen;	// string length in words
-	int		clen;	// string length in characters
 	int		cells;	// cell width of string up to composing char
 	int		cw;	// width of current cell
 	int		c;
 
 	wlen = 0;
-	clen = 0;
 	cells = 0;
 	for (i = 0; i < len; )
 	{
@@ -6156,7 +6627,6 @@ gui_mch_draw_string(
 	    }
 	    cells += cw;
 	    i += utf_ptr2len_len(text + i, len - i);
-	    ++clen;
 	}
 #if defined(FEAT_DIRECTX)
 	if (IS_ENABLE_DIRECTX())
@@ -6367,28 +6837,28 @@ gui_make_popup(char_u *path_name, int mouse_pos)
 {
     vimmenu_T	*menu = gui_find_menu(path_name);
 
-    if (menu != NULL)
+    if (menu == NULL)
+	return;
+
+    POINT	p;
+
+    // Find the position of the current cursor
+    GetDCOrgEx(s_hdc, &p);
+    if (mouse_pos)
     {
-	POINT	p;
+	int	mx, my;
 
-	// Find the position of the current cursor
-	GetDCOrgEx(s_hdc, &p);
-	if (mouse_pos)
-	{
-	    int	mx, my;
-
-	    gui_mch_getmouse(&mx, &my);
-	    p.x += mx;
-	    p.y += my;
-	}
-	else if (curwin != NULL)
-	{
-	    p.x += TEXT_X(curwin->w_wincol + curwin->w_wcol + 1);
-	    p.y += TEXT_Y(W_WINROW(curwin) + curwin->w_wrow + 1);
-	}
-	msg_scroll = FALSE;
-	gui_mch_show_popupmenu_at(menu, (int)p.x, (int)p.y);
+	gui_mch_getmouse(&mx, &my);
+	p.x += mx;
+	p.y += my;
     }
+    else if (curwin != NULL)
+    {
+	p.x += TEXT_X(curwin->w_wincol + curwin->w_wcol + 1);
+	p.y += TEXT_Y(W_WINROW(curwin) + curwin->w_wrow + 1);
+    }
+    msg_scroll = FALSE;
+    gui_mch_show_popupmenu_at(menu, (int)p.x, (int)p.y);
 }
 
 # if defined(FEAT_TEAROFF) || defined(PROTO)
@@ -8017,6 +8487,20 @@ tabline_wndproc(
 		}
 		break;
 	    }
+	case WM_MBUTTONUP:
+	    {
+		TCHITTESTINFO htinfo;
+
+		htinfo.pt.x = GET_X_LPARAM(lParam);
+		htinfo.pt.y = GET_Y_LPARAM(lParam);
+		idx0 = TabCtrl_HitTest(hwnd, &htinfo);
+		if (idx0 != -1)
+		{
+		    idx0 += 1;
+		    send_tabline_menu_event(idx0, TABLINE_MENU_CLOSE);
+		}
+		break;
+	    }
 	default:
 	    break;
     }
@@ -8168,25 +8652,27 @@ gui_mch_drawsign(int row, int col, int typenr)
     static void
 close_signicon_image(signicon_t *sign)
 {
-    if (sign)
-	switch (sign->uType)
-	{
-	    case IMAGE_BITMAP:
-		DeleteObject((HGDIOBJ)sign->hImage);
-		break;
-	    case IMAGE_CURSOR:
-		DestroyCursor((HCURSOR)sign->hImage);
-		break;
-	    case IMAGE_ICON:
-		DestroyIcon((HICON)sign->hImage);
-		break;
+    if (sign == NULL)
+	return;
+
+    switch (sign->uType)
+    {
+	case IMAGE_BITMAP:
+	    DeleteObject((HGDIOBJ)sign->hImage);
+	    break;
+	case IMAGE_CURSOR:
+	    DestroyCursor((HCURSOR)sign->hImage);
+	    break;
+	case IMAGE_ICON:
+	    DestroyIcon((HICON)sign->hImage);
+	    break;
 # ifdef FEAT_XPM_W32
-	    case IMAGE_XPM:
-		DeleteObject((HBITMAP)sign->hImage);
-		DeleteObject((HBITMAP)sign->hShape);
-		break;
+	case IMAGE_XPM:
+	    DeleteObject((HBITMAP)sign->hImage);
+	    DeleteObject((HBITMAP)sign->hShape);
+	    break;
 # endif
-	}
+    }
 }
 
     void *
@@ -8241,11 +8727,11 @@ gui_mch_register_sign(char_u *signfile)
     void
 gui_mch_destroy_sign(void *sign)
 {
-    if (sign)
-    {
-	close_signicon_image((signicon_t *)sign);
-	vim_free(sign);
-    }
+    if (sign == NULL)
+	return;
+
+    close_signicon_image((signicon_t *)sign);
+    vim_free(sign);
 }
 #endif
 
@@ -8278,7 +8764,7 @@ make_tooltip(BalloonEval *beval, char *text, POINT pt)
     TOOLINFOW	*pti;
     RECT	rect;
 
-    pti = alloc(sizeof(TOOLINFOW));
+    pti = ALLOC_ONE(TOOLINFOW);
     if (pti == NULL)
 	return;
 
@@ -8426,7 +8912,7 @@ gui_mch_create_beval_area(
 
     if (mesg != NULL && mesgCB != NULL)
     {
-	iemsg(_(e_cannot_create_ballooneval_with_both_message_and_callback));
+	iemsg(e_cannot_create_ballooneval_with_both_message_and_callback);
 	return NULL;
     }
 
@@ -8455,10 +8941,11 @@ Handle_WM_Notify(HWND hwnd UNUSED, LPNMHDR pnmh)
     if (pnmh->idFrom != ID_BEVAL_TOOLTIP) // it is not our tooltip
 	return;
 
-    if (cur_beval != NULL)
+    if (cur_beval == NULL)
+	return;
+
+    switch (pnmh->code)
     {
-	switch (pnmh->code)
-	{
 	case TTN_SHOW:
 	    break;
 	case TTN_POP: // Before tooltip disappear
@@ -8483,7 +8970,6 @@ Handle_WM_Notify(HWND hwnd UNUSED, LPNMHDR pnmh)
 		info->uFlags |= TTF_DI_SETITEM;
 	    }
 	    break;
-	}
     }
 }
 
@@ -8539,5 +9025,219 @@ netbeans_draw_multisign_indicator(int row)
     SetPixel(s_hdc, x+2, y, gui.currFgColor);
     SetPixel(s_hdc, x+3, y++, gui.currFgColor);
     SetPixel(s_hdc, x+2, y, gui.currFgColor);
+}
+#endif
+
+#if defined(FEAT_EVAL) || defined(PROTO)
+
+// TODO: at the moment, this is just a copy of test_gui_mouse_event.
+// But, we could instead generate actual Win32 mouse event messages,
+// ie. to make it consistent with test_gui_w32_sendevent_keyboard.
+    static int
+test_gui_w32_sendevent_mouse(dict_T *args)
+{
+    if (!dict_has_key(args, "row") || !dict_has_key(args, "col"))
+	return FALSE;
+
+    // Note: "move" is optional, requires fewer arguments
+    int move = (int)dict_get_bool(args, "move", FALSE);
+
+    if (!move && (!dict_has_key(args, "button")
+	    || !dict_has_key(args, "multiclick")
+	    || !dict_has_key(args, "modifiers")))
+	return FALSE;
+
+    int row = (int)dict_get_number(args, "row");
+    int col = (int)dict_get_number(args, "col");
+
+    if (move)
+    {
+	// the "move" argument expects row and col coordnates to be in pixels,
+	// unless "cell" is specified and is TRUE.
+	if (dict_get_bool(args, "cell", FALSE))
+	{
+	    // calculate the middle of the character cell
+	    // Note: Cell coordinates are 1-based from vimscript
+	    int pY = (row - 1) * gui.char_height + gui.char_height / 2;
+	    int pX = (col - 1) * gui.char_width + gui.char_width / 2;
+	    gui_mouse_moved(pX, pY);
+	}
+	else
+	    gui_mouse_moved(col, row);
+    }
+    else
+    {
+	int button = (int)dict_get_number(args, "button");
+	int repeated_click = (int)dict_get_number(args, "multiclick");
+	int_u mods = (int)dict_get_number(args, "modifiers");
+
+	// Reset the scroll values to known values.
+	// XXX: Remove this when/if the scroll step is made configurable.
+	mouse_set_hor_scroll_step(6);
+	mouse_set_vert_scroll_step(3);
+
+	gui_send_mouse_event(button, TEXT_X(col - 1), TEXT_Y(row - 1),
+							repeated_click, mods);
+    }
+    return TRUE;
+}
+
+    static int
+test_gui_w32_sendevent_keyboard(dict_T *args)
+{
+    INPUT inputs[1];
+    INPUT modkeys[3];
+    SecureZeroMemory(inputs, sizeof(INPUT));
+    SecureZeroMemory(modkeys, 3 * sizeof(INPUT));
+
+    char_u *event = dict_get_string(args, "event", TRUE);
+
+    if (event && (STRICMP(event, "keydown") == 0
+				      || STRICMP(event, "keyup") == 0))
+    {
+	WORD vkCode = dict_get_number_def(args, "keycode", 0);
+	if (vkCode <= 0 || vkCode >= 0xFF)
+	{
+	    semsg(_(e_invalid_argument_nr), (long)vkCode);
+	    return FALSE;
+	}
+
+	BOOL isModKey = (vkCode == VK_SHIFT || vkCode == VK_CONTROL
+	    || vkCode == VK_MENU || vkCode == VK_LSHIFT || vkCode == VK_RSHIFT
+	    || vkCode == VK_LCONTROL || vkCode == VK_RCONTROL
+	    || vkCode == VK_LMENU || vkCode == VK_RMENU );
+
+	BOOL unwrapMods = FALSE;
+	int mods = (int)dict_get_number(args, "modifiers");
+
+	// If there are modifiers in the args, and it is not a keyup event and
+	// vkCode is not a modifier key, then we generate virtual modifier key
+	// messages before sending the actual key message.
+	if (mods && STRICMP(event, "keydown") == 0 && !isModKey)
+	{
+	    int n = 0;
+	    if (mods & MOD_MASK_SHIFT)
+	    {
+		modkeys[n].type = INPUT_KEYBOARD;
+		modkeys[n].ki.wVk = VK_LSHIFT;
+		n++;
+	    }
+	    if (mods & MOD_MASK_CTRL)
+	    {
+		modkeys[n].type = INPUT_KEYBOARD;
+		modkeys[n].ki.wVk = VK_LCONTROL;
+		n++;
+	    }
+	    if (mods & MOD_MASK_ALT)
+	    {
+		modkeys[n].type = INPUT_KEYBOARD;
+		modkeys[n].ki.wVk = VK_LMENU;
+		n++;
+	    }
+	    if (n)
+	    {
+		(void)SetForegroundWindow(s_hwnd);
+		SendInput(n, modkeys, sizeof(INPUT));
+	    }
+	}
+
+	inputs[0].type = INPUT_KEYBOARD;
+	inputs[0].ki.wVk = vkCode;
+	if (STRICMP(event, "keyup") == 0)
+	{
+	    inputs[0].ki.dwFlags = KEYEVENTF_KEYUP;
+	    if (!isModKey)
+		unwrapMods = TRUE;
+	}
+
+	(void)SetForegroundWindow(s_hwnd);
+	SendInput(ARRAYSIZE(inputs), inputs, sizeof(INPUT));
+	vim_free(event);
+
+	if (unwrapMods)
+	{
+	    modkeys[0].type = INPUT_KEYBOARD;
+	    modkeys[0].ki.wVk = VK_LSHIFT;
+	    modkeys[0].ki.dwFlags = KEYEVENTF_KEYUP;
+
+	    modkeys[1].type = INPUT_KEYBOARD;
+	    modkeys[1].ki.wVk = VK_LCONTROL;
+	    modkeys[1].ki.dwFlags = KEYEVENTF_KEYUP;
+
+	    modkeys[2].type = INPUT_KEYBOARD;
+	    modkeys[2].ki.wVk = VK_LMENU;
+	    modkeys[2].ki.dwFlags = KEYEVENTF_KEYUP;
+
+	    (void)SetForegroundWindow(s_hwnd);
+	    SendInput(3, modkeys, sizeof(INPUT));
+	}
+    }
+    else
+    {
+	if (event == NULL)
+	{
+	    semsg(_(e_missing_argument_str), "event");
+	}
+	else
+	{
+	    semsg(_(e_invalid_value_for_argument_str_str), "event", event);
+	    vim_free(event);
+	}
+	return FALSE;
+    }
+    return TRUE;
+}
+
+    static int
+test_gui_w32_sendevent_set_keycode_trans_strategy(dict_T *args)
+{
+    int handled = 0;
+    char_u *strategy = dict_get_string(args, "strategy", TRUE);
+
+    if (strategy)
+    {
+	if (STRICMP(strategy, "classic") == 0)
+	{
+	    handled = 1;
+	    keycode_trans_strategy_used = &keycode_trans_strategy_classic;
+	}
+	else if (STRICMP(strategy, "experimental") == 0)
+	{
+	    handled = 1;
+	    keycode_trans_strategy_used = &keycode_trans_strategy_experimental;
+	}
+    }
+
+    if (!handled)
+    {
+	if (strategy == NULL)
+	{
+	    semsg(_(e_missing_argument_str), "strategy");
+	}
+	else
+	{
+	    semsg(_(e_invalid_value_for_argument_str_str), "strategy", strategy);
+	    vim_free(strategy);
+	}
+	return FALSE;
+    }
+    return TRUE;
+}
+
+
+    int
+test_gui_w32_sendevent(char_u *event, dict_T *args)
+{
+    if (STRICMP(event, "key") == 0)
+	return test_gui_w32_sendevent_keyboard(args);
+    else if (STRICMP(event, "mouse") == 0)
+	return test_gui_w32_sendevent_mouse(args);
+    else if (STRICMP(event, "set_keycode_trans_strategy") == 0)
+	return test_gui_w32_sendevent_set_keycode_trans_strategy(args);
+    else
+    {
+	semsg(_(e_invalid_value_for_argument_str_str), "event", event);
+	return FALSE;
+    }
 }
 #endif

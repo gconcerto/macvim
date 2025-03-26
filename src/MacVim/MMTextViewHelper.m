@@ -44,7 +44,7 @@ static float MMDragAreaSize = 73.0f;
 - (BOOL)inputManagerHandleMouseEvent:(NSEvent *)event;
 - (void)sendMarkedText:(NSString *)text position:(int32_t)pos length:(unsigned)len;
 - (void)abandonMarkedText;
-- (void)sendGestureEvent:(int)gesture flags:(int)flags;
+- (void)sendGestureEvent:(int)gesture flags:(unsigned)flags;
 @end
 
 
@@ -147,7 +147,7 @@ KeyboardInputSourcesEqual(TISInputSourceRef a, TISInputSourceRef b)
 
     [self hideMouseCursor];
 
-    unsigned flags = [event modifierFlags];
+    NSUInteger flags = [event modifierFlags];
     id mmta = [[[self vimController] vimState] objectForKey:@"p_mmta"];
     NSString *string = [event characters];
     NSString *unmod  = [event charactersIgnoringModifiers];
@@ -221,7 +221,7 @@ KeyboardInputSourcesEqual(TISInputSourceRef a, TISInputSourceRef b)
     currentEvent = nil;
 }
 
-- (void)insertText:(id)string
+- (void)insertText:(id)string replacementRange:(NSRange)replacementRange
 {
     if ([self hasMarkedText]) {
         [self sendMarkedText:nil position:0 length:0];
@@ -240,6 +240,20 @@ KeyboardInputSourcesEqual(TISInputSourceRef a, TISInputSourceRef b)
     // latter case.
     if ([string isKindOfClass:[NSAttributedString class]])
         string = [string string];
+
+    if (replacementRange.length > 0)
+    {
+        // Replacement range is a concept we don't really have a way to fulfill
+        // as we don't have proper access to the underlying text storage. This
+        // should usually be triggered when we have selected text though, and
+        // so we simply ask Vim to replace the current selection with the new
+        // text, and it should hopefully work.
+        // Only known way of this being called is Apple Intelligence Writing
+        // Tools.
+        MMVimController *vc = [self vimController];
+        [vc replaceSelectedText:string];
+        return;
+    }
 
     //int len = [string length];
     //ASLogDebug(@"len=%d char[0]=%#x char[1]=%#x string='%@'", [string length],
@@ -298,22 +312,51 @@ KeyboardInputSourcesEqual(TISInputSourceRef a, TISInputSourceRef b)
     else interpretKeyEventsSwallowedKey = NO;
 }
 
-- (void)scrollWheel:(NSEvent *)event
+- (void)calcScrollWheelDeltas:(NSEvent *)event x:(float *)x y:(float *)y eventFlags:(NSEventModifierFlags*)eventFlags
 {
     float dx = 0;
     float dy = 0;
 
-#if MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_7
+    NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
+
     if ([event hasPreciseScrollingDeltas]) {
-        NSSize cellSize = [textView cellSize];
-        float thresholdX = cellSize.width;
-        float thresholdY = cellSize.height;
-        scrollingDeltaX += [event scrollingDeltaX];
+        const NSEventPhase phase = event.phase;
+
+        CGFloat eventScrollingDeltaX = event.scrollingDeltaX;
+        CGFloat eventScrollingDeltaY = event.scrollingDeltaY;
+
+        // If user wants to only scroll in one direction to prevent accidental
+        // side scroll, we lock that in at the beginning of a scroll gesture.
+        // Note that we choose Y if both X and Y deltas exist, because most of
+        // the time, the user is doing a vertical scroll.
+        if (phase == NSEventPhaseMayBegin || phase == NSEventPhaseBegan) {
+            scrollingDirection = ScrollingDirectionUnknown;
+        }
+        if (scrollingDirection == ScrollingDirectionUnknown) {
+            if (event.scrollingDeltaY != 0) {
+                scrollingDirection = ScrollingDirectionVertical;
+            } else if (event.scrollingDeltaX != 0) {
+                scrollingDirection = ScrollingDirectionHorizontal;
+            }
+        }
+        if ([ud boolForKey:MMScrollOneDirectionOnlyKey]) {
+            if (scrollingDirection == ScrollingDirectionVertical) {
+                eventScrollingDeltaX = 0;
+            } else if (scrollingDirection == ScrollingDirectionHorizontal) {
+                eventScrollingDeltaY = 0;
+            }
+        }
+
+        const NSSize cellSize = [textView cellSize];
+        const float thresholdX = cellSize.width;
+        const float thresholdY = cellSize.height;
+
+        scrollingDeltaX += eventScrollingDeltaX;
         if (fabs(scrollingDeltaX) > thresholdX) {
             dx = roundf(scrollingDeltaX / thresholdX);
             scrollingDeltaX -= thresholdX * dx;
         }
-        scrollingDeltaY += [event scrollingDeltaY];
+        scrollingDeltaY += eventScrollingDeltaY;
         if (fabs(scrollingDeltaY) > thresholdY) {
             dy = roundf(scrollingDeltaY / thresholdY);
             scrollingDeltaY -= thresholdY * dy;
@@ -323,12 +366,40 @@ KeyboardInputSourcesEqual(TISInputSourceRef a, TISInputSourceRef b)
         scrollingDeltaY = 0;
         dx = [event scrollingDeltaX];
         dy = [event scrollingDeltaY];
-    }
-#else
-    dx = [event deltaX];
-    dy = [event deltaY];
-#endif
 
+        if ([ud boolForKey:MMMouseWheelDisableAccelerationKey]) {
+            // Use scroll wheel as discrete steps as macOS acceleration often
+            // leads to unintuitive results.
+            NSInteger numLines = [ud integerForKey:MMMouseWheelNumLinesKey];
+            dx = dx == 0 ? 0 : (dx > 0 ? numLines : -numLines);
+            dy = dy == 0 ? 0 : (dy > 0 ? numLines : -numLines);
+        } else {
+            // Use the default OS acceleration, but we still want to round up
+            // the delta to at least 1 (configurable) as otherwise it's
+            // frustrating to use as MacVim fails to scroll even one line.
+            NSInteger minScrollLines = [ud integerForKey:MMMouseWheelMinLinesKey];
+            dx = dx == 0 ? 0 : (fabs(dx) > minScrollLines ? dx : (dx > 0 ? minScrollLines : -minScrollLines));
+            dy = dy == 0 ? 0 : (fabs(dy) > minScrollLines ? dy : (dy > 0 ? minScrollLines : -minScrollLines));
+        }
+
+        if ((*eventFlags & NSEventModifierFlagShift) && dx != 0 && dy == 0) {
+            // A shift-scroll in macOS converts a normal Y to X-axis scroll.
+            // There is no proper API to query this so this is just done by
+            // heuristics. We need to remove the shift flag, or Vim would see
+            // this as a <S-ScrollWheelRight> which is not what we want.
+            *eventFlags = *eventFlags & (~NSEventModifierFlagShift);
+        }
+    }
+
+    *x = dx;
+    *y = dy;
+}
+
+- (void)scrollWheel:(NSEvent *)event
+{
+    NSEventModifierFlags eventFlags = event.modifierFlags;
+    float dx = 0, dy = 0;
+    [self calcScrollWheelDeltas:event x:&dx y:&dy eventFlags:&eventFlags];
     if (dx == 0 && dy == 0)
         return;
 
@@ -343,12 +414,12 @@ KeyboardInputSourcesEqual(TISInputSourceRef a, TISInputSourceRef b)
     int row, col;
     NSPoint pt = [textView convertPoint:[event locationInWindow] fromView:nil];
     if ([textView convertPoint:pt toRow:&row column:&col]) {
-        int flags = [event modifierFlags];
+        unsigned flags = (unsigned)eventFlags;
         NSMutableData *data = [NSMutableData data];
 
         [data appendBytes:&row length:sizeof(int)];
         [data appendBytes:&col length:sizeof(int)];
-        [data appendBytes:&flags length:sizeof(int)];
+        [data appendBytes:&flags length:sizeof(unsigned)];
         [data appendBytes:&dy length:sizeof(float)];
         [data appendBytes:&dx length:sizeof(float)];
 
@@ -366,8 +437,8 @@ KeyboardInputSourcesEqual(TISInputSourceRef a, TISInputSourceRef b)
     if (![textView convertPoint:pt toRow:&row column:&col])
         return;
 
-    int button = [event buttonNumber];
-    int flags = [event modifierFlags];
+    int button = (int)[event buttonNumber];
+    unsigned flags = (unsigned)[event modifierFlags];
     int repeat = 0;
 
     if (useMouseTime) {
@@ -399,7 +470,7 @@ KeyboardInputSourcesEqual(TISInputSourceRef a, TISInputSourceRef b)
     [data appendBytes:&row length:sizeof(int)];
     [data appendBytes:&col length:sizeof(int)];
     [data appendBytes:&button length:sizeof(int)];
-    [data appendBytes:&flags length:sizeof(int)];
+    [data appendBytes:&flags length:sizeof(unsigned)];
     [data appendBytes:&repeat length:sizeof(int)];
 
     [[self vimController] sendMessage:MouseDownMsgID data:data];
@@ -415,12 +486,12 @@ KeyboardInputSourcesEqual(TISInputSourceRef a, TISInputSourceRef b)
     if (![textView convertPoint:pt toRow:&row column:&col])
         return;
 
-    int flags = [event modifierFlags];
+    unsigned flags = (unsigned)[event modifierFlags];
     NSMutableData *data = [NSMutableData data];
 
     [data appendBytes:&row length:sizeof(int)];
     [data appendBytes:&col length:sizeof(int)];
-    [data appendBytes:&flags length:sizeof(int)];
+    [data appendBytes:&flags length:sizeof(unsigned)];
 
     [[self vimController] sendMessage:MouseUpMsgID data:data];
 
@@ -432,7 +503,7 @@ KeyboardInputSourcesEqual(TISInputSourceRef a, TISInputSourceRef b)
     if ([self inputManagerHandleMouseEvent:event])
         return;
 
-    int flags = [event modifierFlags];
+    unsigned flags = (unsigned)[event modifierFlags];
     int row, col;
     NSPoint pt = [textView convertPoint:[event locationInWindow] fromView:nil];
     if (![textView convertPoint:pt toRow:&row column:&col])
@@ -444,7 +515,7 @@ KeyboardInputSourcesEqual(TISInputSourceRef a, TISInputSourceRef b)
 
         [data appendBytes:&row length:sizeof(int)];
         [data appendBytes:&col length:sizeof(int)];
-        [data appendBytes:&flags length:sizeof(int)];
+        [data appendBytes:&flags length:sizeof(unsigned)];
 
         [[self vimController] sendMessage:MouseDraggedMsgID data:data];
     }
@@ -494,7 +565,7 @@ KeyboardInputSourcesEqual(TISInputSourceRef a, TISInputSourceRef b)
     else if (dy < 0) type = MMGestureSwipeDown;
     else return;
 
-    [self sendGestureEvent:type flags:[event modifierFlags]];
+    [self sendGestureEvent:type flags:(unsigned)[event modifierFlags]];
 }
 
 - (void)pressureChangeWithEvent:(NSEvent *)event
@@ -503,8 +574,29 @@ KeyboardInputSourcesEqual(TISInputSourceRef a, TISInputSourceRef b)
     if (event.stage >= 2) {
         if (!inForceClick) {
             inForceClick = YES;
-            
-            [self sendGestureEvent:MMGestureForceClick flags:[event modifierFlags]];
+
+            NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
+
+            // See if the OS is configured to use Force click for data lookups
+            // (the other option usually being three-finger tap).
+            const BOOL useForceClickLookup = [ud boolForKey:@"com.apple.trackpad.forceClick"];
+
+            // See if the user has overriden to disallow Force click lookups.
+            // The usual reason for disallowing it is to support binding
+            // <ForceClick> mappings in Vim.
+            const BOOL userAllowsForceClickLookup = [ud boolForKey:MMAllowForceClickLookUpKey];
+
+            if (useForceClickLookup && userAllowsForceClickLookup) {
+                // For some odd reason, we don't get quickLookWithEvent: even when
+                // the user has configured to use force click instead of 3-finger
+                // tap. We need to manually invoke it (this is how NSTextView does
+                // it as well). References for other software that do this:
+                //   https://gitlab.com/gnachman/iterm2/-/blob/master/sources/PointerController.m
+                //   https://searchfox.org/mozilla-central/source/widget/cocoa/nsChildView.mm
+                [textView quickLookWithEvent:event];
+            } else {
+                [self sendGestureEvent:MMGestureForceClick flags:(unsigned)[event modifierFlags]];
+            }
         }
     } else {
         inForceClick = NO;
@@ -515,13 +607,13 @@ KeyboardInputSourcesEqual(TISInputSourceRef a, TISInputSourceRef b)
 {
     NSPasteboard *pboard = [sender draggingPasteboard];
 
-    if ([[pboard types] containsObject:NSStringPboardType]) {
-        NSString *string = [pboard stringForType:NSStringPboardType];
+    if ([[pboard types] containsObject:NSPasteboardTypeString]) {
+        NSString *string = [pboard stringForType:NSPasteboardTypeString];
         [[self vimController] dropString:string];
         return YES;
-    } else if ([[pboard types] containsObject:NSFilenamesPboardType]) {
-        NSArray *files = [pboard propertyListForType:NSFilenamesPboardType];
-        [[self vimController] dropFiles:files forceOpen:NO];
+    } else if ([[pboard types] containsObject:getPasteboardFilenamesType()]) {
+        NSArray<NSString *> *filenames = extractPasteboardFilenames(pboard);
+        [[self vimController] dropFiles:filenames forceOpen:NO];
         return YES;
     }
 
@@ -533,10 +625,10 @@ KeyboardInputSourcesEqual(TISInputSourceRef a, TISInputSourceRef b)
     NSDragOperation sourceDragMask = [sender draggingSourceOperationMask];
     NSPasteboard *pboard = [sender draggingPasteboard];
 
-    if ( [[pboard types] containsObject:NSFilenamesPboardType]
+    if ( [[pboard types] containsObject:getPasteboardFilenamesType()]
             && (sourceDragMask & NSDragOperationCopy) )
         return NSDragOperationCopy;
-    if ( [[pboard types] containsObject:NSStringPboardType]
+    if ( [[pboard types] containsObject:NSPasteboardTypeString]
             && (sourceDragMask & NSDragOperationCopy) )
         return NSDragOperationCopy;
 
@@ -548,10 +640,10 @@ KeyboardInputSourcesEqual(TISInputSourceRef a, TISInputSourceRef b)
     NSDragOperation sourceDragMask = [sender draggingSourceOperationMask];
     NSPasteboard *pboard = [sender draggingPasteboard];
 
-    if ( [[pboard types] containsObject:NSFilenamesPboardType]
+    if ( [[pboard types] containsObject:getPasteboardFilenamesType()]
             && (sourceDragMask & NSDragOperationCopy) )
         return NSDragOperationCopy;
-    if ( [[pboard types] containsObject:NSStringPboardType]
+    if ( [[pboard types] containsObject:NSPasteboardTypeString]
             && (sourceDragMask & NSDragOperationCopy) )
         return NSDragOperationCopy;
 
@@ -572,8 +664,8 @@ KeyboardInputSourcesEqual(TISInputSourceRef a, TISInputSourceRef b)
     if (newFont) {
         NSString *name = [newFont displayName];
         NSString *wideName = [newFontWide displayName];
-        unsigned len = [name lengthOfBytesUsingEncoding:NSUTF8StringEncoding];
-        unsigned wideLen = [wideName lengthOfBytesUsingEncoding:
+        unsigned len = (unsigned)[name lengthOfBytesUsingEncoding:NSUTF8StringEncoding];
+        unsigned wideLen = (unsigned)[wideName lengthOfBytesUsingEncoding:
                                                         NSUTF8StringEncoding];
         if (len > 0) {
             NSMutableData *data = [NSMutableData data];
@@ -659,7 +751,7 @@ KeyboardInputSourcesEqual(TISInputSourceRef a, TISInputSourceRef b)
             imRange = range;
         }
 
-        [self sendMarkedText:text position:range.location length:range.length];
+        [self sendMarkedText:text position:(int32_t)range.location length:range.length];
         return;
     }
 
@@ -751,8 +843,23 @@ KeyboardInputSourcesEqual(TISInputSourceRef a, TISInputSourceRef b)
     markedRange = range;
 }
 
+/// Don't use this. See comments.
 - (NSRect)firstRectForCharacterRange:(NSRange)range
 {
+    //
+    // Note: This is really quite a buggy method and relies on improper
+    // assumptions. It's kept alive for now because MMTextView (which is also
+    // deprecated and shouldn't be used for real users) uses this.
+    // Known bugs:
+    // - Assumes that preEditRow/Column is the beginning of the marked range,
+    //   but the way it actually works is that it's the current cursor *within*
+    //   the marked range.
+    // - Uses fontWide to decide to jump 1 or 2 columns per character. First,
+    //   this is wrong, as wide texts work just fine even without guifontwide
+    //   set. Second, some characters may have length > 1. See MMCoreTextView
+    //   which does proper length calculation.
+    //
+
     // This method is called when the input manager wants to pop up an
     // auxiliary window.  The position where this should be is controlled by
     // Vim by sending SetPreEditPositionMsgID so compute a position based on
@@ -761,13 +868,13 @@ KeyboardInputSourcesEqual(TISInputSourceRef a, TISInputSourceRef b)
     int row = preEditRow;
 
     NSFont *theFont = [[textView markedTextAttributes]
-            valueForKey:NSFontAttributeName];
+                       valueForKey:NSFontAttributeName];
     if (theFont == [textView fontWide]) {
         col += imRange.location * 2;
         if (col >= [textView maxColumns] - 1) {
             row += (col / [textView maxColumns]);
             col = col % 2 ? col % [textView maxColumns] + 1 :
-                            col % [textView maxColumns];
+            col % [textView maxColumns];
         }
     } else {
         col += imRange.location;
@@ -777,10 +884,15 @@ KeyboardInputSourcesEqual(TISInputSourceRef a, TISInputSourceRef b)
         }
     }
 
+    return [self firstRectForCharacterRange:row column:col length:(int)range.length];
+}
+
+- (NSRect)firstRectForCharacterRange:(int)row column:(int)col length:(int)numColumns
+{
     NSRect rect = [textView rectForRow:row
                                 column:col
                                numRows:1
-                            numColumns:range.length];
+                            numColumns:numColumns];
 
     // NOTE: If the text view is flipped then 'rect' has its origin in the top
     // left corner of the rect, but the methods below expect it to be in the
@@ -910,9 +1022,9 @@ KeyboardInputSourcesEqual(TISInputSourceRef a, TISInputSourceRef b)
     }
 
     const char *chars = [key UTF8String];
-    unsigned length = [key lengthOfBytesUsingEncoding:NSUTF8StringEncoding];
+    unsigned length = (unsigned)[key lengthOfBytesUsingEncoding:NSUTF8StringEncoding];
     unsigned keyCode = [currentEvent keyCode];
-    unsigned flags = [currentEvent modifierFlags];
+    unsigned flags = (unsigned)[currentEvent modifierFlags];
 
     // The low 16 bits are not used for modifier flags by NSEvent.  Use
     // these bits for custom flags.
@@ -932,7 +1044,7 @@ KeyboardInputSourcesEqual(TISInputSourceRef a, TISInputSourceRef b)
 
 - (void)doInsertText:(NSString *)text
 {
-    unsigned length = [text lengthOfBytesUsingEncoding:NSUTF8StringEncoding];
+    unsigned length = (unsigned)[text lengthOfBytesUsingEncoding:NSUTF8StringEncoding];
     if (0 == length)
         return;
 
@@ -948,7 +1060,7 @@ KeyboardInputSourcesEqual(TISInputSourceRef a, TISInputSourceRef b)
     if (currentEvent) {
         // HACK! Keys on the numeric key pad are treated as special keys by Vim
         // so we need to pass on key code and modifier flags in this situation.
-        unsigned mods = [currentEvent modifierFlags];
+        unsigned mods = (unsigned)[currentEvent modifierFlags];
         if (mods & NSEventModifierFlagNumericPad) {
             flags = mods & NSEventModifierFlagDeviceIndependentFlagsMask;
             keyCode = [currentEvent keyCode];
@@ -1001,7 +1113,7 @@ KeyboardInputSourcesEqual(TISInputSourceRef a, TISInputSourceRef b)
 
         [data appendBytes:&dragRow length:sizeof(int)];
         [data appendBytes:&col length:sizeof(int)];
-        [data appendBytes:&dragFlags length:sizeof(int)];
+        [data appendBytes:&dragFlags length:sizeof(unsigned)];
 
         [[self vimController] sendMessage:MouseDraggedMsgID data:data];
 
@@ -1031,7 +1143,7 @@ KeyboardInputSourcesEqual(TISInputSourceRef a, TISInputSourceRef b)
     static NSCursor *ibeamCursor = nil;
 
     if (!ibeamCursor) {
-        if (floor(NSAppKitVersionNumber) >= NSAppKitVersionNumber10_14)
+        if (AVAILABLE_MAC_OS(10, 14))
         {
             // macOS 10.14 (Mojave) introduced dark mode, and seems to have
             // added a thick white border around the system I-beam cursor,
@@ -1104,10 +1216,10 @@ KeyboardInputSourcesEqual(TISInputSourceRef a, TISInputSourceRef b)
 {
     NSRect rect = [textView frame];
     NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
-    int left = [ud integerForKey:MMTextInsetLeftKey];
-    int top = [ud integerForKey:MMTextInsetTopKey];
-    int right = [ud integerForKey:MMTextInsetRightKey];
-    int bot = [ud integerForKey:MMTextInsetBottomKey];
+    NSUInteger left = [ud integerForKey:MMTextInsetLeftKey];
+    NSUInteger top = [ud integerForKey:MMTextInsetTopKey];
+    NSUInteger right = [ud integerForKey:MMTextInsetRightKey];
+    NSUInteger bot = [ud integerForKey:MMTextInsetBottomKey];
 
     rect.origin.x = left;
     rect.origin.y = top;
@@ -1136,7 +1248,7 @@ KeyboardInputSourcesEqual(TISInputSourceRef a, TISInputSourceRef b)
 
     NSMutableData *data = [NSMutableData data];
     unsigned textlen = text == nil ? 0
-                    : [text lengthOfBytesUsingEncoding:NSUTF8StringEncoding];
+                    : (unsigned)[text lengthOfBytesUsingEncoding:NSUTF8StringEncoding];
 
     [data appendBytes:&textlen length:sizeof(unsigned)];
     [data appendBytes:&pos length:sizeof(int32_t)];
@@ -1160,11 +1272,11 @@ KeyboardInputSourcesEqual(TISInputSourceRef a, TISInputSourceRef b)
     [[NSTextInputContext currentInputContext] discardMarkedText];
 }
 
-- (void)sendGestureEvent:(int)gesture flags:(int)flags
+- (void)sendGestureEvent:(int)gesture flags:(unsigned)flags
 {
     NSMutableData *data = [NSMutableData data];
 
-    [data appendBytes:&flags length:sizeof(int)];
+    [data appendBytes:&flags length:sizeof(unsigned)];
     [data appendBytes:&gesture length:sizeof(int)];
 
     [[self vimController] sendMessage:GestureMsgID data:data];

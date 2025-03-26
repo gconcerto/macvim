@@ -150,7 +150,7 @@ ex_help(exarg_T *eap)
 	    n = WSP_HELP;
 	    if (cmdmod.cmod_split == 0 && curwin->w_width != Columns
 						  && curwin->w_width < 80)
-		n |= WSP_TOP;
+		n |= p_sb ? WSP_BOT : WSP_TOP;
 	    if (win_split(0, n) == FAIL)
 		goto erret;
 
@@ -720,7 +720,7 @@ fix_help_buffer(void)
 	for (lnum = 1; lnum <= curbuf->b_ml.ml_line_count; ++lnum)
 	{
 	    line = ml_get_buf(curbuf, lnum, FALSE);
-	    len = (int)STRLEN(line);
+	    len = ml_get_buf_len(curbuf, lnum);
 	    if (in_example && len > 0 && !VIM_ISWHITE(line[0]))
 	    {
 		// End of example: non-white or '<' in first column.
@@ -813,6 +813,8 @@ fix_help_buffer(void)
 			    f1 = fnames[i1];
 			    t1 = gettail(f1);
 			    e1 = vim_strrchr(t1, '.');
+			    if (e1 == NULL)
+				continue;
 			    if (fnamecmp(e1, ".txt") != 0
 					       && fnamecmp(e1, fname + 4) != 0)
 			    {
@@ -828,6 +830,8 @@ fix_help_buffer(void)
 				    continue;
 				t2 = gettail(f2);
 				e2 = vim_strrchr(t2, '.');
+				if (e2 == NULL)
+				    continue;
 				if (e1 - f1 != e2 - f2
 					    || fnamencmp(f1, f2, e1 - f1) != 0)
 				    continue;
@@ -960,6 +964,8 @@ helptags_one(
     int		utf8 = MAYBE;
     int		this_utf8;
     int		firstline;
+    int		in_example;
+    int		len;
     int		mix = FALSE;	// detected mixed encodings
 
     // Find all *.txt files.
@@ -1025,6 +1031,7 @@ helptags_one(
 	}
 	fname = files[fi] + dirlen + 1;
 
+	in_example = FALSE;
 	firstline = TRUE;
 	while (!vim_fgets(IObuff, IOSIZE, fd) && !got_int)
 	{
@@ -1058,6 +1065,13 @@ helptags_one(
 		    got_int = TRUE;
 		}
 		firstline = FALSE;
+	    }
+	    if (in_example)
+	    {
+		// skip over example; a non-white in the first column ends it
+		if (vim_strchr((char_u *)" \t\n\r", IObuff[0]))
+		    continue;
+		in_example = FALSE;
 	    }
 	    p1 = vim_strchr(IObuff, '*');	// find first '*'
 	    while (p1 != NULL)
@@ -1103,6 +1117,10 @@ helptags_one(
 		}
 		p1 = p2;
 	    }
+	    len = (int)STRLEN(IObuff);
+	    if ((len == 2 && STRCMP(&IObuff[len - 2], ">\n") == 0)
+		    || (len >= 3 && STRCMP(&IObuff[len - 3], " >\n") == 0))
+		in_example = TRUE;
 	    line_breakcheck();
 	}
 
@@ -1206,38 +1224,38 @@ do_helptags(char_u *dirname, int add_help_tags, int ignore_writeerr)
     for (i = 0; i < filecount; ++i)
     {
 	len = (int)STRLEN(files[i]);
-	if (len > 4)
-	{
-	    if (STRICMP(files[i] + len - 4, ".txt") == 0)
-	    {
-		// ".txt" -> language "en"
-		lang[0] = 'e';
-		lang[1] = 'n';
-	    }
-	    else if (files[i][len - 4] == '.'
-		    && ASCII_ISALPHA(files[i][len - 3])
-		    && ASCII_ISALPHA(files[i][len - 2])
-		    && TOLOWER_ASC(files[i][len - 1]) == 'x')
-	    {
-		// ".abx" -> language "ab"
-		lang[0] = TOLOWER_ASC(files[i][len - 3]);
-		lang[1] = TOLOWER_ASC(files[i][len - 2]);
-	    }
-	    else
-		continue;
+	if (len <= 4)
+	    continue;
 
-	    // Did we find this language already?
-	    for (j = 0; j < ga.ga_len; j += 2)
-		if (STRNCMP(lang, ((char_u *)ga.ga_data) + j, 2) == 0)
-		    break;
-	    if (j == ga.ga_len)
-	    {
-		// New language, add it.
-		if (ga_grow(&ga, 2) == FAIL)
-		    break;
-		((char_u *)ga.ga_data)[ga.ga_len++] = lang[0];
-		((char_u *)ga.ga_data)[ga.ga_len++] = lang[1];
-	    }
+	if (STRICMP(files[i] + len - 4, ".txt") == 0)
+	{
+	    // ".txt" -> language "en"
+	    lang[0] = 'e';
+	    lang[1] = 'n';
+	}
+	else if (files[i][len - 4] == '.'
+		&& ASCII_ISALPHA(files[i][len - 3])
+		&& ASCII_ISALPHA(files[i][len - 2])
+		&& TOLOWER_ASC(files[i][len - 1]) == 'x')
+	{
+	    // ".abx" -> language "ab"
+	    lang[0] = TOLOWER_ASC(files[i][len - 3]);
+	    lang[1] = TOLOWER_ASC(files[i][len - 2]);
+	}
+	else
+	    continue;
+
+	// Did we find this language already?
+	for (j = 0; j < ga.ga_len; j += 2)
+	    if (STRNCMP(lang, ((char_u *)ga.ga_data) + j, 2) == 0)
+		break;
+	if (j == ga.ga_len)
+	{
+	    // New language, add it.
+	    if (ga_grow(&ga, 2) == FAIL)
+		break;
+	    ((char_u *)ga.ga_data)[ga.ga_len++] = lang[0];
+	    ((char_u *)ga.ga_data)[ga.ga_len++] = lang[1];
 	}
     }
 
@@ -1298,7 +1316,7 @@ ex_helptags(exarg_T *eap)
 
     if (STRCMP(eap->arg, "ALL") == 0)
     {
-	do_in_path(p_rtp, (char_u *)"doc", DIP_ALL + DIP_DIR,
+	do_in_path(p_rtp, "", (char_u *)"doc", DIP_ALL + DIP_DIR,
 						 helptags_cb, &add_help_tags);
     }
     else

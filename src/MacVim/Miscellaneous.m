@@ -18,6 +18,9 @@ NSString *MMTabMinWidthKey                = @"MMTabMinWidth";
 NSString *MMTabMaxWidthKey                = @"MMTabMaxWidth";
 NSString *MMTabOptimumWidthKey            = @"MMTabOptimumWidth";
 NSString *MMShowAddTabButtonKey           = @"MMShowAddTabButton";
+NSString *MMShowTabScrollButtonsKey       = @"MMShowTabScrollButtons";
+NSString *MMTabColorsModeKey              = @"MMTabColorsMode";
+NSString *MMWindowUseTabBackgroundColorKey      = @"MMWindowUseTabBackgroundColor";
 NSString *MMTextInsetLeftKey              = @"MMTextInsetLeft";
 NSString *MMTextInsetRightKey             = @"MMTextInsetRight";
 NSString *MMTextInsetTopKey               = @"MMTextInsetTop";
@@ -33,7 +36,10 @@ NSString *MMFontPreserveLineSpacingKey    = @"MMFontPreserveLineSpacing";
 NSString *MMAppearanceModeSelectionKey    = @"MMAppearanceModeSelection";
 NSString *MMNoTitleBarWindowKey           = @"MMNoTitleBarWindow";
 NSString *MMTitlebarAppearsTransparentKey = @"MMTitlebarAppearsTransparent";
-NSString *MMDisableLaunchAnimation        = @"MMDisableLaunchAnimation";
+NSString *MMTitlebarShowsDocumentIconKey  = @"MMTitlebarShowsDocumentIcon";
+NSString *MMNoWindowShadowKey             = @"MMNoWindowShadow";
+NSString *MMDisableLaunchAnimationKey     = @"MMDisableLaunchAnimation";
+NSString *MMDisableTablineAnimationKey    = @"MMDisableTablineAnimation";
 NSString *MMLoginShellKey                 = @"MMLoginShell";
 NSString *MMUntitledWindowKey             = @"MMUntitledWindow";
 NSString *MMZoomBothKey                   = @"MMZoomBoth";
@@ -51,9 +57,20 @@ NSString *MMUseInlineImKey                = @"MMUseInlineIm";
 NSString *MMSuppressTerminationAlertKey   = @"MMSuppressTerminationAlert";
 NSString *MMNativeFullScreenKey           = @"MMNativeFullScreen";
 NSString *MMUseMouseTimeKey               = @"MMUseMouseTime";
+NSString *MMMouseWheelDisableAccelerationKey    = @"MMMouseWheelDisbleAcceleration";
+NSString *MMMouseWheelMinLinesKey         = @"MMMouseWheelMinLines";
+NSString *MMMouseWheelNumLinesKey         = @"MMMouseWheelNumLines";
 NSString *MMFullScreenFadeTimeKey         = @"MMFullScreenFadeTime";
-NSString *MMNonNativeFullScreenShowMenuKey  = @"MMNonNativeFullScreenShowMenu";
-
+NSString *MMNonNativeFullScreenShowMenuKey          = @"MMNonNativeFullScreenShowMenu";
+NSString *MMNonNativeFullScreenSafeAreaBehaviorKey  = @"MMNonNativeFullScreenSafeAreaBehavior";
+NSString *MMSmoothResizeKey               = @"MMSmoothResize";
+NSString *MMCmdLineAlignBottomKey         = @"MMCmdLineAlignBottom";
+NSString *MMRendererClipToRowKey          = @"MMRendererClipToRow";
+NSString *MMAllowForceClickLookUpKey      = @"MMAllowForceClickLookUp";
+NSString *MMUpdaterPrereleaseChannelKey   = @"MMUpdaterPrereleaseChannel";
+NSString *MMLastUsedBundleVersionKey      = @"MMLastUsedBundleVersion";
+NSString *MMShowWhatsNewOnStartupKey      = @"MMShowWhatsNewOnStartup";
+NSString *MMScrollOneDirectionOnlyKey     = @"MMScrollOneDirectionOnly";
 
 
 @implementation NSIndexSet (MMExtras)
@@ -62,7 +79,7 @@ NSString *MMNonNativeFullScreenShowMenuKey  = @"MMNonNativeFullScreenShowMenu";
 {
     NSMutableIndexSet *idxSet = [NSMutableIndexSet indexSet];
     NSArray *array = [list componentsSeparatedByString:@"\n"];
-    unsigned i, count = [array count];
+    NSUInteger i, count = [array count];
 
     for (i = 0; i < count; ++i) {
         NSString *entry = [array objectAtIndex:i];
@@ -116,11 +133,11 @@ NSString *MMNonNativeFullScreenShowMenuKey  = @"MMNonNativeFullScreenShowMenu";
 
 - (int)indexOfItemWithAction:(SEL)action
 {
-    int i, count = [self numberOfItems];
+    NSUInteger i, count = [self numberOfItems];
     for (i = 0; i < count; ++i) {
         NSMenuItem *item = [self itemAtIndex:i];
         if ([item action] == action)
-            return i;
+            return (int)i;
     }
 
     return -1;
@@ -135,7 +152,7 @@ NSString *MMNonNativeFullScreenShowMenuKey  = @"MMNonNativeFullScreenShowMenu";
 - (NSMenu *)findMenuContainingItemWithAction:(SEL)action
 {
     // NOTE: We only look for the action in the submenus of 'self'
-    int i, count = [self numberOfItems];
+    NSUInteger i, count = [self numberOfItems];
     for (i = 0; i < count; ++i) {
         NSMenu *menu = [[self itemAtIndex:i] submenu];
         NSMenuItem *item = [menu itemWithAction:action];
@@ -223,23 +240,6 @@ NSString *MMNonNativeFullScreenShowMenuKey  = @"MMNonNativeFullScreenShowMenu";
 
 
 
-@implementation NSTabView (MMExtras)
-
-- (void)removeAllTabViewItems
-{
-    NSArray *existingItems = [self tabViewItems];
-    NSEnumerator *e = [existingItems objectEnumerator];
-    NSTabViewItem *item;
-    while ((item = [e nextObject])) {
-        [self removeTabViewItem:item];
-    }
-}
-
-@end // NSTabView (MMExtras)
-
-
-
-
 @implementation NSNumber (MMExtras)
 
 // HACK to allow font size to be changed via menu (bound to Cmd+/Cmd-)
@@ -254,7 +254,7 @@ NSString *MMNonNativeFullScreenShowMenuKey  = @"MMNonNativeFullScreenShowMenu";
 
 
     NSView *
-showHiddenFilesView()
+showHiddenFilesView(void)
 {
     // Return a new button object for each NSOpenPanel -- several of them
     // could be displayed at once.
@@ -264,7 +264,7 @@ showHiddenFilesView()
         initWithFrame:NSMakeRect(0, 0, 140, 18)] autorelease];
     [button setTitle:
         NSLocalizedString(@"Show Hidden Files", @"Show Hidden Files Checkbox")];
-    [button setButtonType:NSSwitchButton];
+    [button setButtonType:NSButtonTypeSwitch];
 
     [button setTarget:nil];
     [button setAction:@selector(hiddenFilesButtonToggled:)];
@@ -298,7 +298,7 @@ normalizeFilenames(NSArray *filenames)
     if (!filenames)
         return outnames;
 
-    unsigned i, count = [filenames count];
+    NSUInteger i, count = [filenames count];
     for (i = 0; i < count; ++i) {
         NSString *nfkc = normalizeFilename([filenames objectAtIndex:i]);
         [outnames addObject:nfkc];
@@ -310,25 +310,9 @@ normalizeFilenames(NSArray *filenames)
 
 
 
-    BOOL
-shouldUseYosemiteTabBarStyle()
-{ 
-    return floor(NSAppKitVersionNumber) >= NSAppKitVersionNumber10_10;
-}
-    BOOL
-shouldUseMojaveTabBarStyle()
-{
-#if MAC_OS_X_VERSION_MAX_ALLOWED >= MAC_OS_X_VERSION_10_14
-    if (@available(macos 10.14, *)) {
-        return true;
-    }
-#endif
-    return false;
-}
-
-int
+AppearanceType
 getCurrentAppearance(NSAppearance *appearance){
-    int flag = 0; // for macOS 10.13 or eariler always return 0;
+    int flag = AppearanceLight; // for macOS 10.13 or earlier always return 0;
 #if MAC_OS_X_VERSION_MAX_ALLOWED >= MAC_OS_X_VERSION_10_14
     if (@available(macOS 10.14, *)) {
         NSAppearanceName appearanceName = [appearance bestMatchFromAppearancesWithNames:
@@ -337,13 +321,90 @@ getCurrentAppearance(NSAppearance *appearance){
                 , NSAppearanceNameAccessibilityHighContrastAqua
                 , NSAppearanceNameAccessibilityHighContrastDarkAqua]];
         if ([appearanceName isEqualToString:NSAppearanceNameDarkAqua]) {
-            flag = 1;
+            flag = AppearanceDark;
         } else if ([appearanceName isEqualToString:NSAppearanceNameAccessibilityHighContrastAqua]) {
-            flag = 2;
+            flag = AppearanceLightHighContrast;
         } else if ([appearanceName isEqualToString:NSAppearanceNameAccessibilityHighContrastDarkAqua]) {
-            flag = 3;
+            flag = AppearanceDarkHighContrast;
         }
     }
 #endif
     return flag;
+}
+
+/// Returns the pasteboard type to use for retrieving file names from a list of
+/// files.
+/// @return The pasteboard type that can be passed to NSPasteboard for registration.
+NSPasteboardType getPasteboardFilenamesType(void)
+{
+#if MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_13
+    return NSPasteboardTypeFileURL;
+#else
+    return NSFilenamesPboardType;
+#endif
+}
+
+/// Extract the list of file names from a pasteboard.
+NSArray<NSString*>* extractPasteboardFilenames(NSPasteboard *pboard)
+{
+    // NSPasteboardTypeFileURL is only available in 10.13, and
+    // NSFilenamesPboardType was deprecated soon after that (10.14).
+
+    // As such if we are building with min deployed OS 10.13, we need to use
+    // the new method (using NSPasteboardTypeFileURL /
+    // readObjectsForClasses:options:) because otherwise we will get
+    // deprecation warnings. Otherwise, we just use NSFilenamesPboardType. It
+    // will still work if run in a newer OS since it's simply deprecated, and
+    // the OS still supports it.
+#if MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_13
+    if (![pboard.types containsObject:NSPasteboardTypeFileURL]) {
+        ASLogNotice(@"Pasteboard contains no NSPasteboardTypeFileURL");
+        return nil;
+    }
+    NSArray<NSURL*> *fileurls = [pboard readObjectsForClasses:@[NSURL.class]
+                                                      options:@{NSPasteboardURLReadingFileURLsOnlyKey: [NSNumber numberWithBool:YES]}];
+    if (fileurls == nil || fileurls.count == 0) {
+        return nil;
+    }
+    NSMutableArray<NSString *> *filenames = [NSMutableArray arrayWithCapacity:fileurls.count];
+    for (int i = 0; i < fileurls.count; i++) {
+        [filenames addObject:fileurls[i].path];
+    }
+    return filenames;
+#else
+    if (![pboard.types containsObject:NSFilenamesPboardType]) {
+        ASLogNotice(@"Pasteboard contains no NSFilenamesPboardType");
+        return nil;
+    }
+
+    NSArray<NSString *> *filenames = [pboard propertyListForType:NSFilenamesPboardType];
+    return filenames;
+#endif
+}
+
+/// Compare two version strings (must be in integers separated by dots) and see
+/// if one is larger.
+///
+/// @return 1 if newVersion is newer, 0 if equal, -1 if oldVersion newer.
+int compareSemanticVersions(NSString *oldVersion, NSString *newVersion)
+{
+    NSArray<NSString*> *oldVersionItems = [oldVersion componentsSeparatedByString:@"."];
+    NSArray<NSString*> *newVersionItems = [newVersion componentsSeparatedByString:@"."];
+    // Compare two arrays lexographically. We just assume that version
+    // numbers are also X.Y.Z… with no "beta" etc texts.
+    for (int i = 0; i < oldVersionItems.count || i < newVersionItems.count; i++) {
+        if (i >= newVersionItems.count) {
+            return -1;
+        }
+        if (i >= oldVersionItems.count) {
+            return 1;
+        }
+        if (newVersionItems[i].integerValue > oldVersionItems[i].integerValue) {
+            return 1;
+        }
+        else if (newVersionItems[i].integerValue < oldVersionItems[i].integerValue) {
+            return -1;
+        }
+    }
+    return 0;
 }

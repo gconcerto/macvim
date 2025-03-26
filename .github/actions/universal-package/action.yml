@@ -1,5 +1,14 @@
 name: Universal package
 description: Create universal Homebrew package which contains x86_64 and arm64
+
+# Instead of using the default binary installed by Homebrew, we need to build our own because third-party libraries are
+# statically linked in MacVim, and need to be built against MACOSX_DEPLOYMENT_TARGET to ensure the built binary will
+# work on supported macOS versions. Another reason for building our own custom package is to build a unviersal binary
+# that has both x86_64 and arm64 arch, as Homebrew's distributed bottles are thin binaries with only one arch.
+#
+# We still use Homebrew to manage the library because their formulas are up to date and have correct build instructions
+# that will work. This way we don't have to manually configuring and building and updating the package info.
+
 inputs:
   formula:
     description: Formura name
@@ -11,74 +20,76 @@ runs:
   using: 'composite'
   steps:
     - name: Set up formula
+      id: setup-formula
       shell: bash
       run: |
         echo '::group::Set up formula'
         set -o pipefail
         formula=${{ inputs.formula }}
 
-        # Patch the official Homebrew formula to explicitly build for min deployment target
+        # Need to make sure we get the latest before patching. Otherwise Homebrew may later try to get the latest
+        # version and stomp what we have here.
+        brew update
+
+        # Patch the official Homebrew formula to explicitly build for min deployment target and a universal binary. We
+        # also need to explicitly use system Clang because Homebrew's bundled clang script tries to inject -march
+        # compiler flags that will cause universal builds to fail as Clang does not like that.
         brew cat ${formula} | \
-          sed '/^[[:blank:]]*def install$/a\'$'\n    ENV["MACOSX_DEPLOYMENT_TARGET"] = "'${MACOSX_DEPLOYMENT_TARGET}$'"\n' >${formula}.rb
+          sed '/^[[:blank:]]*def install$/a\'$'\n    ENV["MACOSX_DEPLOYMENT_TARGET"] = "'${MACOSX_DEPLOYMENT_TARGET}$'"\n' | \
+          sed '/^[[:blank:]]*def install$/a\'$'\n    ENV["CC"] = "/usr/bin/clang"\n' | \
+          sed '/^[[:blank:]]*def install$/a\'$'\n    ENV["CFLAGS"] = "-arch x86_64 -arch arm64"\n' | \
+          sed '/^[[:blank:]]*def install$/a\'$'\n    ENV["LDFLAGS"] = "-arch x86_64 -arch arm64"\n' >${formula}.rb
 
         # Uninstall the already installed formula because we want to build our own
         brew uninstall --ignore-dependencies ${formula} || true
+
+        # Extract Xcode version to serve as part of the key for caching
+        xcode_version=$(xcodebuild -version | tail -1 | sed -E 's/Build version (.*)/\1/')
+        echo "xcode_version=$xcode_version" >> $GITHUB_OUTPUT
+
+        # Find Homebrew's install location which could be /usr/local or /opt/homebrew
+        brew_prefix=$(brew --prefix)
+        echo "brew_prefix=$brew_prefix" >> $GITHUB_OUTPUT
+
         echo '::endgroup::'
 
     - name: Cache keg
       id: cache-keg
-      uses: actions/cache@v2
+      uses: actions/cache@v4
       with:
-        path: /usr/local/Cellar/${{ inputs.formula }}
-        key: ${{ inputs.formula }}-homebrew-cache-patched-unified-${{ hashFiles(format('{0}.rb', inputs.formula)) }}
+        path: ${{ steps.setup-formula.outputs.brew_prefix }}/Cellar/${{ inputs.formula }}
+        key: ${{ inputs.formula }}-homebrew-cache-custom-unified-prefix${{ steps.setup-formula.outputs.brew_prefix }}-xcode${{ steps.setup-formula.outputs.xcode_version }}-${{ hashFiles(format('{0}.rb', inputs.formula)) }}
 
     - name: Install formula
       shell: bash
-      env:
-        HOMEBREW_NO_AUTO_UPDATE: '1'
       run: |
         echo '::group::Install formula'
         formula=${{ inputs.formula }}
 
-        # This will be a no-op if formula was cached
-        brew install --formula -s ./${formula}.rb
+        # We don't want brew to go upgrade all our dependents for now. They are
+        # time consuming and sometimes cause problems with the CI environment
+        # where they fail to link in random binaries (e.g. Python's 2to3),
+        # which cause brew install to return non-zero and fail the build.
+        export HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1
 
-        # If formula was cached, this step is necessary to relink it to /usr/local/
+        # This will be a no-op if formula was cached. We check if the package
+        # exists first just to avoid an "already installed" warning.
+        brew list ${formula} &>/dev/null || brew install --quiet --formula -s ./${formula}.rb
+
+        # If formula was cached, this step is necessary to relink it to brew prefix (e.g. /usr/local)
         brew unlink ${formula} && brew link ${formula}
         echo '::endgroup::'
 
-    - name: Create universal binaries with arm64 bottle
-      if: steps.cache-keg.outputs.cache-hit != 'true'
-      shell: bash
-      run: |
-        echo '::group::Create universal binaries with arm64 bottle'
-        set -o verbose
-        formula=${{ inputs.formula }}
+        echo '::group::Verify built version'
         contents=($(IFS=,; for x in ${{ inputs.contents }}; do echo ${x}; done))
 
-        # Manually download and extract a bottle for arm64
-        source /dev/stdin <<<"$(brew info --json ${formula} | \
-          jq -r '.[0] | "bottle_url=\(.bottle.stable.files.arm64_big_sur.url)", "formula_ver=\(.versions.stable)", "formula_rev=\(.revision)"')"
-        if [[ ${formula_rev} -ne 0 ]]; then
-          formula_ver=${formula_ver}_${formula_rev}
-        fi
-
-        workdir=${formula}_download
-        mkdir ${workdir}
-        cd ${workdir}
-        wget --no-verbose --header 'Authorization: Bearer QQ==' -O ${formula}.tar.gz ${bottle_url}
-        tar xf ${formula}.tar.gz
-
         for content in "${contents[@]}"; do
-          # Just for diagnostics, print out the old archs. This should be a thin binary (x86_64)
-          lipo -info /usr/local/${content}
+          # Print out the archs and verify they are universal fat binary.
+          lipo -info $(brew --prefix)/${content} | grep 'x86_64 arm64'
 
-          # Create a universal binary by patching the custom built x86_64 one with the downloaded arm64 one.
-          # Modify the actual binaries in /usr/local/Cellar instead of the symlinks to allow caching to work.
-          lipo -create -output /usr/local/Cellar/${formula}/${formula_ver}/${content} \
-            /usr/local/Cellar/${formula}/${formula_ver}/${content} ./${formula}/${formula_ver}/${content}
-
-          # Print out the new archs and verify they are universal with 2 archs.
-          lipo -info /usr/local/${content} | grep 'x86_64 arm64'
+          # Make sure deployment target is correct. Later macOS versions have a different binary format (just search for
+          # "minos") but for 10.13 we need to look for LC_VERSION_MIN_MACOSX.
+          otool -l $(brew --prefix)/${content} | grep -A 2 LC_VERSION_MIN_MACOSX | tail -1 | grep "${MACOSX_DEPLOYMENT_TARGET}"
         done
+
         echo '::endgroup::'

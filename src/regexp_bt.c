@@ -1376,7 +1376,7 @@ regatom(int *flagp)
 	if (one_exactly)
 	    EMSG_ONE_RET_NULL;
 	// Supposed to be caught earlier.
-	IEMSG_RET_NULL(_(e_internal_error_in_regexp));
+	IEMSG_RET_NULL(e_internal_error_in_regexp);
 	// NOTREACHED
 
       case Magic('='):
@@ -1641,7 +1641,7 @@ regatom(int *flagp)
 				  n = n * 10 + (c - '0');
 				  c = getchr();
 			      }
-			      if (c == '\'' && n == 0)
+			      if (no_Magic(c) == '\'' && n == 0)
 			      {
 				  // "\%'m", "\%<'m" and "\%>'m": Mark
 				  c = getchr();
@@ -2477,7 +2477,7 @@ bt_regcomp(char_u *expr, int re_flags)
     int		flags;
 
     if (expr == NULL)
-	IEMSG_RET_NULL(_(e_null_argument));
+	IEMSG_RET_NULL(e_null_argument);
 
     init_class_tab();
 
@@ -2564,14 +2564,22 @@ bt_regcomp(char_u *expr, int re_flags)
 	if ((flags & SPSTART || OP(scan) == BOW || OP(scan) == EOW)
 							  && !(flags & HASNL))
 	{
+	    size_t  scanlen;
+
 	    longest = NULL;
 	    len = 0;
 	    for (; scan != NULL; scan = regnext(scan))
-		if (OP(scan) == EXACTLY && STRLEN(OPERAND(scan)) >= (size_t)len)
+	    {
+		if (OP(scan) == EXACTLY)
 		{
-		    longest = OPERAND(scan);
-		    len = (int)STRLEN(OPERAND(scan));
+		    scanlen = STRLEN(OPERAND(scan));
+		    if (scanlen >= (size_t)len)
+		    {
+			longest = OPERAND(scan);
+			len = (int)scanlen;
+		    }
 		}
+	    }
 	    r->regmust = longest;
 	    r->regmlen = len;
 	}
@@ -2696,11 +2704,13 @@ reg_save_equal(regsave_T *save)
     REG_MULTI ? save_se_multi((savep), (posp)) : save_se_one((savep), (pp))
 
 // After a failed match restore the sub-expressions.
-#define restore_se(savep, posp, pp) { \
+#define restore_se(savep, posp, pp) \
+{ \
     if (REG_MULTI) \
 	*(posp) = (savep)->se_u.pos; \
     else \
-	*(pp) = (savep)->se_u.ptr; }
+	*(pp) = (savep)->se_u.ptr; \
+}
 
 /*
  * Tentatively set the sub-expression start to the current position (after
@@ -3101,7 +3111,7 @@ do_class:
 	break;
 
       default:			// Oh dear.  Called inappropriately.
-	iemsg(_(e_corrupted_regexp_program));
+	iemsg(e_corrupted_regexp_program);
 #ifdef DEBUG
 	printf("Called regrepeat with op code %d\n", OP(p));
 #endif
@@ -3163,7 +3173,7 @@ bt_did_time_out(int *timed_out)
     {
 	if (timed_out != NULL)
 	{
-# ifdef FEAT_JOB_CHANNEL
+# ifdef FEAT_EVAL
 	    if (!*timed_out)
 		ch_log(NULL, "BT regexp timed out");
 # endif
@@ -3187,20 +3197,20 @@ save_subexpr(regbehind_T *bp)
     // When "rex.need_clear_subexpr" is set we don't need to save the values,
     // only remember that this flag needs to be set again when restoring.
     bp->save_need_clear_subexpr = rex.need_clear_subexpr;
-    if (!rex.need_clear_subexpr)
+    if (rex.need_clear_subexpr)
+	return;
+
+    for (i = 0; i < NSUBEXP; ++i)
     {
-	for (i = 0; i < NSUBEXP; ++i)
+	if (REG_MULTI)
 	{
-	    if (REG_MULTI)
-	    {
-		bp->save_start[i].se_u.pos = rex.reg_startpos[i];
-		bp->save_end[i].se_u.pos = rex.reg_endpos[i];
-	    }
-	    else
-	    {
-		bp->save_start[i].se_u.ptr = rex.reg_startp[i];
-		bp->save_end[i].se_u.ptr = rex.reg_endp[i];
-	    }
+	    bp->save_start[i].se_u.pos = rex.reg_startpos[i];
+	    bp->save_end[i].se_u.pos = rex.reg_endpos[i];
+	}
+	else
+	{
+	    bp->save_start[i].se_u.ptr = rex.reg_startp[i];
+	    bp->save_end[i].se_u.ptr = rex.reg_endp[i];
 	}
     }
 }
@@ -3215,20 +3225,20 @@ restore_subexpr(regbehind_T *bp)
 
     // Only need to restore saved values when they are not to be cleared.
     rex.need_clear_subexpr = bp->save_need_clear_subexpr;
-    if (!rex.need_clear_subexpr)
+    if (rex.need_clear_subexpr)
+	return;
+
+    for (i = 0; i < NSUBEXP; ++i)
     {
-	for (i = 0; i < NSUBEXP; ++i)
+	if (REG_MULTI)
 	{
-	    if (REG_MULTI)
-	    {
-		rex.reg_startpos[i] = bp->save_start[i].se_u.pos;
-		rex.reg_endpos[i] = bp->save_end[i].se_u.pos;
-	    }
-	    else
-	    {
-		rex.reg_startp[i] = bp->save_start[i].se_u.ptr;
-		rex.reg_endp[i] = bp->save_end[i].se_u.ptr;
-	    }
+	    rex.reg_startpos[i] = bp->save_start[i].se_u.pos;
+	    rex.reg_endpos[i] = bp->save_end[i].se_u.pos;
+	}
+	else
+	{
+	    rex.reg_startp[i] = bp->save_start[i].se_u.ptr;
+	    rex.reg_endp[i] = bp->save_end[i].se_u.ptr;
 	}
     }
 }
@@ -3404,8 +3414,7 @@ regmatch(
 		{
 		    colnr_T pos_col = pos->lnum == rex.lnum + rex.reg_firstlnum
 							  && pos->col == MAXCOL
-				      ? (colnr_T)STRLEN(reg_getline(
-						pos->lnum - rex.reg_firstlnum))
+				      ? reg_getline_len(pos->lnum - rex.reg_firstlnum)
 				      : pos->col;
 
 		    if ((pos->lnum == rex.lnum + rex.reg_firstlnum
@@ -3439,10 +3448,19 @@ regmatch(
 	    break;
 
 	  case RE_VCOL:
-	    if (!re_num_cmp((long_u)win_linetabsize(
-			    rex.reg_win == NULL ? curwin : rex.reg_win,
-			    rex.line, (colnr_T)(rex.input - rex.line)) + 1, scan))
-		status = RA_NOMATCH;
+	    {
+		win_T	    *wp = rex.reg_win == NULL ? curwin : rex.reg_win;
+		linenr_T    lnum = REG_MULTI ? rex.reg_firstlnum + rex.lnum : 1;
+		long_u	    vcol;
+
+		if (REG_MULTI && (lnum <= 0
+				   || lnum > wp->w_buffer->b_ml.ml_line_count))
+		    lnum = 1;
+		vcol = (long_u)win_linetabsize(wp, lnum, rex.line,
+					      (colnr_T)(rex.input - rex.line));
+		if (!re_num_cmp(vcol + 1, scan))
+		    status = RA_NOMATCH;
+	    }
 	    break;
 
 	  case BOW:	// \<word; rex.input points to w
@@ -3732,13 +3750,38 @@ regmatch(
 
 	  case ANYOF:
 	  case ANYBUT:
-	    if (c == NUL)
-		status = RA_NOMATCH;
-	    else if ((cstrchr(OPERAND(scan), c) == NULL) == (op == ANYOF))
-		status = RA_NOMATCH;
-	    else
-		ADVANCE_REGINPUT();
-	    break;
+	    {
+		char_u  *q = OPERAND(scan);
+
+		if (c == NUL)
+		    status = RA_NOMATCH;
+		else if ((cstrchr(q, c) == NULL) == (op == ANYOF))
+		    status = RA_NOMATCH;
+		else
+		{
+		    // Check following combining characters
+		    int	len = 0;
+		    int i;
+
+		    if (enc_utf8)
+			len = utfc_ptr2len(q) - utf_ptr2len(q);
+
+		    MB_CPTR_ADV(rex.input);
+		    MB_CPTR_ADV(q);
+
+		    if (!enc_utf8 || len == 0)
+			break;
+
+		    for (i = 0; i < len; ++i)
+			if (q[i] != rex.input[i])
+			{
+			    status = RA_NOMATCH;
+			    break;
+			}
+		    rex.input += len;
+		}
+		break;
+	    }
 
 	  case MULTIBYTECODE:
 	    if (has_mbyte)
@@ -3778,6 +3821,14 @@ regmatch(
 			    status = RA_MATCH;
 			    break;
 			}
+		    }
+		}
+		else if (enc_utf8)
+		{
+		    if (cstrncmp(opnd, rex.input, &len) != 0)
+		    {
+			status = RA_NOMATCH;
+			break;
 		    }
 		}
 		else
@@ -4316,7 +4367,7 @@ regmatch(
 	    break;
 
 	  default:
-	    iemsg(_(e_corrupted_regexp_program));
+	    iemsg(e_corrupted_regexp_program);
 #ifdef DEBUG
 	    printf("Illegal op code %d\n", op);
 #endif
@@ -4659,7 +4710,7 @@ regmatch(
 				// right.
 				if (rex.line == NULL)
 				    break;
-				rex.input = rex.line + STRLEN(rex.line);
+				rex.input = rex.line + reg_getline_len(rex.lnum);
 				fast_breakcheck();
 			    }
 			    else
@@ -4729,7 +4780,7 @@ regmatch(
 	{
 	    // We get here only if there's trouble -- normally "case END" is
 	    // the terminating point.
-	    iemsg(_(e_corrupted_regexp_program));
+	    iemsg(e_corrupted_regexp_program);
 #ifdef DEBUG
 	    printf("Premature EOL\n");
 #endif
@@ -4833,11 +4884,12 @@ regtry(
     static long
 bt_regexec_both(
     char_u	*line,
-    colnr_T	col,		// column to start looking for match
+    colnr_T	startcol,	// column to start looking for match
     int		*timed_out)	// flag set on timeout or NULL
 {
     bt_regprog_T    *prog;
     char_u	    *s;
+    colnr_T	    col = startcol;
     long	    retval = 0L;
 
     // Create "regstack" and "backpos" if they are not allocated yet.
@@ -4877,7 +4929,7 @@ bt_regexec_both(
     // Be paranoid...
     if (prog == NULL || line == NULL)
     {
-	iemsg(_(e_null_argument));
+	iemsg(e_null_argument);
 	goto theend;
     }
 
@@ -5033,11 +5085,19 @@ theend:
 	    if (end->lnum < start->lnum
 			|| (end->lnum == start->lnum && end->col < start->col))
 		rex.reg_mmatch->endpos[0] = rex.reg_mmatch->startpos[0];
+
+	    // startpos[0] may be set by "\zs", also return the column where
+	    // the whole pattern matched.
+	    rex.reg_mmatch->rmm_matchcol = col;
 	}
 	else
 	{
 	    if (rex.reg_match->endp[0] < rex.reg_match->startp[0])
 		rex.reg_match->endp[0] = rex.reg_match->startp[0];
+
+	    // startpos[0] may be set by "\zs", also return the column where
+	    // the whole pattern matched.
+	    rex.reg_match->rm_matchcol = col;
 	}
     }
 
@@ -5204,8 +5264,10 @@ regprop(char_u *op)
 {
     char	    *p;
     static char	    buf[50];
+    static size_t   buflen = 0;
 
     STRCPY(buf, ":");
+    buflen = 1;
 
     switch ((int) OP(op))
     {
@@ -5446,7 +5508,7 @@ regprop(char_u *op)
       case MOPEN + 7:
       case MOPEN + 8:
       case MOPEN + 9:
-	sprintf(buf + STRLEN(buf), "MOPEN%d", OP(op) - MOPEN);
+	buflen += sprintf(buf + buflen, "MOPEN%d", OP(op) - MOPEN);
 	p = NULL;
 	break;
       case MCLOSE + 0:
@@ -5461,7 +5523,7 @@ regprop(char_u *op)
       case MCLOSE + 7:
       case MCLOSE + 8:
       case MCLOSE + 9:
-	sprintf(buf + STRLEN(buf), "MCLOSE%d", OP(op) - MCLOSE);
+	buflen += sprintf(buf + buflen, "MCLOSE%d", OP(op) - MCLOSE);
 	p = NULL;
 	break;
       case BACKREF + 1:
@@ -5473,7 +5535,7 @@ regprop(char_u *op)
       case BACKREF + 7:
       case BACKREF + 8:
       case BACKREF + 9:
-	sprintf(buf + STRLEN(buf), "BACKREF%d", OP(op) - BACKREF);
+	buflen += sprintf(buf + buflen, "BACKREF%d", OP(op) - BACKREF);
 	p = NULL;
 	break;
       case NOPEN:
@@ -5492,7 +5554,7 @@ regprop(char_u *op)
       case ZOPEN + 7:
       case ZOPEN + 8:
       case ZOPEN + 9:
-	sprintf(buf + STRLEN(buf), "ZOPEN%d", OP(op) - ZOPEN);
+	buflen += sprintf(buf + buflen, "ZOPEN%d", OP(op) - ZOPEN);
 	p = NULL;
 	break;
       case ZCLOSE + 1:
@@ -5504,7 +5566,7 @@ regprop(char_u *op)
       case ZCLOSE + 7:
       case ZCLOSE + 8:
       case ZCLOSE + 9:
-	sprintf(buf + STRLEN(buf), "ZCLOSE%d", OP(op) - ZCLOSE);
+	buflen += sprintf(buf + buflen, "ZCLOSE%d", OP(op) - ZCLOSE);
 	p = NULL;
 	break;
       case ZREF + 1:
@@ -5516,7 +5578,7 @@ regprop(char_u *op)
       case ZREF + 7:
       case ZREF + 8:
       case ZREF + 9:
-	sprintf(buf + STRLEN(buf), "ZREF%d", OP(op) - ZREF);
+	buflen += sprintf(buf + buflen, "ZREF%d", OP(op) - ZREF);
 	p = NULL;
 	break;
 #endif
@@ -5557,7 +5619,7 @@ regprop(char_u *op)
       case BRACE_COMPLEX + 7:
       case BRACE_COMPLEX + 8:
       case BRACE_COMPLEX + 9:
-	sprintf(buf + STRLEN(buf), "BRACE_COMPLEX%d", OP(op) - BRACE_COMPLEX);
+	buflen += sprintf(buf + buflen, "BRACE_COMPLEX%d", OP(op) - BRACE_COMPLEX);
 	p = NULL;
 	break;
       case MULTIBYTECODE:
@@ -5567,12 +5629,12 @@ regprop(char_u *op)
 	p = "NEWL";
 	break;
       default:
-	sprintf(buf + STRLEN(buf), "corrupt %d", OP(op));
+	buflen += sprintf(buf + buflen, "corrupt %d", OP(op));
 	p = NULL;
 	break;
     }
     if (p != NULL)
-	STRCAT(buf, p);
+	STRCPY(buf + buflen, p);
     return (char_u *)buf;
 }
 #endif	    // DEBUG

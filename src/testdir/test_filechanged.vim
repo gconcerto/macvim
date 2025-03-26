@@ -11,8 +11,12 @@ func Test_FileChangedShell_reload()
   new Xchanged_r
   call setline(1, 'reload this')
   write
-  " Need to wait until the timestamp would change by at least a second.
-  sleep 2
+  " Need to wait until the timestamp would change.
+  if has('nanotime')
+    sleep 10m
+  else
+    sleep 2
+  endif
   silent !echo 'extra line' >>Xchanged_r
   checktime
   call assert_equal('changed', g:reason)
@@ -50,7 +54,11 @@ func Test_FileChangedShell_reload()
   call assert_equal('new line', getline(1))
 
   " Only time changed
-  sleep 2
+  if has('nanotime')
+    sleep 10m
+  else
+    sleep 2
+  endif
   silent !touch Xchanged_r
   let g:reason = ''
   checktime
@@ -65,7 +73,11 @@ func Test_FileChangedShell_reload()
     call setline(2, 'before write')
     write
     call setline(2, 'after write')
-    sleep 2
+    if has('nanotime')
+      sleep 10m
+    else
+      sleep 2
+    endif
     silent !echo 'different line' >>Xchanged_r
     let g:reason = ''
     checktime
@@ -105,7 +117,7 @@ func Test_FileChangedShell_edit()
     au FileChangedShell Xchanged_r let g:reason = v:fcs_reason | let v:fcs_choice = 'reload'
   augroup END
   call assert_equal(&fileformat, 'unix')
-  call writefile(["line1\r", "line2\r"], 'Xchanged_r')
+  call writefile(["line1\r", "line2\r"], 'Xchanged_r', 'D')
   let g:reason = ''
   checktime
   call assert_equal('changed', g:reason)
@@ -134,7 +146,6 @@ func Test_FileChangedShell_edit()
   au! testreload
   bwipe!
   call delete(undofile('Xchanged_r'))
-  call delete('Xchanged_r')
 endfunc
 
 func Test_FileChangedShell_edit_dialog()
@@ -152,7 +163,7 @@ func Test_FileChangedShell_edit_dialog()
     au FileChangedShell Xchanged_r let g:reason = v:fcs_reason | let v:fcs_choice = 'ask'
   augroup END
   call assert_equal(&fileformat, 'unix')
-  call writefile(["line1\r", "line2\r"], 'Xchanged_r')
+  call writefile(["line1\r", "line2\r"], 'Xchanged_r', 'D')
   let g:reason = ''
   call feedkeys('L', 'L') " load file content only
   checktime
@@ -183,7 +194,6 @@ func Test_FileChangedShell_edit_dialog()
   au! testreload
   bwipe!
   call delete(undofile('Xchanged_r'))
-  call delete('Xchanged_r')
 endfunc
 
 func Test_file_changed_dialog()
@@ -194,8 +204,12 @@ func Test_file_changed_dialog()
   new Xchanged_d
   call setline(1, 'reload this')
   write
-  " Need to wait until the timestamp would change by at least a second.
-  sleep 2
+  " Need to wait until the timestamp would change.
+  if has('nanotime')
+    sleep 10m
+  else
+    sleep 2
+  endif
   silent !echo 'extra line' >>Xchanged_d
   call feedkeys('L', 'L')
   checktime
@@ -230,7 +244,11 @@ func Test_file_changed_dialog()
   call assert_equal('new line', getline(1))
 
   " Only time changed, no prompt
-  sleep 2
+  if has('nanotime')
+    sleep 10m
+  else
+    sleep 2
+  endif
   silent !touch Xchanged_d
   let v:warningmsg = ''
   checktime Xchanged_d
@@ -241,27 +259,26 @@ func Test_file_changed_dialog()
   " File created after starting to edit it
   call delete('Xchanged_d')
   new Xchanged_d
-  call writefile(['one'], 'Xchanged_d')
+  call writefile(['one'], 'Xchanged_d', 'D')
   call feedkeys('L', 'L')
   checktime Xchanged_d
   call assert_equal(['one'], getline(1, '$'))
   close!
 
   bwipe!
-  call delete('Xchanged_d')
 endfunc
 
 " Test for editing a new buffer from a FileChangedShell autocmd
 func Test_FileChangedShell_newbuf()
-  call writefile(['one', 'two'], 'Xfile')
-  new Xfile
+  call writefile(['one', 'two'], 'Xchfile', 'D')
+  new Xchfile
   augroup testnewbuf
     autocmd FileChangedShell * enew
   augroup END
-  call writefile(['red'], 'Xfile')
+  call writefile(['red'], 'Xchfile')
   call assert_fails('checktime', 'E811:')
+
   au! testnewbuf
-  call delete('Xfile')
 endfunc
 
 " vim: shiftwidth=2 sts=2 expandtab

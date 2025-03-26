@@ -14,12 +14,20 @@
 @interface MMPreferenceController : DBPrefsWindowController {
     IBOutlet NSView *generalPreferences;
     IBOutlet NSView *appearancePreferences;
+    IBOutlet NSView *inputPreferences;
     IBOutlet NSView *advancedPreferences;
 
     // General pane
     IBOutlet NSPopUpButton *layoutPopUpButton;
     IBOutlet NSButton *autoInstallUpdateButton;
     IBOutlet NSView *sparkleUpdaterPane;
+
+    // Input pane
+    IBOutlet NSButton *allowForceClickLookUpButton;
+
+    // Advanced pane
+    IBOutlet NSView *sparklePrereleaseButton;
+    IBOutlet NSView *sparklePrereleaseDesc;
 }
 
 // General pane
@@ -27,4 +35,11 @@
 - (IBAction)openInCurrentWindowSelectionChanged:(id)sender;
 - (IBAction)checkForUpdatesChanged:(id)sender;
 - (IBAction)appearanceChanged:(id)sender;
+- (IBAction)smoothResizeChanged:(id)sender;
+
+// Appearance pane
+- (IBAction)fontPropertiesChanged:(id)sender;
+- (IBAction)tabsPropertiesChanged:(id)sender;
+- (IBAction)nonNativeFullScreenShowMenuChanged:(id)sender;
+
 @end

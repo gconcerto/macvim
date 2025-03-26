@@ -25,8 +25,13 @@
     NSRect              *invertRects;
     int                 numInvertRects;
 
+    int                 pendingMaxRows;
+    int                 pendingMaxColumns;
+
     MMTextViewHelper    *helper;
 }
+
+@property (nonatomic) NSSize drawRectOffset; // Unused. Only used by MMCoreTextView
 
 - (id)initWithFrame:(NSRect)frame;
 
@@ -39,6 +44,9 @@
 - (void)setImControl:(BOOL)enable;
 - (void)activateIm:(BOOL)enable;
 - (void)checkImState;
+- (void)refreshFonts;
+- (void)updateCmdlineRow;
+- (void)showDefinitionForCustomString:(NSString *)text row:(int)row col:(int)col;
 
 //
 // MMTextStorage methods
@@ -47,7 +55,6 @@
 - (void)setFont:(NSFont *)newFont;
 - (NSFont *)fontWide;
 - (void)setWideFont:(NSFont *)newFont;
-- (void)refreshFonts;
 - (NSSize)cellSize;
 - (void)setLinespace:(float)newLinespace;
 - (void)setColumnspace:(float)newColumnspace;
@@ -55,6 +62,9 @@
 - (int)maxColumns;
 - (void)getMaxRows:(int*)rows columns:(int*)cols;
 - (void)setMaxRows:(int)rows columns:(int)cols;
+- (int)pendingMaxRows;
+- (int)pendingMaxColumns;
+- (void)setPendingMaxRows:(int)rows columns:(int)cols;
 - (NSRect)rectForRowsInRange:(NSRange)range;
 - (NSRect)rectForColumnsInRange:(NSRange)range;
 - (void)setDefaultColorsBackground:(NSColor *)bgColor

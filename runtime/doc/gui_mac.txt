@@ -1,32 +1,33 @@
-*gui_mac.txt*	For Vim version 8.2.  Last change: 2020 Aug 13
+*gui_mac.txt*
 
-
-		  VIM REFERENCE MANUAL    by Bjorn Winckler
-
+			MACVIM REFERENCE MANUAL
 
 The MacVim Graphical User Interface			*macvim* *gui-macvim*
 
  1. MacVim differences		|macvim-differences|
  2. Starting MacVim		|macvim-start|
- 3. Preferences			|macvim-preferences|
+ 3. Settings			|macvim-settings|
  4. MacVim appearance		|macvim-appearance|
  5. Special colors		|macvim-colors|
  6. Menus			|macvim-menus|
  7. Toolbar			|macvim-toolbar|
  8. Touch Bar			|macvim-touchbar|
- 9. Dialogs			|macvim-dialogs|
-10. System services		|macvim-services|
-11. mvim:// URL handler		|macvim-url-handler|
-12. Keyboard shortcuts		|macvim-shortcuts|
-13. Trackpad gestures		|macvim-gestures|
-14. International		|macvim-international|
-15. Known bugs/missing features	|macvim-todo|
-16. Hints			|macvim-hints|
+ 9. Looking up data		|macvim-lookup|
+10. Dialogs			|macvim-dialogs|
+11. System services		|macvim-services|
+12. mvim:// URL handler		|macvim-url-handler|
+13. Keyboard shortcuts		|macvim-shortcuts|
+14. Trackpad gestures		|macvim-gestures|
+15. International		|macvim-international|
+16. Known bugs/missing features	|macvim-todo|
+17. Hints			|macvim-hints|
 
 Other relevant documentation:
 |gui.txt|	For generic items of the GUI.
 
 {Vi does not have a GUI}
+
+This manual is also available at https://macvim.org/docs/gui_mac.txt.html.
 
 ==============================================================================
 1. MacVim differences					*macvim-differences*
@@ -83,7 +84,7 @@ If a file is dropped on the Dock icon, it is always opened in a new tab
 regardless of the mode Vim is currently in.  The same holds if you
 double-click on a file in the Finder.
 
-The "Open files from applications" preference in the General preference pane
+The "Open files from applications" setting in the General settings pane
 gives more options on how dropped files should open, in case tabs are not
 desired.
 
@@ -107,19 +108,34 @@ guitablabel=" to your .gvimrc file to revert back to the default Vim tab
 label.  Setting 'guitablabel' to anything in your .vimrc will also prevent
 this default from taking effect.
 
+							*E9000-M*
+Below is a list of non-standard Vim commands and options that MacVim supports.
+They are only usable when GUI is active.
+
 							*macvim-options*
 These are the non-standard options that MacVim supports:
 	'antialias'	'blurradius'	'fullscreen'
 	'fuoptions'	'macligatures'	'macmeta'	'macthinstrokes'
 	'toolbariconsize'	'transparency'
 
+These are GUI-related Vim options that have MacVim-specific behaviors:
+	'guifont'
+
 							*macvim-commands*
 These are the non-standard commands that MacVim supports:
 	|:macaction|	|:macmenu|
 
+						*macvim-builtin-functions*
+These are the non-standard builtin functions that MacVim supports:
+	|showdefinition()|
+
                                                        *macvim-autocommands*
 These are the non-standard events that MacVim supports:
 	|OSAppearanceChanged|
+
+					       *macvim-internal-variables*
+These are the non-standard internal variables that MacVim supports:
+	|v:os_appearance|
 
 							*macvim-find*
 Whenever you search for something in Vim (e.g. using "/"), or hit <D-e> when
@@ -165,44 +181,48 @@ up the "Open with" menu.  You can also drag and drop files onto the Dock icon
 to open them in tabs in a new window, or you can drop them in an already open
 window to open the files in tabs in that specific window (it is possible to
 have files open in e.g. splits by changing the "Open files from applications"
-option in the General preference pane).  Finally, you can use macOS System
+option in the General settings pane).  Finally, you can use macOS System
 Services to open files in MacVim, see |macvim-services|.
 
 Alternatively, use the "open" command (this method can not be used to pass
 parameters to Vim) >
 	open -a MacVim file ...
 The advantage of using the latter method is that the settings relating to file
-opening in the preferences panel are respected, and files open instantly if
+opening in the settings panel are respected, and files open instantly if
 |Quickstart| is enabled.
 
-Starting MacVim from a terminal~
+Starting MacVim from a terminal ~
 
-					    *mvim* *macvim-PATH* *macvim-cmdline*
+						    *mvim* *macvim-cmdline*
 MacVim comes bundled with a shell script called "mvim" that can be used to
 launch MacVim from the terminal. It's located at: >
 	/Applications/MacVim.app/Contents/bin/mvim
-
+<
+							*macvim-PATH*
 To be able to easily use it, put this folder in your path: >
 	/Applications/MacVim.app/Contents/bin
 For example, if you use zsh, you can put the following in `~/.zprofile`: >
 	export PATH="/Applications/MacVim.app/Contents/bin:$PATH"
-
+<
 After that, type "mvim" to start MacVim from Terminal. >
 	$ mvim
 You can also specify files to open with. >
 	$ mvim file ...
-Also the bin folder has convenient scripts for diffing and opening file as the file is read-only. >
-	* Diff:		mvimdiff
-	* Read-only:	mview
+The bin folder also contains `mvimdiff` and `mview` that work as alias of
+|gvimdiff| and |gview|, as well as `xxd` for |hex-editing|.
 
 You can still use the normal "vim", "vimdiff", and "view" commands if you want
 to use non-GUI Vim, and "gvim" to launch MacVim ("gvim" works the same way as
 "mvim").
 
-Going from terminal to GUI mode~
+If you would like to have man pages with the command-line tools, you can add
+the following to `~/.zprofile`: >
+	export MANPATH="/Applications/MacVim.app/Contents/man:$MANPATH"
+<
+Going from terminal to GUI mode ~
 
 Once in terminal Vim it is possible to start the MacVim GUI by using the
-following command (see |:gui|):
+following command (see |:gui|): >
 	:gui [++opt] [+cmd] [-f|-b] [files...]
 Note: Forking ("-b") currently does not work.
 
@@ -210,7 +230,7 @@ Note: Forking ("-b") currently does not work.
 Quickstart ensures that new windows open quickly e.g. when <D-n> is
 pressed.  It works by keeping a Vim process in the background that will
 immediately become active when you open a window.  This feature can be enabled
-from the Advanced preferences pane (it is disabled by default).  Note that
+from the Advanced settings pane (it is disabled by default).  Note that
 this setting does not affect the speed with which windows open when using the
 |mvim| command.
 
@@ -225,8 +245,8 @@ history as the window you just closed (however the next window you open will).
 For these reasons Quickstart is disabled by default.
 
 						*odbeditor* *external-editor*
-MacVim can act as an 'external editor' for macOS applications that support the
-ODB Editor Protocol (or the 'external editor' protocol).  Each application has
+MacVim can act as an "external editor" for macOS applications that support the
+ODB Editor Protocol (or the "external editor" protocol).  Each application has
 different ways of configuring this option, check the application's
 documentation.  Once configured properly MacVim can be used to open files in
 such an application.
@@ -236,15 +256,23 @@ the open event the FTok and Burl parameters are parsed (the latter is ignored
 at the moment though).  In the modified and closed events the Tokn parameter
 is sent back to the server application.
 
+The ODB editor protocol is documented at:
+	https://www.barebones.com/support/develop/odbsuite.html
+
 ==============================================================================
-3. Preferences				    *macvim-prefs* *macvim-preferences*
+3. Settings		    *macvim-prefs* *macvim-preferences* *macvim-settings*
 
 Some settings are global to the MacVim application and would not make sense as
-Vim options.  These settings are stored in the user defaults database and can
-be accessed via the "MacVim.Preferences…" menu item.
+Vim options (see |macvim-options|).  These settings are stored in the user
+defaults database and can be accessed via the "MacVim.Settings…"
+("MacVim.Preferences…" in macOS 12 Monterey and older) menu item.
+
+If you want to open MacVim with its default settings, you can open it by
+passing `-IgnoreUserDefaults 1` to the launch arguments (see the man page on
+the "open" for how to do so).
 
 							*macvim-user-defaults*
-Not all entries in the user defaults database are exposed via the preference
+Not all entries in the user defaults database are exposed via the settings
 panel, usually because they should not be changed by the user under normal
 circumstances.  These options can still be changed with the "defaults" command
 by opening Terminal and typing >
@@ -256,40 +284,64 @@ Here is a list of relevant dictionary entries:
 
 KEY				VALUE ~
 *MMCellWidthMultiplier*		width of a normal glyph in em units [float]
+*MMCmdLineAlignBottom*		Pin command-line to bottom of MacVim [bool]
 *MMDialogsTrackPwd*		open/save dialogs track the Vim pwd [bool]
 *MMDisableLaunchAnimation*	disable launch animation when opening a new
 				MacVim window [bool]
-*MMFullScreenFadeTime*		fade delay for non-native fullscreen [float]
+*MMDisableTablineAnimation*	disable animation in GUI tabs [bool]
+*MMFontPreserveLineSpacing*	use the line-spacing as specified by font [bool]
+*MMLoginShell*			use login shell for launching Vim [bool]
 *MMLoginShellArgument*		login shell parameter [string]
 *MMLoginShellCommand*		which shell to use to launch Vim [string]
+*MMFullScreenFadeTime*		fade delay for non-native fullscreen [float]
 *MMNativeFullScreen*		use native full screen mode [bool]
 *MMNonNativeFullScreenShowMenu*	show menus when in non-native full screen [bool]
+*MMNonNativeFullScreenSafeAreaBehavior*
+				behavior for non-native full sreen regarding
+				the safe area (aka the "notch") [int]
 *MMNoFontSubstitution*		disable automatic font substitution [bool]
 				(Deprecated: Non-CoreText renderer only)
-*MMFontPreserveLineSpacing*	use the line-spacing as specified by font [bool]
 *MMNoTitleBarWindow*		hide title bar [bool]
 *MMTitlebarAppearsTransparent*	enable a transparent titlebar [bool]
 *MMAppearanceModeSelection*	dark mode selection (|macvim-dark-mode|)[bool]
+*MMRendererClipToRow*		clip tall characters to the row they are on [bool]
+*MMSmoothResize*		allow smooth resizing of MacVim window [bool]
 *MMShareFindPboard*		share search text to Find Pasteboard [bool]
-*MMShowAddTabButton*		enable "add tab" button on tabline [bool]
-*MMTabMaxWidth*			maximum width of a tab [int]
-*MMTabMinWidth*			minimum width of a tab [int]
-*MMTabOptimumWidth*		default width of a tab [int]
 *MMTextInsetBottom*		text area offset in pixels [int]
 *MMTextInsetLeft*		text area offset in pixels [int]
 *MMTextInsetRight*		text area offset in pixels [int]
 *MMTextInsetTop*		text area offset in pixels [int]
 *MMTexturedWindow*		use brushed metal window (Tiger only) [bool]
 *MMTranslateCtrlClick*		interpret ctrl-click as right-click [bool]
-*MMUseMouseTime*		use mousetime to detect multiple clicks [bool]
 *MMVerticalSplit*		files open in vertical splits [bool]
 *MMZoomBoth*			zoom button maximizes both directions [bool]
+*MMUpdaterPrereleaseChannel*	opt-in to pre-release software update [bool]
+*MMShowWhatsNewOnStartup*	show "What's New" after updating to new version [bool]
+
+Mouse / Trackpad ~
+*MMScrollOneDirectionOnly*	scroll along one axis only when using trackpad [bool]
+*MMAllowForceClickLookUp*	use Force click for data lookup instead of
+				<ForceClick> [bool]
+*MMMouseWheelDisableAcceleration* disable OS scroll wheel acceleration [bool]
+*MMMouseWheelNumLines*		how many lines to scroll when scroll wheel
+				acceleration is turned off [int]
+*MMMouseWheelMinLines*		min number of lines to scroll per scroll wheel
+				click when acceleration is on [int]
+*MMUseMouseTime*		use mousetime to detect multiple clicks [bool]
+
+Tabs ~
+*MMTabColorsMode*		use default/auto/colorscheme for tab colors [int]
+*MMWindowUseTabBackgroundColor*	use tabs background fill color as window color [bool]
+*MMShowAddTabButton*		enable "add tab" button on tabline [bool]
+*MMShowTabScrollButtons*	enable tab scroll buttons on tabline [bool]
+*MMTabMinWidth*			minimum width of a tab [int]
+*MMTabOptimumWidth*		default width of a tab [int]
 
 As an example, if you have more than one mouse button and would wish to free
 up Ctrl-click so you can bind it to something else, then the appropriate
 command is: >
 	defaults write org.vim.MacVim MMTranslateCtrlClick 0
-
+<
 If you wish to restore all user defaults to their starting values, open
 Terminal and type: >
 	defaults delete org.vim.MacVim
@@ -303,64 +355,70 @@ new Vim processes via a login shell so that all environment variables are set.
 
 By default MacVim uses the $SHELL environment variable to determine which
 shell to use (if $SHELL is not set "/bin/bash" is used).  It is possible to
-override this choice by setting the user default MMLoginShellCommand to the
+override this choice by setting the user default |MMLoginShellCommand| to the
 shell that should be used (e.g. "/bin/tcsh").  MacVim tries to make the shell
 a login shell by prepending argv[0] with a dash.  If you use an exotic shell
 and need to pass it a parameter to make it a login shell then you can set the
-user default MMLoginShellArgument (e.g. to "-l").  Finally, if the "bash"
+user default |MMLoginShellArgument| (e.g. to "-l").  Finally, if the "bash"
 shell is used, then "-l" is automatically added as an argument.  To override
-this behaviour set MMLoginShellArgument to "--".
+this behaviour set |MMLoginShellArgument| to "--".
+
+To turn off using a login shell, you can set |MMLoginShell| to 0.
 
 ==============================================================================
 4. MacVim appearance					*macvim-appearance*
 
-MacVim can be used in full screen mode, see 'fullscreen'.
+For more configuration options, see the Settings… → Appearance pane.
 
 				*macvim-appearance-mode* *macvim-dark-mode*
 MacVim will by default use the system apperance mode (light or dark). However,
 you can manually force MacVim to use either light or dark mode in the
-preferences panel. A fourth option allows MacVim to respect the |'background'|
+settings panel. A fourth option allows MacVim to respect the |'background'|
 option set by Vim, which is more flexible in situations like loading a dark
-color scheme while system preferences are configured to use light mode. It's
+color scheme while system settings are configured to use light mode. It's
 also the recommended setting when title bar is configured to be "Transparent"
 (see |MMTitlebarAppearsTransparent|).
 
+If you would like to query the system apperance mode in Vim (e.g. to change
+the color scheme at launch), see |v:os_appearance|.  You can also use the
+autocommand |OSAppearanceChanged| to be notified when the OS changes its
+appearance.
+
 							*macvim-full-screen*
+MacVim can be used in full screen mode, see 'fullscreen'.
+
 There are two types of full screen modes.  By default, MacVim uses macOS'
 native full screen functionality, which creates a separate space in Mission
-Control.  MacVim also provides a non-native full screen mode, which can be set
-by disabling native full screen in the preference panel, or by setting
-|MMNativeFullScreen| to `NO` manually.
+Control.
+
+MacVim also provides a non-native full screen mode, which can be set by
+disabling native full screen in the settings panel (see |MMNativeFullScreen|).
+Use 'fuoptions' to configure the background color and whether to maximize the
+rows/columns.  If you have a MacBook with a camera housing ("notch") at the
+top of the screen, you can set |MMNonNativeFullScreenShowMenu| to `NO` and
+|MMNonNativeFullScreenSafeAreaBehavior| to 1 to utilitize the whole screen
+(this will cause some of the content to be obscured by the notch).
 
 ==============================================================================
 5. Special colors					*macvim-colors*
 
-The colors in MacVim are defined in two dictionaries inside the "Resources"
-folder of the application bundle (MacVim.app/Contents/Resources).  It is
-possible to add more colors by modifying these files.  Color names are case
-insensitive when accessed from Vim, but in the dictionary they must be
-lowercase.
+MacVim mostly uses standard Vim colors.  See |gui-colors| and |v:colornames|
+for how to set and override them.
 
 							*SystemColors.plist*
-There are only a few system colors that can be accessed from Vim.  These
-colors are defined in the dictionary "SystemColors.plist".  This dictionary
-stores (key, value) pairs where the key is the name of the color and the
-value is an NSColor selector name.
+There are a few additional system colors that can be used in the |:hi|
+command.  These colors are defined in the dictionary "SystemColors.plist" in
+the MacVim.app bundle.  These color values correspond to NSColor selectors in
+macOS.  The available color names are:
 
-The most useful system colors are: >
-	MacSelectedTextBackgroundColor
-	MacSecondarySelectedColor
-The former is the "Highlight Color" which can be changed in the "Appearance"
-section of the System Preferences.  The latter is the selection color used by
-a Cocoa application when it is not in focus.
-
-							*Colors.plist*
-Apart from the system colors, it is also possible to use the standard X11
-color names (see http://en.wikipedia.org/wiki/X11_color_names) which usually
-come in a file called "rgb.txt".  MacVim does not have such a file, instead it
-keeps these colors in a dictionary called "Colors.plist". The key in this
-dictionary is the name of the color and the value is an RGB value on the form
-#rrggbb stored as an integer.
+KEY					VALUE ~
+MacSecondarySelectedControlColor	Selection color when app is not in
+					focus.
+MacSelectedTextBackgroundColor		"Highlight Color" which can be changed
+					in the "Appearance" section of System
+					Settings.
+MacTextBackgroundColor			Normal text background color.
+MacTextColor				Normal text color.
 
 							*macvim-colorscheme*
 MacVim ships with a custom color scheme that is used instead of the default
@@ -379,17 +437,22 @@ scheme will be loaded when the system gvimrc file is sourced and mess up your
 changes.
 
 The color scheme uses the system "Highlight Color", which can be changed in
-the "Appearance" pane of the System Preferences.  It also changes the
+the "Appearance" pane of the System Settings.  It also changes the
 highlight color when a window becomes inactive.
 
 ==============================================================================
 6. Menus						*macvim-menus*
 
-Default Menus~
+Default Menus ~
 
 See |macvim-default-menus|.
 
-Customization~
+Icons ~
+
+Unlike regular Vim, MacVim menus can be customized with an icon.  Simply use
+the "icon=" parameter similar to toolbar. See |macvim-toolbar-icon| for usage.
+
+Customization ~
 
 Menus in macOS behave slightly different from other platforms.  For that
 reason two new commands have been added to Vim.  To understand what these
@@ -410,13 +473,13 @@ that is the action that instructs them to paste something.)
 Menus are configured using the |:macmenu| command and the |:macaction| command
 can be used to send action messages.
 
-						*:maca* *:macaction*
-:maca[ction] {action:}	Send the message "action:" to the first responder.
-			The list of allowed actions can be seen by typing
+						*E9001-M* *:maca* *:macaction*
+:maca[ction] {action:}	Send the message "action:" to the first responder in
+			MacVim.  The list of allowed actions can be seen by
+			typing >
 			    :maca <C-d>
-			An attempt to send an action not listed here will
-			result in an error.  This list is specified in a
-			property list file called |Actions.plist|.
+<			An attempt to send an action not listed here will
+			result in an error.  See |macvim-actions| below.
 
 						*:macm* *:macmenu*
 :macm[enu] {menu} {key}={arg} ...
@@ -430,10 +493,10 @@ can be used to send action messages.
 
 			For convenience, a menu with "action=name:" which is
 			bound to <Nop> will act as if bound to
-			":maca name:<CR>".  Thus, if "Menu.Item" is given by
+			":maca name:<CR>".  Thus, if "Menu.Item" is given by >
 			    :an Menu.Item <Nop>
 			    :macm Menu.Item action=name:
-			then ":emenu Menu.Item" is equivalent to
+<			then ":emenu Menu.Item" is equivalent to
 			":maca name:".
 
 			The key equivalent is specified with the <D-..>
@@ -477,17 +540,16 @@ file for more examples on how to set up menus.  Note: When no window is open a
 minimal default menu is used.  The default menu is set up in MainMenu.nib
 which resides in "Resources/English.lproj/" folder inside the app bundle.
 
-							*Actions.plist*
-Some action messages would not be suitable to call from within Vim, so there
-is a dictionary called "Actions.plist" (in the Resources folder of the
-application bundle) which contains all actions that may be called.  The key in
-this dictionary is the name of the action message (case sensitive), the value
-is not used.
+						*Actions.plist* *macvim-actions*
+Some actions (e.g. changing the font size) are not directly Vim related, and
+are handled by MacVim on the application level for the GUI.  MacVim allows
+these actions to be invoked by either directly calling |:macaction| or binding
+to a menu via |:macmenu|. The full list of actions can be found in the file
+"Actions.plist" (under MacVim.app/Contents/Resources/), but below are the
+common ones which might be useful.
 
 Hint: The |:macaction| command supports command-line completion so you can
 enter ":maca<Space><C-d>" to see a list of all available actions.
-
-Here are some of the actions from Actions.plist which might be useful.  
 
 Action				Description ~
 fileOpen:			Show "File Open" dialog
@@ -502,13 +564,22 @@ miniaturizeAll:			Minimize all windows to the dock
 newWindow:			Open a new (empty) window
 orderFrontCharacterPalette:	Show the the "Special Characters" dialog
 orderFrontFontPanel:		Show the Font panel
-orderFrontPreferencePanel:	Show the Preferences panel
+orderFrontPreferencePanel:	Show the Settings panel
 performMiniaturize:		Minimize window to the dock
 performZoom:			Zoom window (same as clicking the green blob)
 terminate:			Quit MacVim
 zoomAll:			Zoom all windows
+zoomLeft:			Pin the window to the left of the screen
+zoomRight:			Pin the window to the right of the screen
 _cycleWindows:			Select next window (similar to <D-`>)
 _cycleWindowsBackwards:		Select previous window (similar to <D-S-`>)
+_removeWindowFromStageManagerSet  Remove window from a Stage Manager Set. Same
+				as the "Remove Window from Set" menu item.
+joinAllStageManagerSets:	Window will float among all Stage Manager sets
+unjoinAllStageManagerSets:	Window will only show up in its own set
+scrollToCurrentTab:		Scroll to the selected tab in the GUI tab bar
+scrollBackwardOneTab:		Scroll backward by one tab in the tab bar
+scrollForwardOneTab:		Scroll forward by one tab in the tab bar
 
 ==============================================================================
 7. Toolbar						*macvim-toolbar*
@@ -523,16 +594,40 @@ empty space which will shink or expand so that the items to the right of it
 are right-aligned.  A space (flexspace) will be created for any toolbar item
 whose name begins with "-space" ("-flexspace") and ends with "-"
 
-Toolbar icons should be tiff, png, icns, or heic, of dimension 32x32 or 24x24
-pixels.  The larger size is used when 'tbis' is "medium" or "large", otherwise
-the smaller size is used (which is the default).  If the icon file only
-contains one dimension then macOS will scale the icon to the appropriate
-dimension if necessary.  To avoid this, use a file format which supports
-multiple resolutions (such as icns) and provide both 32x32 and 24x24 versions
-of the icon.
+							*macvim-toolbar-icon*
+In regular Vim, the "icon=" argument (see |toolbar-icon|) can be used to
+specify an image file by file path.  In MacVim, the argument could also be
+used for specifying an SF symbol or a macOS system image.  Simply use the SF
+symbol name or the system image name and MacVim will use load them instead of
+an image file.  Below are examples for using an SF symbol "gearshape.2" and a
+macOS system image named "NSAdvanced": >
+	:an icon=gearshape.2 ToolBar.Setting1   <Nop>
+	:an icon=NSAdvanced  ToolBar.Setting2   <Nop>
+Some SF symbols in macOS can be customized with different styles.  You can do
+so by using colon-delimited options (most of them require macOS 13 Ventura).
+The available options are `monochrome`, `hierarchical`, `palette`,
+`multicolor`, and `variable-0.5` (where 0.5 can be substituted with any number
+between 0 and 1). Download Apple's SF Symbols app to find out what the symbol
+names are and what styling options each one supports.  Some examples below: >
+	:an icon=bolt.circle:hierarchical       ToolBar.Bolt  :echo '⚡️'<CR>
+	:an icon=cloud.sun.rain.fill:multicolor ToolBar.Cloud :echo '🌦️'<CR>
+	:an icon=homekit:variable-0.4:palette   ToolBar.Home  :echo '🏠'<CR>
+<
+If your icon image is a template image (meaning that it is a grayscale image
+designed to be mapped to whatever foreground color is), you can add
+`:template` to the end of an image name, which will mark it as a template
+image to macOS: >
+	:an icon=/a/b/black-and-white.png:template ToolBar.Foo <Nop>
+<
+Supported image formats depend on the version of macOS.  Safe formats include
+png, icns, ico.  Later macOS versions also support heic and webp.
 
-Note: Only a subset of the builtin toolbar items presently have icons.  If no
-icon can be found a warning triangle is displayed instead.
+Toolbar icons should be of dimension 32x32 or 24x24 pixels.  The larger size
+is used when 'tbis' is "medium" or "large", otherwise the smaller size is used
+(which is the default).  If the icon file only contains one dimension then
+macOS will scale the icon to the appropriate dimension if necessary.  To avoid
+this, use a file format which supports multiple resolutions (such as icns) and
+provide both 32x32 and 24x24 versions of the icon.
 
 ==============================================================================
 8. Touch Bar						*macvim-touchbar*
@@ -542,6 +637,9 @@ Touch Bar in MacVim is configurable, and works similar to the toolbar (see
 instead of "ToolBar": >
 	:an TouchBar.Hello          :echo "Hello"<CR>
 <
+This feature only works on Mac devices that come with Touch Bars. On the ones
+that don't, nothing will show up.
+
 You can also create submenus. Due to macOS restrictions, submenus can only be
 one level deep: >
 	:an TouchBar.Navigate.Next  :next<CR>
@@ -552,7 +650,7 @@ The separators work similar to how toolbars work: >
 	:an TouchBar.-Sep-          <Nop>
 	:an TouchBar.-space1-       <Nop>
 	:an TouchBar.-flexspace2-   <Nop>
-
+<
 The first example is a Vim separator (see |menu-separator|) and injects a
 space between two buttons. The second creates a smaller space than a normal
 separator and are specified by names that begin with "-space" and ends with
@@ -561,14 +659,16 @@ that items after it will be right-aligned, and is specified by names that
 begin with "-flexspace" and ends with "-".
 
 						*macvim-touchbar-icon*
-You can specify icons for Touch Bar buttons the same way for toolbar icons
-(see |macvim-toolbar|).  When a button has an icon, it won't show the menu
-name.  Touch Bar icons should ideally be 36x36 pixels, and no larger than
-44x44 pixels. >
-	:an icon=/home/foo/bar.png TouchBar.DoSomething :echo 'Do'<CR>
-You can also use default template icons provided by Apple by using their
-template names. An example: >
+You can specify icons for Touch Bar buttons the same way as toolbar icons,
+including using SF Symbols (see |macvim-toolbar-icon|).  When a button has an
+icon, it won't show the menu name.  Touch Bar icons should ideally be 36x36
+pixels, and no larger than 44x44 pixels. >
+	:an icon=/home/foo/bar.png          TouchBar.DoThing  :echo 'Do'<CR>
+	:an icon=gearshape.2                TouchBar.Setting  <Nop>
+macOS also comes with a few default template images designed for use with
+Touch Bar.  Some examples: >
 	:an icon=NSTouchBarListViewTemplate TouchBar.ShowList :ls<CR>
+	:an icon=NSTouchBarRefreshTemplate  TouchBar.Refresh  :e!<CR>
 <
 						*macvim-touchbar-title*
 By default, the Touch Bar buttons will use the menu names as the title. If an
@@ -583,10 +683,7 @@ the icon. Example: >
 You can also insert emojis by adding a character picker button (specified by
 using a name that begin wtih "-characterpicker" and ends with "-"): >
 	:inoremenu TouchBar.-characterpicker-	<Nop>
-
-This feature only works on Mac devices that come with Touch Bars. On the ones
-that don't, nothing will show up.
-
+<
 						*macvim-touchbar-defaults*
 Here is a list of default Touch Bar buttons that MacVim sets up:
 
@@ -602,9 +699,33 @@ ExitFullScreen		|'fullscreen'| mode. To disable, add the following to
 			and emojis in insert and terminal modes. To disable,
 			add the following to your vimrc file: >
 			  let g:macvim_default_touchbar_characterpicker=0
+<
+==============================================================================
+9. Looking up data					*macvim-lookup*
+
+In macOS, you can look up the definition of the text under your cursor by
+pressing Ctrl-Cmd-D, or using the trackpad (either three-finger tap or Force
+click, depending on your system settings).  This also works in MacVim.
+Interesting data such as URL will behave differently (e.g. show a preview of
+the web page linked to by the URL) as well.  You can also select a piece of
+text to look up the entirety of the phrase (e.g. if you select "ice cream"
+using visual mode, then the definition will use that instead of just "ice" or
+"cream").  There is also a right-click menu item "Look Up" available when in
+visual mode to do the same thing.
+
+If you would like to programmatically access this feature, you can call
+|showdefinition()| to show the definition of whatever text you would like to.
+MacVim also provides two convenient functions that you can call or map to a
+key (they use |showdefinition()| internally):
+
+`macvim#ShowDefinitionUnderCursor()`	Shows the definition of the word under
+					the current cursor.
+
+`macvim#ShowDefinitionSelected()`	Shows the definition of the last
+					selected text in visual mode.
 
 ==============================================================================
-9. Dialogs						*macvim-dialogs*
+10. Dialogs						*macvim-dialogs*
 
 Dialogs can be controlled with the keyboard in two ways.  By default each
 button in a dialog is bound to a key.  The button that is highlighted by blue
@@ -616,35 +737,41 @@ some experimentation might be required in order to figure out which key to
 press.
 
 The second way of controlling dialogs with the keyboard is to enable "Full
-keyboard access" in the "Keyboard" pane of the System Preferences (you can
+keyboard access" in the "Keyboard" pane of the System Settings (you can
 also toggle this on or off by pressing Ctrl-F7).  Once keyboard access is
 enabled it is possible to move between buttons with Tab and pressing Space to
 select the current button.  The current button is indicated with a blue
 outline.
 
 ==============================================================================
-10. System services					*macvim-services*
+11. System services					*macvim-services*
 
-MacVim supports two system services.  These can be accessed from the MacVim
+MacVim provides two system services.  These can be accessed from the MacVim
 submenu in the Services menu or by right-clicking a selection.  For services
 to work, MacVim.app should be located in the /Applications folder.  (You might
 have to logout and then login again before macOS detects the MacVim services.)
 
 These are the currently supported services:
-	* New MacVim Buffer With Selection: Create a new buffer and paste the
-	  currently selected text.
-	* New MacVim Buffer Here: Create a new buffer and set the current
-	  directory to the file or folder that is selected in the Finder.
+* `New MacVim Buffer With Selection`: Create a new buffer and paste the
+  currently selected text.
+* `New MacVim Buffer Here`: Create a new buffer and set the current
+  directory to the file or folder that is selected in the Finder.
 
 The services respect the "Open files from applications" setting in the general
-preferences.
+settings.
+
+For the other direction, within MacVim, you can access system services
+associated with selected texts (e.g. opening a URL, converting between
+Traditional/Simplified Chinese, do a web search) by selecting them in visual
+mode and opening the "Services" submenu either by right-clicking on the text,
+or the top-level "MacVim" menu.
 
 ==============================================================================
-11. mvim:// URL handler				*mvim://* *macvim-url-handler*
+12. mvim:// URL handler				*mvim://* *macvim-url-handler*
 
 MacVim supports a custom URL handler for "mvim://" URLs. The handler is
-supposed to be compatible to TextMate's URL scheme as documented at >
-	http://blog.macromates.com/2007/the-textmate-url-scheme/.
+supposed to be compatible to TextMate's URL scheme as documented at:
+	https://macromates.com/blog/2007/the-textmate-url-scheme/
 
 Currently, this means that the format is >
 	mvim://open?<arguments>
@@ -663,14 +790,14 @@ characters to be encoded twice. For example, a space should be encoded into
 "%2520" instead of "%20". A file "/tmp/file name?.txt" would need the
 following link: >
 	mvim://open?url=file:///tmp/file%2520name%253F.txt
-
+<
 MacVim will try to be smart and detect cases where a user has erroneously only
 encoded once, but for best results use double-encoding as described above.
 
 Note that url has to be a file:// url pointing to an existing local file.
 
 ==============================================================================
-12. Keyboard shortcuts					*macvim-shortcuts*
+13. Keyboard shortcuts					*macvim-shortcuts*
 
 Most keyboard shortcuts in MacVim are bound to menu items and can be
 discovered by looking through the menus (see |macvim-menus| on how to create
@@ -687,11 +814,11 @@ Cmd-.			Interrupt Vim.  Unlike Ctrl-C which is sent as normal
 
 							*Cmd-`* *<D-`>*
 Cmd-`			Cycle to the next window.  On an American keyboard the
-			`-key is located under the Esc-key.  On European
+			key "`" is located under the Esc-key.  On European
 			keyboards this key is often adjacent to the left
 			Shift-key and it may be not even be marked with "`".
 			This Cmd-key combination can only be unmapped via the
-			"Keyboard" System Preferences.
+			"Keyboard" System Settings.
 
 							*Cmd-Left*  *<D-Left>*
 Cmd-Left		Move cursor to the beginning of the line
@@ -746,11 +873,11 @@ sometimes be slightly involved.  Here are all the things you need to consider:
   <D-S-d> or <D-S-D>.
 - Some command key shortcuts are reserved by macOS and cannot be mapped to
   (e.g. <D-Tab>).  However, some of these shortcuts can be freed up in the
-  System Preferences under Keyboard (e.g. Cmd+Space).
+  System Settings under Keyboard (e.g. Cmd+Space).
 - A few command key mappings are set up by MacVim, see |cmd-movement|.
 
 ==============================================================================
-13. Trackpad gestures					*macvim-gestures*
+14. Trackpad gestures					*macvim-gestures*
 
 MacVim supports trackpad swipe gestures.  By default this can be used to
 navigate back/forward in the help (try it!).
@@ -764,11 +891,17 @@ Each gesture generates one of the following Vim pseudo keys:
 
 						 *<SwipeUp>*   *<SwipeDown>*
 	Generated when swiping three fingers across the trackpad in a
-	vertical direction.  (Not supported by the Apple Magic Mouse.)
+	vertical direction.  (Not supported by the Apple Magic Mouse)
 
 						 *<ForceClick>*
 	Generated when doing a Force click by pressing hard on a trackpad.
-	(Only supported on trackpads that support Force Touch.)
+	(Only supported on trackpads that support Force Touch)
+
+	If you have configured to use Force click for "Look up & data
+	detectors" in the system settings, by default MacVim will do a
+	dictionary lookup instead of triggering this mapping. You can turn
+	this off in MacVim's Settings pane, or directly set
+	|MMAllowForceClickLookUp|.
 
 You can map these keys like with any other key using the |:map| family of
 commands.  For example, the following commands map left/right swipe to change
@@ -776,16 +909,16 @@ to the previous/next tab in normal mode: >
 
 	nmap <SwipeLeft> gT
 	nmap <SwipeRight> gt
-
+<
 As another example, here is how to switch buffers by swiping left/right: >
 
 	nmap <SwipeLeft> :bN<CR>
 	nmap <SwipeRight> :bn<CR>
-
+<
 See the section on |key-mapping| for more help on how to map keys.
 
 ==============================================================================
-14. International			*macvim-international* *macvim-multilang*
+15. International			*macvim-international* *macvim-multilang*
 
 Typing text ~
 
@@ -811,17 +944,16 @@ Translations ~
 
 MacVim uses localized Vim messages (see |multilang-messages|) and menus (see
 |multilang-menus|).  However, some of the user interface in MacVim (e.g.
-Preference pane) are not yet localized.  There are also some MacVim-specific
+Settings pane) are not yet localized.  There are also some MacVim-specific
 messages/menus in Vim that are not currently localized.  Please file an issue
 if you would like to see certain messages localized.
 
 ==============================================================================
-15. Known bugs/missing features				*macvim-todo*
+16. Known bugs/missing features				*macvim-todo*
 
 This list is by no means exhaustive, it only enumerates some of the more
 prominent bugs/missing features.
 
-- Sound.  MacVim does not currently support |+sound| yet.
 - |modifyOtherKeys| support.  This feature allows for more granular key
   mapping (e.g. differentiating <C-I> and <Tab>) and isn't supported by the
   MacVim GUI yet.
@@ -830,23 +962,23 @@ prominent bugs/missing features.
 - Sometimes multibyte characters look "too wide", i.e. they overlap the
   following character.  It might help to change 'ambiwidth', or override the
   automatic font substitution by setting 'guifontwide' manually.
-- Printing.  As a temporary solution <D-p> creates a PostScript file which is
-  then opened in Preview where it may be printed. See |hardcopy|.
+- Built-in printing.  |:hardcopy| / <D-p> creates a PDF file which is then
+  opened in Preview where it may be printed.  See |pexpr-option|.
 
 General bugs and issues are tracked on Github.  If you find new bugs or have
-feature requests then please file an issue there: >
+feature requests then please file an issue there:
 	https://github.com/macvim-dev/macvim/issues
 
 For general discussions, asking questions, you could use the Github
-discussions page: >
+discussions page:
 	https://github.com/macvim-dev/macvim/discussions
 
 There is also a vim_mac mailing list.  You can also post your findings of bugs
-and issues there as well:				*vim_mac_group*   >
-	http://groups.google.com/group/vim_mac
+and issues there as well:				*vim_mac_group*
+	https://groups.google.com/group/vim_mac
 
 ==============================================================================
-16. Hints						*macvim-hints*
+17. Hints						*macvim-hints*
 
 In this section some general (not necessarily MacVim specific) hints are
 given.
@@ -854,8 +986,8 @@ given.
 Scenario: ~
 You would like to remap Caps Lock to Esc.
 Solution: ~
-Go to System Preferences → Keyboard → Modifier Keys…, and map Caps Lock Key to
-Escape.
+Go to System Settings → Keyboard → Keyboard Shortcuts… → Modifier Keys, and
+map Caps Lock Key to Escape.
 
 Scenario: ~
 You try opening a bunch of files in tabs but not all files get opened in their
@@ -922,7 +1054,7 @@ If you have not installed the "mvim" script in your path you can provide the
 path to the Vim binary instead.  Thus, if "MacVim.app" resides in the
 Applications folder then you would use the following line: >
 	export EDITOR='/Applications/MacVim.app/Contents/MacOS/Vim -g -f'
-
+<
 Scenario: ~
 You have set MacVim to open from an external program and when you finish
 editing (by closing the MacVim window) you want the external program to regain

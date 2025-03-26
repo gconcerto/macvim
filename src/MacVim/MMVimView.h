@@ -12,23 +12,25 @@
 
 
 
-@class PSMTabBarControl;
+@class MMTabline;
+@class MMTab;
 @class MMTextView;
 @class MMScroller;
 @class MMVimController;
 
 
 @interface MMVimView : NSView {
-    PSMTabBarControl    *tabBarControl;
-    NSTabView           *tabView;
+    /// The tab that has been requested to be closed and waiting on Vim to respond
+    NSInteger           pendingCloseTabID;
+    MMTabline           *tabline;
     MMVimController     *vimController;
-    BOOL                vimTaskSelectedTab;
     MMTextView          *textView;
     NSMutableArray      *scrollbars;
 }
 
 @property BOOL pendingPlaceScrollbars;
-@property BOOL pendingLiveResize;
+@property BOOL pendingLiveResize; ///< An ongoing live resizing message to Vim is active
+@property BOOL pendingLiveResizeQueued; ///< A new size has been queued while an ongoing live resize is already active
 
 - (MMVimView *)initWithFrame:(NSRect)frame vimController:(MMVimController *)c;
 
@@ -40,11 +42,14 @@
 - (NSSize)constrainRows:(int *)r columns:(int *)c toSize:(NSSize)size;
 - (void)setDesiredRows:(int)r columns:(int)c;
 
-- (PSMTabBarControl *)tabBarControl;
+- (MMTabline *)tabline;
 - (IBAction)addNewTab:(id)sender;
+- (IBAction)scrollToCurrentTab:(id)sender;
+- (IBAction)scrollBackwardOneTab:(id)sender;
+- (IBAction)scrollForwardOneTab:(id)sender;
+- (void)showTabline:(BOOL)on;
 - (void)updateTabsWithData:(NSData *)data;
-- (void)selectTabWithIndex:(int)idx;
-- (NSTabViewItem *)addNewTabViewItem;
+- (void)refreshTabProperties;
 
 - (void)createScrollbarWithIdentifier:(int32_t)ident type:(int)type;
 - (BOOL)destroyScrollbarWithIdentifier:(int32_t)ident;
@@ -55,6 +60,9 @@
 - (void)finishPlaceScrollbars;
 
 - (void)setDefaultColorsBackground:(NSColor *)back foreground:(NSColor *)fore;
+- (void)setTablineColorsTabBg:(NSColor *)tabBg tabFg:(NSColor *)tabFg
+                       fillBg:(NSColor *)fillBg fillFg:(NSColor *)fillFg
+                        selBg:(NSColor *)selBg selFg:(NSColor *)selFg;
 
 - (void)viewWillStartLiveResize;
 - (void)viewDidEndLiveResize;

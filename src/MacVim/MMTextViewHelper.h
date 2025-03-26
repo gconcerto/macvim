@@ -22,11 +22,17 @@
 
 
 @interface MMTextViewHelper : NSObject {
+    enum ScrollingDirection {
+        ScrollingDirectionUnknown = 0,
+        ScrollingDirectionVertical,
+        ScrollingDirectionHorizontal,
+    };
+
     id                  textView;
     BOOL                isDragging;
     int                 dragRow;
     int                 dragColumn;
-    int                 dragFlags;
+    unsigned            dragFlags;
     NSPoint             dragPoint;
     BOOL                isAutoscrolling;
     int                 mouseShape;
@@ -38,14 +44,15 @@
     NSDate              *mouseDownTime;
     CGFloat             scrollingDeltaX;
     CGFloat             scrollingDeltaY;
+    enum ScrollingDirection scrollingDirection; ///< The fixed scrolling direction when using track pad (if configured to use it)
 
     // Input Manager
     NSRange             imRange;
     NSRange             markedRange;
     NSDictionary        *markedTextAttributes;
     NSMutableAttributedString   *markedText;
-    int                 preEditRow;
-    int                 preEditColumn;
+    int                 preEditRow; ///< The cursor's row. Note that this gets set no matter what. Doesn't matter if we are in pre-edit or not.
+    int                 preEditColumn; ///< The cursor's column.
     BOOL                imControl;
     BOOL                imState;
     TISInputSourceRef   lastImSource;
@@ -58,7 +65,7 @@
 - (NSColor *)insertionPointColor;
 
 - (void)keyDown:(NSEvent *)event;
-- (void)insertText:(id)string;
+- (void)insertText:(id)string replacementRange:(NSRange)replacementRange;
 - (void)doCommandBySelector:(SEL)selector;
 - (void)scrollWheel:(NSEvent *)event;
 - (void)mouseDown:(NSEvent *)event;
@@ -90,6 +97,7 @@
 - (NSRange)imRange;
 - (void)setMarkedRange:(NSRange)range;
 - (NSRect)firstRectForCharacterRange:(NSRange)range;
+- (NSRect)firstRectForCharacterRange:(int)row column:(int)col length:(int)length;
 - (void)setImControl:(BOOL)enable;
 - (void)activateIm:(BOOL)enable;
 - (BOOL)useInlineIm;

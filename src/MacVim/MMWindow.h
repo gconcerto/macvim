@@ -29,8 +29,13 @@
 - (void)setContentMaxSize:(NSSize)size;
 - (void)setContentSize:(NSSize)size;
 - (void)setBlurRadius:(int)radius;
++ (void)setBlurRadius:(int)radius onWindow:(NSWindow *)win;
 
 - (IBAction)toggleFullScreen:(id)sender;
 - (IBAction)realToggleFullScreen:(id)sender;
+
+// Public macaction's.
+// Note: New items here need to be handled in validateMenuItem: as well.
+- (void)performClose:(id)sender;
 
 @end

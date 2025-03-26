@@ -74,6 +74,13 @@ func Test_blob_assign()
       VAR l = [0z12]
       VAR m = deepcopy(l)
       LET m[0] = 0z34	#" E742 or E741 should not occur.
+
+      VAR blob1 = 0z10
+      LET blob1 += test_null_blob()
+      call assert_equal(0z10, blob1)
+      LET blob1 = test_null_blob()
+      LET blob1 += 0z20
+      call assert_equal(0z20, blob1)
   END
   call v9.CheckLegacyAndVim9Success(lines)
 
@@ -94,6 +101,18 @@ func Test_blob_assign()
       LET b[3 : 2] = 0z
   END
   call v9.CheckLegacyAndVim9Failure(lines, 'E979:')
+
+  let lines =<< trim END
+      VAR b = 0zDEADBEEF
+      LET b[0 : 1] = 0x1122
+  END
+  call v9.CheckLegacyAndVim9Failure(lines, ['E709:', 'E1012:', 'E709:'])
+
+  let lines =<< trim END
+      VAR b = 0zDEADBEEF
+      LET b[0] = 0z11
+  END
+  call v9.CheckLegacyAndVim9Failure(lines, ['E974:', 'E974:', 'E1012:'])
 
   let lines =<< trim END
       VAR b = 0zDEADBEEF
@@ -331,6 +350,17 @@ func Test_blob_for_loop()
       call assert_equal(5, i)
   END
   call v9.CheckLegacyAndVim9Success(lines)
+
+  " Test for skipping the loop var assignment in a for loop
+  let lines =<< trim END
+    VAR blob = 0z998877
+    VAR c = 0
+    for _ in blob
+      LET c += 1
+    endfor
+    call assert_equal(3, c)
+  END
+  call v9.CheckLegacyAndVim9Success(lines)
 endfunc
 
 func Test_blob_concatenate()
@@ -488,9 +518,40 @@ func Test_blob_read_write()
       call writefile(b, 'Xblob')
       VAR br = readfile('Xblob', 'B')
       call assert_equal(b, br)
+      VAR br2 = readblob('Xblob')
+      call assert_equal(b, br2)
+      VAR br3 = readblob('Xblob', 1)
+      call assert_equal(b[1 :], br3)
+      VAR br4 = readblob('Xblob', 1, 2)
+      call assert_equal(b[1 : 2], br4)
+      VAR br5 = readblob('Xblob', -3)
+      call assert_equal(b[-3 :], br5)
+      VAR br6 = readblob('Xblob', -3, 2)
+      call assert_equal(b[-3 : -2], br6)
+
+      #" reading past end of file, empty result
+      VAR br1e = readblob('Xblob', 10000)
+      call assert_equal(0z, br1e)
+
+      #" reading too much, result is truncated
+      VAR blong = readblob('Xblob', -1000)
+      call assert_equal(b, blong)
+      LET blong = readblob('Xblob', -10, 8)
+      call assert_equal(b, blong)
+      LET blong = readblob('Xblob', 0, 10)
+      call assert_equal(b, blong)
+
       call delete('Xblob')
   END
   call v9.CheckLegacyAndVim9Success(lines)
+
+  if filereadable('/dev/random')
+    let b = readblob('/dev/random', 0, 10)
+    call assert_equal(10, len(b))
+  endif
+
+  call assert_fails("call readblob('notexist')", 'E484:')
+  " TODO: How do we test for the E485 error?
 
   " This was crashing when calling readfile() with a directory.
   call assert_fails("call readfile('.', 'B')", 'E17: "." is a directory')
@@ -669,9 +730,7 @@ func Test_blob_lock()
 endfunc
 
 func Test_blob_sort()
-  if has('float')
-    call v9.CheckLegacyAndVim9Failure(['call sort([1.0, 0z11], "f")'], 'E975:')
-  endif
+  call v9.CheckLegacyAndVim9Failure(['call sort([1.0, 0z11], "f")'], 'E975:')
   call v9.CheckLegacyAndVim9Failure(['call sort([11, 0z11], "N")'], 'E974:')
 endfunc
 
@@ -725,6 +784,18 @@ func Test_blob2string()
   call assert_equal(v, string(b))
 endfunc
 
+func Test_blob_repeat()
+  call assert_equal(0z, repeat(0z00, 0))
+  call assert_equal(0z00, repeat(0z00, 1))
+  call assert_equal(0z0000, repeat(0z00, 2))
+  call assert_equal(0z00000000, repeat(0z0000, 2))
+
+  call assert_equal(0z, repeat(0z12, 0))
+  call assert_equal(0z, repeat(0z1234, 0))
+  call assert_equal(0z1234, repeat(0z1234, 1))
+  call assert_equal(0z12341234, repeat(0z1234, 2))
+endfunc
+
 " Test for blob allocation failure
 func Test_blob_alloc_failure()
   " blob variable
@@ -762,6 +833,35 @@ func Test_blob_alloc_failure()
   call test_alloc_fail(GetAllocId('blob_alloc'), 0, 0)
   call assert_fails('let x = readblob("test_blob.vim")', 'E342:')
   call assert_equal(0, x)
+endfunc
+
+" Test for the indexof() function
+func Test_indexof()
+  let b = 0zdeadbeef
+  call assert_equal(0, indexof(b, {i, v -> v == 0xde}))
+  call assert_equal(3, indexof(b, {i, v -> v == 0xef}))
+  call assert_equal(-1, indexof(b, {i, v -> v == 0x1}))
+  call assert_equal(1, indexof(b, "v:val == 0xad"))
+  call assert_equal(-1, indexof(b, "v:val == 0xff"))
+  call assert_equal(-1, indexof(b, {_, v -> "v == 0xad"}))
+
+  call assert_equal(-1, indexof(0z, "v:val == 0x0"))
+  call assert_equal(-1, indexof(test_null_blob(), "v:val == 0xde"))
+  call assert_equal(-1, indexof(b, test_null_string()))
+  call assert_equal(-1, indexof(b, test_null_function()))
+  call assert_equal(-1, indexof(b, ""))
+
+  let b = 0z01020102
+  call assert_equal(1, indexof(b, "v:val == 0x02", #{startidx: 0}))
+  call assert_equal(2, indexof(b, "v:val == 0x01", #{startidx: -2}))
+  call assert_equal(-1, indexof(b, "v:val == 0x01", #{startidx: 5}))
+  call assert_equal(0, indexof(b, "v:val == 0x01", #{startidx: -5}))
+  call assert_equal(0, indexof(b, "v:val == 0x01", test_null_dict()))
+
+  " failure cases
+  call assert_fails('let i = indexof(b, "val == 0xde")', 'E121:')
+  call assert_fails('let i = indexof(b, {})', 'E1256:')
+  call assert_fails('let i = indexof(b, " ")', 'E15:')
 endfunc
 
 " vim: shiftwidth=2 sts=2 expandtab

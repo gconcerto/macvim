@@ -56,10 +56,25 @@ func Test_AAA_python_setup()
 endfunc
 
 func Test_pydo()
-  " Check deleting lines does not trigger an ml_get error.
   new
+
+  " Check deleting lines does not trigger an ml_get error.
   call setline(1, ['one', 'two', 'three'])
   pydo vim.command("%d_")
+  call assert_equal([''], getline(1, '$'))
+
+  call setline(1, ['one', 'two', 'three'])
+  pydo vim.command("1,2d_")
+  call assert_equal(['three'], getline(1, '$'))
+
+  call setline(1, ['one', 'two', 'three'])
+  pydo vim.command("2,3d_"); return "REPLACED"
+  call assert_equal(['REPLACED'], getline(1, '$'))
+
+  call setline(1, ['one', 'two', 'three'])
+  2,3pydo vim.command("1,2d_"); return "REPLACED"
+  call assert_equal(['three'], getline(1, '$'))
+
   bwipe!
 
   " Check switching to another buffer does not trigger an ml_get error.
@@ -248,7 +263,10 @@ s+='B'
   python << trim eof
     s+='E'
   eof
-  call assert_equal('ABCDE', pyxeval('s'))
+python << trimm
+s+='F'
+trimm
+  call assert_equal('ABCDEF', pyxeval('s'))
 endfunc
 
 " Test for the buffer range object
@@ -686,7 +704,6 @@ func Test_python_function_call()
 endfunc
 
 func Test_python_float()
-  CheckFeature float
   let l = [0.0]
   py l = vim.bindeval('l')
   py l.extend([0.0])
@@ -785,9 +802,7 @@ func Test_python_pyeval()
   py v = vim.eval('test_null_function()')
   call assert_equal(v:none, pyeval('v'))
 
-  if has('float')
-    call assert_equal(0.0, pyeval('0.0'))
-  endif
+  call assert_equal(0.0, pyeval('0.0'))
 
   " Evaluate an invalid values
   call AssertException(['let v = pyeval(''"\0"'')'], 'E859:')
@@ -795,6 +810,49 @@ func Test_python_pyeval()
   call AssertException(['let v = pyeval("undefined_name")'],
         \ "Vim(let):NameError: name 'undefined_name' is not defined")
   call AssertException(['let v = pyeval("vim")'], 'E859:')
+endfunc
+
+" Test for py3eval with locals
+func Test_python_pyeval_locals()
+  let str = 'a string'
+  let num = 0xbadb33f
+  let d = {'a': 1, 'b': 2, 'c': str}
+  let l = [ str, num, d ]
+
+  let locals = #{
+        \ s: str,
+        \ n: num,
+        \ d: d,
+        \ l: l,
+        \ }
+
+  " check basics
+  call assert_equal('a string', pyeval('s', locals))
+  call assert_equal(0xbadb33f, pyeval('n', locals))
+  call assert_equal(d, pyeval('d', locals))
+  call assert_equal(l, pyeval('l', locals))
+
+  py << trim EOF
+  def __UpdateDict(d, upd):
+    d.update(upd)
+    return d
+
+  def __ExtendList(l, *args):
+    l.extend(*args)
+    return l
+  EOF
+
+  " check assign to dict member works like bindeval
+  call assert_equal(3, pyeval('__UpdateDict( d, {"c": 3} )["c"]', locals))
+  call assert_equal(3, d['c'])
+
+  " check append lo list
+  call assert_equal(4, pyeval('len(__ExtendList(l, ["new item"]))', locals))
+  call assert_equal("new item", l[-1])
+
+  " check calling a function
+  let StrLen = function('strlen')
+  call assert_equal(3, pyeval('f("abc")', {'f': StrLen}))
 endfunc
 
 " Test for vim.bindeval()
@@ -1565,11 +1623,11 @@ func Test_python_buffer()
   %bw!
 
   " Range object for a deleted buffer
-  new Xfile
+  new Xpbuffile
   call setline(1, ['one', 'two', 'three'])
   py b = vim.current.buffer
   py r = vim.current.buffer.range(0, 2)
-  call assert_equal('<range Xfile (0:2)>', pyeval('repr(r)'))
+  call assert_equal('<range Xpbuffile (0:2)>', pyeval('repr(r)'))
   %bw!
   call AssertException(['py r[:] = []'],
         \ 'Vim(python):vim.error: attempt to refer to deleted buffer')
@@ -1598,7 +1656,7 @@ endfunc
 " Test vim.buffers object
 func Test_python_buffers()
   %bw!
-  edit Xfile
+  edit Xpbuffile
   py cb = vim.current.buffer
   set hidden
   edit a
@@ -1626,8 +1684,8 @@ func Test_python_buffers()
     cb.append('i3:' + str(next(i3)))
     del i3
   EOF
-  call assert_equal(['i:<buffer Xfile>',
-        \ 'i2:<buffer Xfile>', 'i:<buffer a>', 'i3:<buffer Xfile>'],
+  call assert_equal(['i:<buffer Xpbuffile>',
+        \ 'i2:<buffer Xpbuffile>', 'i:<buffer a>', 'i3:<buffer Xpbuffile>'],
         \ getline(2, '$'))
   %d
 
@@ -1645,7 +1703,7 @@ func Test_python_buffers()
 
     cb.append(str(len(vim.buffers)))
   EOF
-  call assert_equal([bufnr('Xfile') .. ':<buffer Xfile>=<buffer Xfile>',
+  call assert_equal([bufnr('Xpbuffile') .. ':<buffer Xpbuffile>=<buffer Xpbuffile>',
         \ bufnr('a') .. ':<buffer a>=<buffer a>',
         \ bufnr('b') .. ':<buffer b>=<buffer b>',
         \ bufnr('c') .. ':<buffer c>=<buffer c>', '4'], getline(2, '$'))
@@ -1675,15 +1733,15 @@ func Test_python_buffers()
     del i4
     del bnums
   EOF
-  call assert_equal(['i4:<buffer Xfile>',
-        \ 'i4:<buffer Xfile>', 'StopIteration'], getline(2, '$'))
+  call assert_equal(['i4:<buffer Xpbuffile>',
+        \ 'i4:<buffer Xpbuffile>', 'StopIteration'], getline(2, '$'))
   %bw!
 endfunc
 
 " Test vim.{tabpage,window}list and vim.{tabpage,window} objects
 func Test_python_tabpage_window()
   %bw
-  edit Xfile
+  edit Xpbuffile
   py cb = vim.current.buffer
   tabnew 0
   tabnew 1
@@ -1748,7 +1806,7 @@ func Test_python_tabpage_window()
     Current tab pages:
       <tabpage 0>(1): 1 windows, current is <window object (unknown)>
       Windows:
-        <window object (unknown)>(1): displays buffer <buffer Xfile>; cursor is at (2, 0)
+        <window object (unknown)>(1): displays buffer <buffer Xpbuffile>; cursor is at (2, 0)
       <tabpage 1>(2): 1 windows, current is <window object (unknown)>
       Windows:
         <window object (unknown)>(1): displays buffer <buffer 0>; cursor is at (1, 0)
@@ -1764,14 +1822,14 @@ func Test_python_tabpage_window()
         <window 3>(4): displays buffer <buffer 2>; cursor is at (1, 0)
     Number of windows in current tab page: 4
   END
-  call assert_equal(expected, getbufline(bufnr('Xfile'), 2, '$'))
+  call assert_equal(expected, getbufline(bufnr('Xpbuffile'), 2, '$'))
   %bw!
 endfunc
 
 " Test vim.current
 func Test_python_vim_current()
   %bw
-  edit Xfile
+  edit Xpbuffile
   py cb = vim.current.buffer
   tabnew 0
   tabnew 1
@@ -1797,8 +1855,8 @@ func Test_python_vim_current()
     Current window: <window 0>: <window 0> is <window 0>
     Current buffer: <buffer c.2>: <buffer c.2> is <buffer c.2> is <buffer c.2>
   END
-  call assert_equal(expected, getbufline(bufnr('Xfile'), 2, '$'))
-  call deletebufline(bufnr('Xfile'), 1, '$')
+  call assert_equal(expected, getbufline(bufnr('Xpbuffile'), 2, '$'))
+  call deletebufline(bufnr('Xpbuffile'), 1, '$')
 
   " Assigning: fails
   py << trim EOF
@@ -1821,10 +1879,10 @@ func Test_python_vim_current()
     Type error at assigning None to vim.current.tabpage
     Type error at assigning None to vim.current.buffer
   END
-  call assert_equal(expected, getbufline(bufnr('Xfile'), 2, '$'))
-  call deletebufline(bufnr('Xfile'), 1, '$')
+  call assert_equal(expected, getbufline(bufnr('Xpbuffile'), 2, '$'))
+  call deletebufline(bufnr('Xpbuffile'), 1, '$')
 
-  call setbufline(bufnr('Xfile'), 1, 'python interface')
+  call setbufline(bufnr('Xpbuffile'), 1, 'python interface')
   py << trim EOF
     # Assigning: success
     vim.current.tabpage = vim.tabpages[-2]
@@ -1840,13 +1898,13 @@ func Test_python_vim_current()
   let expected =<< trim END
     Current tab page: <tabpage 2>
     Current window: <window 0>
-    Current buffer: <buffer Xfile>
+    Current buffer: <buffer Xpbuffile>
     Current line: 'python interface'
   END
-  call assert_equal(expected, getbufline(bufnr('Xfile'), 2, '$'))
+  call assert_equal(expected, getbufline(bufnr('Xpbuffile'), 2, '$'))
   py vim.current.line = 'one line'
   call assert_equal('one line', getline('.'))
-  call deletebufline(bufnr('Xfile'), 1, '$')
+  call deletebufline(bufnr('Xpbuffile'), 1, '$')
 
   py << trim EOF
     ws = list(vim.windows)
@@ -1866,7 +1924,7 @@ func Test_python_vim_current()
     w.valid: [True, False]
     t.valid: [True, False, True, False]
   END
-  call assert_equal(expected, getbufline(bufnr('Xfile'), 2, '$'))
+  call assert_equal(expected, getbufline(bufnr('Xpbuffile'), 2, '$'))
   %bw!
 endfunc
 
@@ -2409,7 +2467,7 @@ endfunc
 
 " Test chdir
 func Test_python_chdir()
-  new Xfile
+  new Xpycfile
   py cb = vim.current.buffer
   py << trim EOF
     import os
@@ -2420,7 +2478,7 @@ func Test_python_chdir()
     path = fnamemodify('.', ':p:h:t')
     if path != 'src' and path != 'src2':
       # Running tests from a shadow directory, so move up another level
-      # This will result in @% looking like shadow/testdir/Xfile, hence the
+      # This will result in @% looking like shadow/testdir/Xpycfile, hence the
       # extra fnamemodify
       os.chdir('..')
       cb.append(fnamemodify('.', ':p:h:t'))
@@ -2436,8 +2494,8 @@ func Test_python_chdir()
     cb.append(vim.eval('@%'))
     del fnamemodify
   EOF
-  call assert_equal(['testdir', 'Xfile', 'src', 'testdir/Xfile', 'testdir',
-        \ 'Xfile'], getline(2, '$'))
+  call assert_equal(['testdir', 'Xpycfile', 'src', 'testdir/Xpycfile', 'testdir',
+        \ 'Xpycfile'], getline(2, '$'))
   close!
   call AssertException(["py vim.chdir(None)"], "Vim(python):TypeError:")
 endfunc

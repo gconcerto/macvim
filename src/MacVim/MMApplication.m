@@ -21,7 +21,7 @@
 - (void)sendEvent:(NSEvent *)event
 {
     NSEventType type = [event type];
-    unsigned flags = [event modifierFlags];
+    NSUInteger flags = [event modifierFlags];
 
     // HACK! Intercept 'help' key presses and clear the 'help key flag', else
     // Cocoa turns the mouse cursor into a question mark and goes into 'context
@@ -52,8 +52,12 @@
             @"CFBundleVersion"];
     NSString *marketingVersion = [[NSBundle mainBundle]
             objectForInfoDictionaryKey:@"CFBundleShortVersionString"];
+
+    BOOL isPrerelease = [version rangeOfString:@"."].length > 0;
+    NSString *prerelease = isPrerelease ? @"\npre-release" : @"";
+
     NSString *title = [NSString stringWithFormat:
-            @"Custom Version %@ (%@)", marketingVersion, version];
+            @"MacVim r%@ (Vim %@)%@", version, marketingVersion, prerelease];
 
     [self orderFrontStandardAboutPanelWithOptions:
             [NSDictionary dictionaryWithObjectsAndKeys:

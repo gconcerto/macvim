@@ -30,10 +30,14 @@ static int MMMaxMRU = 10;
 // Enabled when files passed on command line should not be added to MRU.
 static BOOL MMNoMRU = NO;
 
-static NSString *MMDefaultFontName = @"Menlo Regular";
+static NSString *MMDefaultFontName = @"Menlo-Regular";
 static int MMDefaultFontSize       = 11;
+static char *MMDefaultFontSizeStr  = "h11";
 static int MMMinFontSize           = 6;
 static int MMMaxFontSize           = 100;
+
+// This is duplicated in MMVimController. Could consolidate in the future.
+static NSString *(system_font_weights[]) = { @"UltraLight", @"Thin", @"Light", @"Regular", @"Medium", @"Semibold", @"Bold", @"Heavy", @"Black" };
 
 static BOOL MMShareFindPboard      = YES;
 
@@ -49,7 +53,7 @@ vimmenu_T *menu_for_descriptor(NSArray *desc);
 // -- Initialization --------------------------------------------------------
 
     void
-macvim_early_init()
+macvim_early_init(void)
 {
     NSBundle *bundle = [NSBundle mainBundle];
     if (bundle) {
@@ -153,7 +157,7 @@ gui_mch_prepare(int *argc, char **argv)
 
 /* Called directly after forking (even if we didn't fork). */
     void
-gui_macvim_after_fork_init()
+gui_macvim_after_fork_init(void)
 {
     ASLInit();
     ASLogDebug(@"");
@@ -251,6 +255,9 @@ gui_mch_init(void)
     // correspondence (assuming all characters have the same dimensions).
     gui.scrollbar_width = gui.scrollbar_height = 0;
 
+    // For simplicity we just set char width/height to 1 as the GUI is
+    // decoupled from Vim anyway so Vim doesn't need to know the accurate
+    // pixel sizes.
     gui.char_height = 1;
     gui.char_width = 1;
     gui.char_ascent = 0;
@@ -614,7 +621,7 @@ gui_mch_set_sp_color(guicolor_T color)
  * Set default colors.
  */
     void
-gui_mch_def_colors()
+gui_mch_def_colors(void)
 {
     MMBackend *backend = [MMBackend sharedInstance];
 
@@ -640,6 +647,62 @@ gui_mch_new_colors(void)
     [[MMBackend sharedInstance]
         setDefaultColorsBackground:gui.def_back_pixel
                         foreground:gui.def_norm_pixel];
+}
+
+/*
+ * Called when any highlight has been changed in general
+ */
+    void
+gui_mch_update_highlight(void)
+{
+    // If using a highlight group for fullscreen background color we need to
+    // update the app when a new color scheme has been picked. This function
+    // technically wouldn't be called if a user manually set the relevant
+    // highlight group to another color but works in most use cases when they
+    // just change the color scheme.
+    if (fuoptions_flags & FUOPT_BGCOLOR_HLGROUP)
+        gui_mch_fuopt_update();
+
+    // Update the GUI with tab colors
+
+    // Highlight attributes for TabLine, TabLineFill, TabLineSel
+    const int attrs[3] = { HL_ATTR(HLF_TP), HL_ATTR(HLF_TPF), HL_ATTR(HLF_TPS) };
+
+    int tablineColors[6] = { 0 };
+    for (int i = 0; i < 3; i++) {
+        guicolor_T bg = INVALCOLOR, fg = INVALCOLOR;
+        BOOL reverse = NO;
+        if (attrs[i] > HL_ALL) {
+            attrentry_T *aep = syn_gui_attr2entry(attrs[i]);
+            if (aep != NULL) {
+                bg = aep->ae_u.gui.bg_color;
+                fg = aep->ae_u.gui.fg_color;
+                reverse = (aep->ae_attr & HL_INVERSE) != 0;
+            }
+        } else {
+            reverse = (attrs[i] & HL_INVERSE) != 0;
+        }
+
+        if (bg == INVALCOLOR)
+            bg = gui.def_back_pixel;
+        if (fg == INVALCOLOR)
+            fg = gui.def_norm_pixel;
+
+        if (reverse) {
+            guicolor_T temp = fg;
+            fg = bg;
+            bg = temp;
+        }
+        tablineColors[i*2] = (int)bg;
+        tablineColors[i*2+1] = (int)fg;
+    }
+    // Cache the old colors just so we don't spam the IPC channel if the
+    // colors didn't actually change.
+    static int oldTablineColors[6] = { 0 };
+    if (memcmp(oldTablineColors, tablineColors, sizeof(oldTablineColors)) != 0) {
+        memcpy(oldTablineColors, tablineColors, sizeof(oldTablineColors));
+        [[MMBackend sharedInstance] setTablineColors:tablineColors];
+    }
 }
 
 /*
@@ -757,6 +820,8 @@ gui_mch_add_menu(vimmenu_T *menu, int idx)
 }
 
 
+// Look up the icon file. If it's a full path, return that. Otherwise, look for
+// it under a 'bitmaps' folder under runtimepath, using common file extensions.
 // Taken from gui_gtk.c (slightly modified)
     static int
 lookup_menu_iconfile(char_u *iconfile, char_u *dest)
@@ -766,7 +831,9 @@ lookup_menu_iconfile(char_u *iconfile, char_u *dest)
     if (mch_isFullName(dest))
 	return vim_fexists(dest);
 
-    static const char   suffixes[][4] = {"png", "bmp"};
+    // Just find the popular image formats that macOS supports.
+    static const char   suffixes[][5] = {
+       "png", "bmp", "ico", "icns", "jpeg", "jpg", "heic", "webp"};
     char_u		buf[MAXPATHL];
     unsigned int	i;
 
@@ -794,39 +861,63 @@ gui_mch_add_menu_item(vimmenu_T *menu, int idx)
                             (unsigned short)specialKeyToNSKey(menu->mac_key)]
         : [NSString string];
     int modifierMask = vimModMaskToEventModifierFlags(menu->mac_mods);
-    char_u *icon = NULL;
+    NSString *icon = nil;
 
     vimmenu_T *rootMenu = menu;
     while (rootMenu->parent) {
         rootMenu = rootMenu->parent;
     }
     if (menu_is_toolbar(rootMenu->name)) {
-        //
-        // Find out what file to load for the icon. This is only relevant for the
-        // toolbar and TouchBar.
-        //
+        // Find out what file to load for the toolbar icon.
         char_u fname[MAXPATHL];
 
-        // Try to use the icon=.. argument
+        // Try to use the file path from the icon=.. argument
         if (menu->iconfile && lookup_menu_iconfile(menu->iconfile, fname))
-            icon = fname;
+            icon = [NSString stringWithVimString:fname];
 
         // If not found and not builtin specified try using the menu name
-        if (!icon && !menu->icon_builtin
+        if (icon == nil && !menu->icon_builtin
                                     && lookup_menu_iconfile(menu->name, fname))
-            icon = fname;
+            icon = [NSString stringWithVimString:fname];
 
         // Still no icon found, try using a builtin icon.  (If this also fails,
         // then a warning icon will be displayed).
-        if (!icon)
-            icon = lookup_toolbar_item(menu->iconidx);
+        if (icon == nil) {
+            char_u* toolbar_item = lookup_toolbar_item(menu->iconidx);
+            if (toolbar_item) {
+                icon = [NSString stringWithVimString:toolbar_item];
 
-        // Last step is to see if this is a standard Apple template icon. The
-        // touch bar templates are of the form "NSTouchBar*Template".
-        if (!icon)
-            if (menu->iconfile && STRNCMP(menu->iconfile, "NSTouchBar", 10) == 0) {
-                icon = menu->iconfile;
+                // All the default icons that MacVim ships with are templates
+                // to make them work better in light/dark modes.
+                icon = [icon stringByAppendingString:@":template"];
             }
+        }
+
+        // Last step is to simply pass the icon argument up the chain as there
+        // are more complicated logic to determine what this is (e.g. SF Symbol
+        // or raw image).
+        if (icon == nil) {
+            if (menu->iconfile && *menu->iconfile != '\0') {
+                icon = [NSString stringWithVimString:menu->iconfile];
+            }
+        }
+    } else {
+        // For regular menus, we support icons as well, but only if it's
+        // specified by the icon=... argument. This is a MacVim-extension.
+        char_u fname[MAXPATHL];
+
+        if (menu->iconfile && *menu->iconfile != '\0') {
+            if (lookup_menu_iconfile(menu->iconfile, fname)) {
+                icon = [NSString stringWithVimString:fname];
+            } else {
+                icon = [NSString stringWithVimString:menu->iconfile];
+            }
+        }
+    }
+
+    if (icon == nil) {
+        // Need non-nil items for dictionaryWithObjectsAndKeys: below.
+        icon = @"";
     }
 
     [[MMBackend sharedInstance] queueMessage:AddMenuItemMsgID properties:
@@ -834,7 +925,7 @@ gui_mch_add_menu_item(vimmenu_T *menu, int idx)
             desc, @"descriptor",
             [NSNumber numberWithInt:idx], @"index",
             [NSString stringWithVimString:tip], @"tip",
-            [NSString stringWithVimString:icon], @"icon",
+            icon, @"icon",
             keyEquivalent, @"keyEquivalent",
             [NSNumber numberWithInt:modifierMask], @"modifierMask",
             [NSString stringWithVimString:menu->mac_action], @"action",
@@ -987,8 +1078,7 @@ gui_mch_show_toolbar(int showit)
  * If a font is not going to be used, free its structure.
  */
     void
-gui_mch_free_font(font)
-    GuiFont	font;
+gui_mch_free_font(GuiFont font)
 {
     if (font != NOFONT) {
         ASLogDebug(@"font=%p", font);
@@ -1120,6 +1210,22 @@ gui_macvim_font_with_name(char_u *name)
                                  componentsJoinedByString:@" "];
     }
 
+    const BOOL isSystemFont = [fontName hasPrefix:MMSystemFontAlias];
+    if (isSystemFont) {
+        if (fontName.length > MMSystemFontAlias.length) {
+            BOOL invalidWeight = YES;
+            const NSRange cmpRange = NSMakeRange(MMSystemFontAlias.length, fontName.length - MMSystemFontAlias.length);
+            for (size_t i = 0; i < ARRAY_LENGTH(system_font_weights); i++) {
+                if ([fontName compare:system_font_weights[i] options:NSCaseInsensitiveSearch range:cmpRange] == NSOrderedSame) {
+                    invalidWeight = NO;
+                    break;
+                }
+            }
+            if (invalidWeight)
+                return NOFONT;
+        }
+    }
+
     if (!parseFailed && [fontName length] > 0) {
         if (size < MMMinFontSize) size = MMMinFontSize;
         if (size > MMMaxFontSize) size = MMMaxFontSize;
@@ -1127,11 +1233,77 @@ gui_macvim_font_with_name(char_u *name)
         // If the default font is requested we don't need to check if NSFont
         // can load it.  Otherwise we ask NSFont if it can load it.
         if ([fontName isEqualToString:MMDefaultFontName]
+                || isSystemFont
                 || [NSFont fontWithName:fontName size:size])
             return [[NSString alloc] initWithFormat:@"%@:h%d", fontName, size];
     }
 
     return NOFONT;
+}
+
+/**
+ * Cmdline expansion for setting 'guifont' / 'guifontwide'. Will enumerate
+ * through all fonts for completion. When setting 'guifont' it will only show
+ * monospace fonts as it's unlikely other fonts would be useful.
+ */
+    void
+gui_mch_expand_font(optexpand_T *args, void *param, int (*add_match)(char_u *val))
+{
+    expand_T *xp = args->oe_xp;
+    int wide = *(int *)param;
+
+    if (args->oe_include_orig_val && *args->oe_opt_value == NUL && !wide)
+    {
+	// If guifont is empty, and we want to fill in the orig value, suggest
+	// the default so the user can modify it.
+        NSString *defaultFontStr = [NSString stringWithFormat:@"%@:h%d",
+                 MMDefaultFontName, MMDefaultFontSize];
+	if (add_match((char_u *)[defaultFontStr UTF8String]) != OK)
+	    return;
+    }
+
+    if (xp->xp_pattern > args->oe_set_arg && *(xp->xp_pattern-1) == ':')
+    {
+        // Fill in the existing font size to help switching only font family
+        char_u *colon = vim_strchr(p_guifont, ':');
+        if (colon != NULL)
+            add_match(colon + 1);
+        else
+            add_match((char_u*)MMDefaultFontSizeStr);
+        return;
+    }
+
+    if (!wide) {
+        // Add system-native monospace font alias to completion.
+        char buf[40];
+        [MMSystemFontAlias getCString:buf maxLength:ARRAY_LENGTH(buf) encoding:NSASCIIStringEncoding];
+        if (add_match((char_u*)buf) != OK)
+            return;
+        const size_t fontAliasLen = STRLEN(buf);
+        if (STRNCMP(xp->xp_pattern, buf, fontAliasLen) == 0) {
+            // We additionally complete with font weights like "bold". We only
+            // do so if starting with "-monospace-" already to avoid spamming
+            // the user with too many variations on this.
+            for (size_t i = 0; i < ARRAY_LENGTH(system_font_weights); i++) {
+                [system_font_weights[i] getCString:buf+fontAliasLen
+                                         maxLength:ARRAY_LENGTH(buf)-fontAliasLen
+                                          encoding:NSASCIIStringEncoding];
+                if (add_match((char_u*)buf) != OK)
+                    return;
+            }
+        }
+    }
+
+    NSFontManager *fontManager = [NSFontManager sharedFontManager];
+    NSArray<NSString *> *availableFonts;
+    if (wide)
+        availableFonts = [fontManager availableFonts];
+    else
+        availableFonts = [fontManager availableFontNamesWithTraits:NSFixedPitchFontMask];
+    for (NSString *font in availableFonts) {
+        if (add_match((char_u*)[font UTF8String]) != OK)
+            return;
+    }
 }
 
 // -- Scrollbars ------------------------------------------------------------
@@ -1344,6 +1516,15 @@ gui_mch_setmouse(int x UNUSED, int y UNUSED)
     ASLogInfo(@"Not implemented!");
 }
 
+    void
+gui_mch_mousehide(int hide UNUSED)
+{
+    // We don't implement this. `insertVimStateMessage` already sends this to
+    // MacVim, and we handle this in the parent process using NSCursor's
+    // `setHiddenUntilMouseMoves` instead of letting Vim have manual control
+    // over this.
+}
+
 
     void
 mch_set_mouse_shape(int shape)
@@ -1357,8 +1538,6 @@ mch_set_mouse_shape(int shape)
 // -- Input Method ----------------------------------------------------------
 
 #if defined(FEAT_EVAL)
-void call_imactivatefunc(int active);
-int call_imstatusfunc(void);
 # ifdef FEAT_GUI
 #  define USE_IMACTIVATEFUNC (!gui.in_use && *p_imaf != NUL)
 #  define USE_IMSTATUSFUNC (!gui.in_use && *p_imsf != NUL)
@@ -1470,11 +1649,10 @@ gui_mch_replace_dialog(exarg_T *eap)
 
 
     void
-ex_macaction(eap)
-    exarg_T	*eap;
+ex_macaction(exarg_T *eap)
 {
     if (!gui.in_use) {
-        emsg(_("E???: Command only available in GUI mode"));
+        emsg(_("E9000-M: Command only available in GUI mode"));
         return;
     }
 
@@ -1486,7 +1664,7 @@ ex_macaction(eap)
     if (actionDict && [actionDict objectForKey:name] != nil) {
         [[MMBackend sharedInstance] executeActionWithName:name];
     } else {
-        semsg(_("E???: Invalid action: %s"), eap->arg);
+        semsg(_("E9001-M: Invalid action: %s"), eap->arg);
     }
 
     arg = CONVERT_TO_UTF8(arg);
@@ -1512,6 +1690,14 @@ gui_mch_adjust_charwidth(void)
 {
     [[MMBackend sharedInstance] adjustColumnspace:p_columnspace];
     return OK;
+}
+
+    void
+gui_mch_calc_cell_size(struct cellsize *cs_out)
+{
+    NSSize cellsize = [MMBackend sharedInstance].cellSize;
+    cs_out->cs_xpixel = round(cellsize.width);
+    cs_out->cs_ypixel = round(cellsize.height);
 }
 
 
@@ -1687,20 +1873,20 @@ gui_mch_flash(int msec UNUSED)
     guicolor_T
 gui_mch_get_color(char_u *name)
 {
+    guicolor_T color = gui_get_color_cmn(name);
+    if (color != INVALCOLOR)
+        return color;
+
     if (![MMBackend sharedInstance])
 	return INVALCOLOR;
 
     char_u *u8name = CONVERT_TO_UTF8(name);
 
     NSString *key = [NSString stringWithUTF8String:(char*)u8name];
-    guicolor_T color = [[MMBackend sharedInstance] lookupColorWithKey:key];
+    color = [[MMBackend sharedInstance] lookupColorWithKey:key];
 
     CONVERT_TO_UTF8_FREE(u8name);
-
-    if (color != INVALCOLOR)
-        return color;
-
-    return gui_get_color_cmn(name);
+    return color;
 }
 
 
@@ -1795,9 +1981,15 @@ gui_mch_set_shellsize(
  * Re-calculates size of the Vim view to fit within the window without having
  * to resize the window. Usually happens after UI elements have changed (e.g.
  * adding / removing a toolbar) when guioptions 'k' is set.
+ *
+ * In other GVim implementations this is a synchronous operation (via
+ * gui_mch_newfont). In MacVim we need to request the GUI process to resize us,
+ * and we do this asynchronously to avoid introducing sync points. It does mean
+ * Vim will temporarily draw/behave using the old size until the it receives
+ * the resize message from the GUI.
  */
     void
-gui_mch_resize_view()
+gui_mch_resize_view(void)
 {
     [[MMBackend sharedInstance] resizeView];
 }
@@ -1870,16 +2062,18 @@ gui_mch_enter_fullscreen(guicolor_T bg)
 
 
     void
-gui_mch_leave_fullscreen()
+gui_mch_leave_fullscreen(void)
 {
     [[MMBackend sharedInstance] leaveFullScreen];
 }
 
 
     void
-gui_mch_fuopt_update()
+gui_mch_fuopt_update(void)
 {
     if (!gui.in_use)
+        return;
+    if (!p_fullscreen)
         return;
 
     guicolor_T fg, bg;
@@ -1894,7 +2088,7 @@ gui_mch_fuopt_update()
 
 
     void
-gui_macvim_update_modified_flag()
+gui_macvim_update_modified_flag(void)
 {
     [[MMBackend sharedInstance] updateModifiedFlag];
 }
@@ -1929,9 +2123,9 @@ gui_macvim_add_to_find_pboard(char_u *pat)
 
     if (!s) return;
 
-    NSPasteboard *pb = [NSPasteboard pasteboardWithName:NSFindPboard];
+    NSPasteboard *pb = [NSPasteboard pasteboardWithName:NSPasteboardNameFind];
     NSArray *supportedTypes = [NSArray arrayWithObjects:VimFindPboardType,
-            NSStringPboardType, nil];
+            NSPasteboardTypeString, nil];
     [pb declareTypes:supportedTypes owner:nil];
 
     // Put two entries on the Find pasteboard:
@@ -1940,7 +2134,7 @@ gui_macvim_add_to_find_pboard(char_u *pat)
     // The second entry will be used by other applications when taking entries
     // off the Find pasteboard, whereas MacVim will use the first if present.
     [pb setString:s forType:VimFindPboardType];
-    [pb setString:[s stringByRemovingFindPatterns] forType:NSStringPboardType];
+    [pb setString:[s stringByRemovingFindPatterns] forType:NSPasteboardTypeString];
 }
 
     void
@@ -1961,7 +2155,7 @@ gui_macvim_set_thinstrokes(int thinStrokes)
 }
 
     void
-gui_macvim_wait_for_startup()
+gui_macvim_wait_for_startup(void)
 {
     MMBackend *backend = [MMBackend sharedInstance];
     if ([backend waitForAck])
@@ -1984,7 +2178,7 @@ gui_macvim_get_window_layout(int *count, int *layout)
 }
 
     void *
-gui_macvim_new_autoreleasepool()
+gui_macvim_new_autoreleasepool(void)
 {
     return (void *)[[NSAutoreleasePool alloc] init];
 }
@@ -2131,9 +2325,10 @@ serverPeekReply(int port, char_u **str)
  * Return -1 on error.
  */
     int
-serverReadReply(int port, char_u **str)
+serverReadReply(int port, char_u **str, int timeout)
 {
-    NSString *reply = [[MMBackend sharedInstance] waitForReplyOnPort:port];
+    NSString *reply = [[MMBackend sharedInstance] waitForReplyOnPort:port
+							     timeout:timeout];
     if (reply && str) {
         *str = [reply vimStringSave];
         return 0;
@@ -2545,3 +2740,114 @@ gui_macvim_set_background(int dark)
 {
     [[MMBackend sharedInstance] setBackground:dark];
 }
+
+#pragma region MacVim builtin functions
+#pragma mark MacVim builtin functions
+
+/// Implementation of showdefinition()
+void f_showdefinition(typval_T *argvars, typval_T *rettv UNUSED)
+{
+    if (!gui.in_use) {
+        emsg(_("E9000-M: Command only available in GUI mode"));
+        return;
+    }
+
+    if (in_vim9script() && check_for_string_arg(argvars, 0) == FAIL)
+	return;
+
+    char_u *lookup_text = tv_get_string(&argvars[0]);
+
+    varnumber_T screen_row = -1;
+    varnumber_T screen_col = -1;
+
+    if (argvars[1].v_type == VAR_DICT) {
+        // Retrieve the optional row/col from the caller. Note that this is
+        // designed so that the input object could just be the output of
+        // screenpos().
+	dict_T	    *d = argvars[1].vval.v_dict;
+        if (d != NULL) {
+            screen_row = dict_get_number_def(d, "row", -1);
+            screen_col = dict_get_number_def(d, "col", -1);
+        }
+    }
+
+    if (screen_row <= 0 || screen_col <= 0) {
+        // row/col are optional parameters, so if not given we just use the
+        // cursor position.
+        // We are essentially doing the following:
+        //   var curpos = getcurpos()
+        //   var screenpos = screenpos(win_getid(), curpos[1], curpos[2])
+        //   showDefinition(text, screenpos['row'], screenpos['col'])
+        //
+        // Note that we could either take screenpos['cursorcol'] or
+        // screenpos['col']. Both could make sense in some situations, but just
+        // for consistency with how this function is used, we just use 'col'.
+        // (It's consistent because this function is designed so that you can
+        // just pass the output of screenpos() directly into the 2nd argument).
+        varnumber_T lnum = 0, col = 0;
+        {
+            typval_T arg_winid_unknown;
+            init_tv(&arg_winid_unknown);
+            arg_winid_unknown.v_type = VAR_UNKNOWN;
+
+            typval_T args[1] = { arg_winid_unknown };
+
+            typval_T lrettv;
+
+            f_getcurpos(args, &lrettv);
+            if (lrettv.v_type == VAR_LIST) {
+                lnum = list_find(lrettv.vval.v_list, 1)->li_tv.vval.v_number;
+                col = list_find(lrettv.vval.v_list, 2)->li_tv.vval.v_number;
+                list_unref(lrettv.vval.v_list);
+            }
+        }
+        {
+            typval_T arg_winid;
+            init_tv(&arg_winid);
+            arg_winid.v_type = VAR_NUMBER;
+            arg_winid.vval.v_number = curwin->w_id;
+
+            typval_T arg_lnum;
+            init_tv(&arg_lnum);
+            arg_lnum.v_type = VAR_NUMBER;
+            arg_lnum.vval.v_number = lnum;
+
+            typval_T arg_col;
+            init_tv(&arg_col);
+            arg_col.v_type = VAR_NUMBER;
+            arg_col.vval.v_number = col;
+
+            typval_T args[3] = {
+                arg_winid,
+                arg_lnum,
+                arg_col,
+            };
+            typval_T lrettv;
+
+            f_screenpos(args, &lrettv);
+
+            screen_row = dict_get_number_def(lrettv.vval.v_dict, "row", -1);
+            screen_col = dict_get_number_def(lrettv.vval.v_dict, "col", -1);
+
+            dict_unref(lrettv.vval.v_dict);
+        }
+    }
+
+    NSString *lookup_text_str = [NSString stringWithVimString:lookup_text];
+    [[MMBackend sharedInstance] showDefinition:lookup_text_str
+                                           row:screen_row
+                                           col:screen_col];
+}
+
+#pragma endregion
+
+
+// -- Netbeans Integration Support -------------------------------------------
+
+#if defined(FEAT_NETBEANS_INTG) || defined(PROTO)
+    void
+netbeans_draw_multisign_indicator(int row UNUSED)
+{
+    // NOP
+}
+#endif // FEAT_NETBEANS_INTG

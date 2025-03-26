@@ -12,17 +12,14 @@
 #endif
 
 #ifdef FEAT_GUI_GTK
-# ifdef VMS // undef MIN and MAX because Intrinsic.h redefines them anyway
-#  ifdef MAX
-#   undef MAX
-#  endif
-#  ifdef MIN
-#   undef MIN
-#  endif
+# ifdef VMS
 #  include "gui_gtk_vms.h"
-# endif // VMS
+# endif
 # include <X11/Intrinsic.h>
+# pragma GCC diagnostic push
+# pragma GCC diagnostic ignored "-Wstrict-prototypes"
 # include <gtk/gtk.h>
+# pragma GCC diagnostic pop
 #endif
 
 #ifdef FEAT_GUI_HAIKU
@@ -128,9 +125,19 @@
 #endif
 #define DRAW_CURSOR		0x20	// drawing block cursor (win32)
 #define DRAW_STRIKE		0x40	// strikethrough
-#define DRAW_WIDE		0x80	// drawing wide char (MacVim)
-#define DRAW_COMP		0x100	// drawing composing char (MacVim)
-#define DRAW_TUNDERL		0x200	// drawing thick underline text (MacVim)
+// MacVim note: underdouble/underdotted/underdashed are not implemented in Vim yet.
+// These are MacVim-only for now.
+// IMPORTANT: If resolving a merge conflict when merging from upstream, if Vim decided
+//	      to use different values for these constants, MMCoreTextView.m would need
+//	      to be updated to reflect them as well, or the renderer won't understand
+//	      these values.
+#define DRAW_UNDERDOUBLE	0x80	// draw double underline
+#define DRAW_UNDERDOTTED	0x100	// draw dotted underline
+#define DRAW_UNDERDASHED	0x200	// draw dashed underline
+
+#define DRAW_WIDE		0x1000	// drawing wide char (MacVim)
+#define DRAW_COMP		0x2000	// drawing composing char (MacVim)
+#define DRAW_TUNDERL		0x3000	// drawing thick underline text (MacVim)
 
 // For our own tearoff menu item
 #define TEAR_STRING		"-->Detach"
@@ -183,7 +190,7 @@ typedef struct GuiScrollbar
 				// to reduce the count.
 #endif
 
-#if FEAT_GUI_HAIKU
+#ifdef FEAT_GUI_HAIKU
     VimScrollBar *id;		// Pointer to real scroll bar
 #endif
 #ifdef FEAT_GUI_PHOTON
@@ -271,6 +278,7 @@ typedef struct Gui
     int		scrollbar_height;   // Height of horizontal scrollbar
     int		left_sbar_x;	    // Calculated x coord for left scrollbar
     int		right_sbar_x;	    // Calculated x coord for right scrollbar
+    int         force_redraw;       // Force a redraw even e.g. not resized
 
 #ifdef FEAT_MENU
 # if !(defined(FEAT_GUI_GTK) || defined(FEAT_GUI_MACVIM))
@@ -400,19 +408,17 @@ typedef struct Gui
     char_u	*browse_fname;	    // file name from filedlg
 
     guint32	event_time;
+#endif	// FEAT_GUI_GTK
 
+#if defined(FEAT_GUI_GTK) || defined(FEAT_GUI_MSWIN)
     char_u ligatures_map[256];	    // ascii map for characters 0-255, value is
 				    // 1 if in 'guiligatures'
-#endif	// FEAT_GUI_GTK
+#endif
 
 #if defined(FEAT_GUI_TABLINE) \
 	&& (defined(FEAT_GUI_MSWIN) || defined(FEAT_GUI_MOTIF) \
 		|| defined(FEAT_GUI_HAIKU))
     int		tabline_height;
-#endif
-
-#ifdef FEAT_FOOTER
-    int		footer_height;	    // height of the message footer
 #endif
 
 #if defined(FEAT_TOOLBAR) \

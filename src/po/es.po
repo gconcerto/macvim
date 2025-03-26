@@ -1351,8 +1351,8 @@ msgstr " Completar definido por usuario (^U^N^P)"
 msgid " Omni completion (^O^N^P)"
 msgstr " Completar con método Omni (^O^N^P)"
 
-msgid " Spelling suggestion (s^N^P)"
-msgstr " Sugerencia de ortografía (s^N^P)"
+msgid " Spelling suggestion (^S^N^P)"
+msgstr " Sugerencia de ortografía (^S^N^P)"
 
 # Scroll has its own msgs, in its place there is the msg for local
 # * ctrl_x_mode = 0 (eg continue_status & CONT_LOCAL)  -- Acevedo
@@ -1765,7 +1765,7 @@ msgstr ""
 "-- startuptime <archivo>\tGuardar los mensajes de tiempo de inicio en "
 "<archivo>"
 
-msgid "--log <file>\tStart logging to <file> early"
+msgid "--log <file>\t\tStart logging to <file> early"
 msgstr "--log <archivo>\tIniciar registro en <archivo> pronto"
 
 msgid "-i <viminfo>\t\tUse <viminfo> instead of .viminfo"
@@ -2266,7 +2266,7 @@ msgstr "Se ha detectado un error al procesar %s:"
 msgid "line %4ld:"
 msgstr "línea %4ld:"
 
-msgid "Messages maintainer: Bram Moolenaar <Bram@vim.org>"
+msgid "Messages maintainer: The Vim Project"
 msgstr ""
 "Traducción: Proyecto vim-doc-es <https://www.assembla.com/wiki/show/vim-doc-"
 "es>, Victorhck <victorhck@opensuse.org>"
@@ -3700,7 +3700,7 @@ msgstr "escriba  :help<Intro>  o  <F1>  para obtener ayuda     "
 
 # MacVim only
 msgid "type  :help macvim<Enter>     for MacVim help "
-msgstr "       escriba  «:help macvim<Enter>»  para obtener ayuda para MacVim"
+msgstr "escriba  :help macvim<Enter>  para obtener ayuda para MacVim"
 
 msgid "type  :help version9<Enter>   for version info"
 msgstr "escriba  :help version9<Intro>  para obtener información de la versión"
@@ -6699,7 +6699,7 @@ msgstr "E804: No se puede usar '%' con \"Float\""
 msgid "E805: Using a Float as a Number"
 msgstr "E805: Usando \"Float\" como un \"Number\""
 
-msgid "E806: Using Float as a String"
+msgid "E806: Using a Float as a String"
 msgstr "E806: Usando \"Float\" como \"String\""
 
 msgid "E807: Expected Float argument for printf()"
@@ -7817,8 +7817,8 @@ msgstr "E1112: Elemento %d de lista, ancho de celda no válido"
 msgid "E1113: Overlapping ranges for 0x%lx"
 msgstr "E1113: Rangos superpuestos para 0x%lx"
 
-msgid "E1114: Only values of 0x100 and higher supported"
-msgstr "E1114: Solo se admiten valores de 0x100 y superiores"
+msgid "E1114: Only values of 0x80 and higher supported"
+msgstr "E1114: Solo se admiten valores de 0x80 y superiores"
 
 msgid "E1115: \"assert_fails()\" fourth argument must be a number"
 msgstr "E1115: El cuarto argumento \"assert_fails()\" debe ser un número"

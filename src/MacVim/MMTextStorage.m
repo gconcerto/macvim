@@ -47,14 +47,20 @@
 // TODO: What does DRAW_TRANSP flag do?  If the background isn't drawn when
 // this flag is set, then sometimes the character after the cursor becomes
 // blank.  Everything seems to work fine by just ignoring this flag.
-#define DRAW_TRANSP               0x01    /* draw with transparant bg */
-#define DRAW_BOLD                 0x02    /* draw bold text */
-#define DRAW_UNDERL               0x04    /* draw underline text */
-#define DRAW_UNDERC               0x08    /* draw undercurl text */
-#define DRAW_ITALIC               0x10    /* draw italic text */
+#define DRAW_TRANSP               0x01    // draw with transparent bg
+#define DRAW_BOLD                 0x02    // draw bold text
+#define DRAW_UNDERL               0x04    // draw underline text
+#define DRAW_UNDERC               0x08    // draw undercurl text
+#define DRAW_ITALIC               0x10    // draw italic text
 #define DRAW_CURSOR               0x20
-#define DRAW_WIDE                 0x80    /* draw wide text */
-#define DRAW_TUNDERL              0x200   /* draw thick underline text */
+#define DRAW_STRIKE               0x40    // draw strikethrough text
+#define DRAW_UNDERDOUBLE          0x80      // draw double underline
+#define DRAW_UNDERDOTTED          0x100      // draw dotted underline
+#define DRAW_UNDERDASHED          0x200      // draw dashed underline
+#define DRAW_WIDE                 0x1000  // (MacVim only) draw wide text
+#define DRAW_COMP                 0x2000  // (MacVim only) drawing composing char
+#define DRAW_TUNDERL              0x3000   // draw thick underline text
+
 
 static NSString *MMWideCharacterAttributeName = @"MMWideChar";
 
@@ -332,6 +338,12 @@ static NSString *MMWideCharacterAttributeName = @"MMWideChar";
         NSNumber *value = [NSNumber numberWithInt:(NSUnderlineStyleThick
                 | NSUnderlinePatternSolid)]; // | NSUnderlineByWordMask
         [attributes setObject:value forKey:NSUnderlineStyleAttributeName];
+    }
+
+    if (flags & DRAW_STRIKE) {
+        NSNumber *value = [NSNumber numberWithInt:(NSUnderlineStyleSingle
+                | NSUnderlinePatternSolid)]; // | NSUnderlineByWordMask
+        [attributes setObject:value forKey:NSStrikethroughStyleAttributeName];
     }
 
     if (flags & DRAW_UNDERC) {
@@ -810,8 +822,8 @@ static NSString *MMWideCharacterAttributeName = @"MMWideChar";
 - (NSRect)rectForRowsInRange:(NSRange)range
 {
     NSRect rect = { {0, 0}, {0, 0} };
-    unsigned start = range.location > maxRows ? maxRows : range.location;
-    unsigned length = range.length;
+    NSUInteger start = range.location > maxRows ? maxRows : range.location;
+    NSUInteger length = range.length;
 
     if (start+length > maxRows)
         length = maxRows - start;
@@ -825,8 +837,8 @@ static NSString *MMWideCharacterAttributeName = @"MMWideChar";
 - (NSRect)rectForColumnsInRange:(NSRange)range
 {
     NSRect rect = { {0, 0}, {0, 0} };
-    unsigned start = range.location > maxColumns ? maxColumns : range.location;
-    unsigned length = range.length;
+    NSUInteger start = range.location > maxColumns ? maxColumns : range.location;
+    NSUInteger length = range.length;
 
     if (start+length > maxColumns)
         length = maxColumns - start;
@@ -897,6 +909,9 @@ static NSString *MMWideCharacterAttributeName = @"MMWideChar";
         if (fh < 1.0f) fh = 1.0f;
 
         fitRows = floor(size.height/fh);
+        // Sanity checking in case unusual window sizes lead to degenerate results
+        if (fitRows < 1)
+            fitRows = 1;
         fitSize.height = fh*fitRows;
     }
 
@@ -905,6 +920,9 @@ static NSString *MMWideCharacterAttributeName = @"MMWideChar";
         if (fw < 1.0f) fw = 1.0f;
 
         fitCols = floor(size.width/fw);
+        // Sanity checking in case unusual window sizes lead to degenerate results
+        if (fitCols < 1)
+            fitCols = 1;
         fitSize.width = fw*fitCols;
     }
 
@@ -1028,7 +1046,7 @@ static NSString *MMWideCharacterAttributeName = @"MMWideChar";
         return NSMakeRange(row*(actualColumns+1) + col, cells);
 
     NSString *string = [backingStore string];
-    unsigned stringLen = [string length];
+    NSUInteger stringLen = [string length];
     NSRange r, range = { NSNotFound, 0 };
     unsigned idx;
     int i;
@@ -1037,7 +1055,7 @@ static NSString *MMWideCharacterAttributeName = @"MMWideChar";
             || col+cells > actualColumns) {
 #if MM_TS_PARANOIA_LOG
         ASLogErr(@"row=%d col=%d cells=%d is out of range (length=%d)",
-                 row, col, cells, stringLen);
+                 row, col, cells, (int)stringLen);
 #endif
         return range;
     }
@@ -1155,7 +1173,7 @@ static NSString *MMWideCharacterAttributeName = @"MMWideChar";
 
         *pcol = i;
         cache->col = i;
-        cache->colOffset = idx - range.location;
+        cache->colOffset = idx - (unsigned)range.location;
 #endif
     }
 #else
@@ -1248,7 +1266,7 @@ static NSString *MMWideCharacterAttributeName = @"MMWideChar";
 
         [backingStore replaceCharactersInRange:invalidRange withString:@" "];
 
-        end = NSMaxRange(invalidRange);
+        end = (unsigned)NSMaxRange(invalidRange);
         range.length -= end - range.location;
         range.location = end;
     }

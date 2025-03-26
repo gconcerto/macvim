@@ -15,6 +15,16 @@
 @class MMTouchBarInfo;
 
 
+#if MAC_OS_X_VERSION_MAX_ALLOWED >= MAC_OS_X_VERSION_10_12
+/// Button used for Touch Bar support, with an additional metadata to store the
+/// Vim command it should send.
+@interface MMTouchBarButton : NSButton {
+    NSArray *_desc;
+}
+- (NSArray *)desc;
+- (void)setDesc:(NSArray *)desc;
+@end
+#endif
 
 @interface MMVimController : NSObject<
     NSToolbarDelegate
@@ -24,7 +34,7 @@
 #endif
     >
 {
-    unsigned            identifier;
+    unsigned long       identifier;
     BOOL                isInitialized;
     MMWindowController  *windowController;
     id                  backendProxy;
@@ -46,8 +56,15 @@
     BOOL                hasModifiedBuffer;
 }
 
+/// Mapping from internal names for system monospace font to user-visible one.
+/// E.g. ".AppleSystemUIFontMonospaced-Medium" -> "-monospace-Medium"
+@property (nonatomic, readonly) NSMutableDictionary<NSString*, NSString*>* systemFontNamesToAlias;
+
+@property (nonatomic, readonly) BOOL isHandlingInputQueue;
+
 - (id)initWithBackend:(id)backend pid:(int)processIdentifier;
-- (unsigned)vimControllerId;
+- (void)uninitialize;
+- (unsigned long)vimControllerId;
 - (id)backendProxy;
 - (int)pid;
 - (void)setServerName:(NSString *)name;
@@ -63,7 +80,7 @@
 - (void)cleanup;
 - (void)dropFiles:(NSArray *)filenames forceOpen:(BOOL)force;
 - (void)file:(NSString *)filename draggedToTabAtIndex:(NSUInteger)tabIndex;
-- (void)filesDraggedToTabBar:(NSArray *)filenames;
+- (void)filesDraggedToTabline:(NSArray *)filenames;
 - (void)dropString:(NSString *)string;
 - (void)appearanceChanged:(int)flag;
 
@@ -75,6 +92,9 @@
 - (NSString *)evaluateVimExpression:(NSString *)expr;
 - (id)evaluateVimExpressionCocoa:(NSString *)expr
                      errorString:(NSString **)errstr;
+- (BOOL)hasSelectedText;
+- (NSString *)selectedText;
+- (void)replaceSelectedText:(NSString *)text;
 - (void)processInputQueue:(NSArray *)queue;
 #if MAC_OS_X_VERSION_MAX_ALLOWED >= MAC_OS_X_VERSION_10_12_2
 - (NSTouchBar *)makeTouchBar;

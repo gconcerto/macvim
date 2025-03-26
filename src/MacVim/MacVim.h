@@ -1,4 +1,4 @@
-/* vi:set ts=8 sts=4 sw=4 ft=objc:
+/* vi:set ts=8 sts=4 sw=4 ft=objc fdm=syntax:
  *
  * VIM - Vi IMproved		by Bram Moolenaar
  *				MacVim GUI port by Bjorn Winckler
@@ -8,7 +8,12 @@
  * See README.txt for an overview of the Vim source code.
  */
 
+// This file contains root-level commonly used definitions that both Vim and
+// MacVim processes need access to.
+
 #import <Cocoa/Cocoa.h>
+
+#pragma region Backward compatibility defines
 
 // Taken from /usr/include/AvailabilityMacros.h
 #ifndef MAC_OS_X_VERSION_10_7
@@ -38,6 +43,24 @@
 #ifndef MAC_OS_X_VERSION_10_14
 # define MAC_OS_X_VERSION_10_14 101400
 #endif
+#ifndef MAC_OS_X_VERSION_10_15
+# define MAC_OS_X_VERSION_10_15 101500
+#endif
+#ifndef MAC_OS_VERSION_11_0
+# define MAC_OS_VERSION_11_0 110000
+#endif
+#ifndef MAC_OS_VERSION_12_0
+# define MAC_OS_VERSION_12_0 120000
+#endif
+#ifndef MAC_OS_VERSION_13_0
+# define MAC_OS_VERSION_13_0 130000
+#endif
+#ifndef MAC_OS_VERSION_14_0
+# define MAC_OS_VERSION_14_0 140000
+#endif
+#ifndef MAC_OS_VERSION_15_0
+# define MAC_OS_VERSION_15_0 150000
+#endif
 
 #ifndef NSAppKitVersionNumber10_10
 # define NSAppKitVersionNumber10_10 1343
@@ -45,8 +68,14 @@
 #ifndef NSAppKitVersionNumber10_10_Max
 # define NSAppKitVersionNumber10_10_Max 1349
 #endif
+#ifndef NSAppKitVersionNumber10_11
+# define NSAppKitVersionNumber10_11 1404
+#endif
 #ifndef NSAppKitVersionNumber10_12
 # define NSAppKitVersionNumber10_12 1504
+#endif
+#ifndef NSAppKitVersionNumber10_12_2
+# define NSAppKitVersionNumber10_12_2 1504.76
 #endif
 #ifndef NSAppKitVersionNumber10_13
 # define NSAppKitVersionNumber10_13 1561
@@ -54,12 +83,39 @@
 #ifndef NSAppKitVersionNumber10_14
 # define NSAppKitVersionNumber10_14 1671
 #endif
+#ifndef NSAppKitVersionNumber10_15
+# define NSAppKitVersionNumber10_15 1894
+#endif
+#ifndef NSAppKitVersionNumber11_0
+# define NSAppKitVersionNumber11_0 2022
+#endif
+
+// Macro to detect runtime OS version. Ideally, we would just like to use
+// @available to test for this because the compiler can optimize it out
+// depending on your min/max OS configuration. However, it was added in Xcode 9
+// (macOS 10.13 SDK). For any code that we want to be compilable for Xcode 8
+// (macOS 10.12) or below, we need to use the macro below which will
+// selectively use NSAppKitVersionNumber instead.
+#if MAC_OS_X_VERSION_MAX_ALLOWED >= MAC_OS_X_VERSION_10_13
+// Xcode 9+, can use @available, which is more efficient.
+# define AVAILABLE_MAC_OS(MAJOR, MINOR) @available(macos MAJOR##.##MINOR, *)
+# define AVAILABLE_MAC_OS_PATCH(MAJOR, MINOR, PATCH) @available(macos MAJOR##.##MINOR##.##PATCH, *)
+#else
+// Xcode 8 or below. Use the old-school NSAppKitVersionNumber check.
+# define AVAILABLE_MAC_OS(MAJOR, MINOR) NSAppKitVersionNumber >= NSAppKitVersionNumber##MAJOR##_##MINOR
+# define AVAILABLE_MAC_OS_PATCH(MAJOR, MINOR, PATCH) NSAppKitVersionNumber >= NSAppKitVersionNumber##MAJOR##_##MINOR##_##PATCH
+#endif
+
+// Deprecated constants. Since these are constants, we just need the compiler,
+// not the runtime to know about them. As such, we can use MAX_ALLOWED to
+// determine if we need to map or not.
 
 #if MAC_OS_X_VERSION_MAX_ALLOWED < MAC_OS_X_VERSION_10_12
 // Deprecated constants in 10.12 SDK
 # define NSAlertStyleCritical NSCriticalAlertStyle
 # define NSAlertStyleInformational NSInformationalAlertStyle
 # define NSAlertStyleWarning NSWarningAlertStyle
+# define NSButtonTypeSwitch NSSwitchButton
 # define NSCompositingOperationSourceOver NSCompositeSourceOver
 # define NSCompositingOperationDifference NSCompositeDifference
 # define NSControlSizeRegular NSRegularControlSize
@@ -88,6 +144,26 @@
 # define NSWindowStyleMaskUnifiedTitleAndToolbar NSUnifiedTitleAndToolbarWindowMask
 #endif
 
+#if MAC_OS_X_VERSION_MAX_ALLOWED < MAC_OS_X_VERSION_10_13
+// Deprecated constants in 10.13 SDK
+#define NSControlStateValueOn NSOnState
+#define NSControlStateValueOff NSOffState
+
+// Newly introduced symbols in 10.13 SDK
+typedef NSString* NSPasteboardType;
+typedef NSString* NSAttributedStringKey;
+#endif
+
+// Deprecated runtime values. Since these are runtime values, we need to use the
+// minimum required OS as determining factor. Otherwise it would crash.
+
+#if MAC_OS_X_VERSION_MIN_REQUIRED <  MAC_OS_X_VERSION_10_13
+// Deprecated runtime values in 10.13 SDK.
+# define NSPasteboardNameFind NSFindPboard
+#endif
+
+#pragma endregion
+
 #import <asl.h>
 #if MAC_OS_X_VERSION_MAX_ALLOWED < MAC_OS_X_VERSION_10_12
 # define MM_USE_ASL
@@ -95,6 +171,7 @@
 # import <os/log.h>
 #endif
 
+#pragma region Shared protocols
 
 //
 // This is the protocol MMBackend implements.
@@ -115,7 +192,10 @@
 - (NSString *)evaluateExpression:(in bycopy NSString *)expr;
 - (id)evaluateExpressionCocoa:(in bycopy NSString *)expr
                   errorString:(out bycopy NSString **)errstr;
-- (BOOL)starRegisterToPasteboard:(byref NSPasteboard *)pboard;
+- (BOOL)hasSelectedText;
+- (NSString *)selectedText;
+- (oneway void)replaceSelectedText:(in bycopy NSString *)text;
+- (BOOL)mouseScreenposIsSelection:(int)row column:(int)column selRow:(byref int *)startRow selCol:(byref int *)startCol;
 - (oneway void)acknowledgeConnection;
 @end
 
@@ -133,9 +213,9 @@
 // connectBackend:pid: and processInput:forIdentifier:).
 //
 @protocol MMAppProtocol
-- (unsigned)connectBackend:(byref in id <MMBackendProtocol>)proxy pid:(int)pid;
+- (unsigned long)connectBackend:(byref in id <MMBackendProtocol>)proxy pid:(int)pid;
 - (oneway void)processInput:(in bycopy NSArray *)queue
-              forIdentifier:(unsigned)identifier;
+              forIdentifier:(unsigned long)identifier;
 - (NSArray *)serverList;
 @end
 
@@ -168,7 +248,9 @@
                  client:(in byref id <MMVimClientProtocol>)client;
 @end
 
+#pragma endregion
 
+#pragma region IPC messages
 
 //
 // The following enum lists all messages that are passed between MacVim and
@@ -218,8 +300,10 @@ extern const char * const MMVimMsgIDStrings[];
     MSG(ScrollbarEventMsgID) \
     MSG(SetFontMsgID) \
     MSG(SetWideFontMsgID) \
+    MSG(UpdateCellSizeMsgID) \
     MSG(VimShouldCloseMsgID) \
     MSG(SetDefaultColorsMsgID) \
+    MSG(SetTablineColorsMsgID) \
     MSG(ExecuteActionMsgID) \
     MSG(DropFilesMsgID) \
     MSG(DropStringMsgID) \
@@ -266,7 +350,7 @@ extern const char * const MMVimMsgIDStrings[];
     MSG(SetTooltipMsgID) \
     MSG(GestureMsgID) \
     MSG(AddToMRUMsgID) \
-    MSG(BackingPropertiesChangedMsgID) \
+    MSG(RedrawMsgID) \
     MSG(SetBlurRadiusMsgID) \
     MSG(SetBackgroundOptionMsgID) \
     MSG(NotifyAppearanceChangeMsgID) \
@@ -274,6 +358,8 @@ extern const char * const MMVimMsgIDStrings[];
     MSG(DisableLigaturesMsgID) \
     MSG(EnableThinStrokesMsgID) \
     MSG(DisableThinStrokesMsgID) \
+    MSG(ShowDefinitionMsgID) \
+    MSG(LoopBackMsgID) /* Simple message that Vim will reflect back to MacVim */ \
     MSG(LastMsgID) \
 
 enum {
@@ -320,12 +406,14 @@ enum {
 };
 
 enum {
-    MMGestureSwipeLeft,
+    MMGestureSwipeLeft = 0,
     MMGestureSwipeRight,
     MMGestureSwipeUp,
     MMGestureSwipeDown,
     MMGestureForceClick,
 };
+
+#pragma endregion
 
 
 // Create a string holding the labels of all messages in message queue for
@@ -336,13 +424,13 @@ NSString *debugStringForMessageQueue(NSArray *queue);
 
 // Shared user defaults (most user defaults are in Miscellaneous.h).
 // Contrary to the user defaults in Miscellaneous.h these defaults are not
-// intitialized to any default values.  That is, unless the user sets them
+// initialized to any default values.  That is, unless the user sets them
 // these keys will not be present in the user default database.
 extern NSString *MMLogLevelKey;
 extern NSString *MMLogToStdErrKey;
 
 // Argument used to stop MacVim from opening an empty window on startup
-// (techincally this is a user default but should not be used as such).
+// (technically this is a user default but should not be used as such).
 extern NSString *MMNoWindowKey;
 
 // Argument used to control MacVim sharing search text via the Find Pasteboard.
@@ -360,7 +448,8 @@ enum {
 
 extern NSString *VimFindPboardType;
 
-
+/// Alias for system monospace font name
+extern NSString *MMSystemFontAlias;
 
 
 @interface NSString (MMExtras)
@@ -402,6 +491,7 @@ extern NSString *VimFindPboardType;
 // MacVim Apple Event Constants
 #define keyMMUntitledWindow       'MMuw'
 
+#pragma region Logging
 
 // Logging related functions and macros.
 //
@@ -435,7 +525,7 @@ extern NSString *VimFindPboardType;
 
 extern int ASLogLevel;
 
-void ASLInit();
+void ASLInit(void);
 
 #if defined(MM_USE_ASL)
 
@@ -493,3 +583,5 @@ void ASLInit();
 # define ASLogTmp(fmt, ...)    ASLog(OS_LOG_TYPE_DEFAULT, fmt, ##__VA_ARGS__)
 
 #endif
+
+#pragma endregion

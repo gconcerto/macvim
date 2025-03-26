@@ -277,19 +277,23 @@ enum key_extra
     , KE_COMMAND = 103		// <Cmd> special key
     , KE_SCRIPT_COMMAND = 104	// <ScriptCmd> special key
     , KE_S_BS = 105		// shift + <BS>
+    , KE_SID = 106		// <SID> special key, followed by {nr};
+    , KE_ESC = 107		// used for K_ESC
 #ifdef FEAT_GUI_MACVIM
-    , KE_SWIPELEFT = 106	// Swipe trackpad left
-    , KE_SWIPERIGHT = 107	// Swipe trackpad right
-    , KE_SWIPEUP = 108		// Swipe trackpad up
-    , KE_SWIPEDOWN = 109	// Swipe trackpad down
-    , KE_FORCECLICK = 110	// Force click on trackpad
+    , KE_SWIPELEFT = 108	// Swipe trackpad left
+    , KE_SWIPERIGHT = 109	// Swipe trackpad right
+    , KE_SWIPEUP = 110		// Swipe trackpad up
+    , KE_SWIPEDOWN = 111	// Swipe trackpad down
+    , KE_FORCECLICK = 112	// Force click on trackpad
 #endif
 };
 
 /*
- * the three byte codes are replaced with the following int when using vgetc()
+ * The three-byte codes are replaced with a negative number when using vgetc().
  */
 #define K_ZERO		TERMCAP2KEY(KS_ZERO, KE_FILLER)
+
+#define K_ESC		TERMCAP2KEY(KS_EXTRA, KE_ESC)
 
 #define K_UP		TERMCAP2KEY('k', 'u')
 #define K_DOWN		TERMCAP2KEY('k', 'd')
@@ -301,10 +305,12 @@ enum key_extra
 #define K_C_LEFT	TERMCAP2KEY(KS_EXTRA, KE_C_LEFT)
 #define K_S_RIGHT	TERMCAP2KEY('%', 'i')
 #define K_C_RIGHT	TERMCAP2KEY(KS_EXTRA, KE_C_RIGHT)
+
 #define K_S_HOME	TERMCAP2KEY('#', '2')
 #define K_C_HOME	TERMCAP2KEY(KS_EXTRA, KE_C_HOME)
 #define K_S_END		TERMCAP2KEY('*', '7')
 #define K_C_END		TERMCAP2KEY(KS_EXTRA, KE_C_END)
+
 #define K_TAB		TERMCAP2KEY(KS_EXTRA, KE_TAB)
 #define K_S_TAB		TERMCAP2KEY('k', 'B')
 #define K_S_BS		TERMCAP2KEY(KS_EXTRA, KE_S_BS)
@@ -490,6 +496,7 @@ enum key_extra
 
 #define K_COMMAND	TERMCAP2KEY(KS_EXTRA, KE_COMMAND)
 #define K_SCRIPT_COMMAND TERMCAP2KEY(KS_EXTRA, KE_SCRIPT_COMMAND)
+#define K_SID		TERMCAP2KEY(KS_EXTRA, KE_SID)
 
 #ifdef FEAT_GUI_MACVIM
 # define K_SWIPELEFT	TERMCAP2KEY(KS_EXTRA, KE_SWIPELEFT)
@@ -508,8 +515,8 @@ enum key_extra
 #define MOD_MASK_2CLICK	    0x20	// use MOD_MASK_MULTI_CLICK
 #define MOD_MASK_3CLICK	    0x40	// use MOD_MASK_MULTI_CLICK
 #define MOD_MASK_4CLICK	    0x60	// use MOD_MASK_MULTI_CLICK
-#ifdef MACOS_X
-# define MOD_MASK_CMD	    0x80
+#if defined(MACOS_X) || defined(FEAT_GUI_GTK)
+# define MOD_MASK_CMD	    0x80        // aka SUPER
 #endif
 
 #define MOD_MASK_MULTI_CLICK	(MOD_MASK_2CLICK|MOD_MASK_3CLICK|MOD_MASK_4CLICK)

@@ -1,5 +1,8 @@
 /* vim9type.c */
+type_T *get_type_ptr(garray_T *type_gap);
+type_T *copy_type(type_T *type, garray_T *type_gap);
 void clear_type_list(garray_T *gap);
+void clear_func_type_list(garray_T *gap, type_T **func_type);
 type_T *alloc_type(type_T *type);
 void free_type(type_T *type);
 void set_tv_type(typval_T *tv, type_T *type);
@@ -8,8 +11,10 @@ type_T *get_dict_type(type_T *member_type, garray_T *type_gap);
 type_T *alloc_func_type(type_T *ret_type, int argcount, garray_T *type_gap);
 type_T *get_func_type(type_T *ret_type, int argcount, garray_T *type_gap);
 int func_type_add_arg_types(type_T *functype, int argcount, garray_T *type_gap);
+int type_any_or_unknown(type_T *type);
 int need_convert_to_bool(type_T *type, typval_T *tv);
 type_T *typval2type(typval_T *tv, int copyID, garray_T *type_gap, int flags);
+int valid_declaration_type(type_T *type);
 type_T *typval2type_vimvar(typval_T *tv, garray_T *type_gap);
 int check_typval_arg_type(type_T *expected, typval_T *actual_tv, char *func_name, int arg_idx);
 int check_typval_type(type_T *expected, typval_T *actual_tv, where_T where);
@@ -31,4 +36,6 @@ type_T *get_member_type_from_stack(int count, int skip, cctx_T *cctx);
 char *vartype_name(vartype_T type);
 char *type_name(type_T *type, char **tofree);
 void f_typename(typval_T *argvars, typval_T *rettv);
+int check_typval_is_value(typval_T *tv);
+int check_type_is_value(type_T *type);
 /* vim: set ft=c : */

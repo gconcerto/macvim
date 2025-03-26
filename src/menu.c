@@ -46,6 +46,10 @@ static int s_tearoffs = FALSE;
 static int menu_is_hidden(char_u *name);
 static int menu_is_tearoff(char_u *name);
 
+// When non-zero no menu must be added or cleared.  Prevents the list of menus
+// changing while listing them.
+static int menus_locked = 0;
+
 #if defined(FEAT_MULTI_LANG) || defined(FEAT_TOOLBAR)
 static char_u *menu_skip_part(char_u *p);
 #endif
@@ -96,6 +100,21 @@ get_root_menu(char_u *name)
     if (menu_is_winbar(name))
 	return &curwin->w_winbar;
     return &root_menu;
+}
+
+/*
+ * If "menus_locked" is set then give an error and return TRUE.
+ * Otherwise return FALSE.
+ */
+    static int
+is_menus_locked(void)
+{
+    if (menus_locked > 0)
+    {
+	emsg(_(e_cannot_change_menus_while_listing));
+	return TRUE;
+    }
+    return FALSE;
 }
 
 /*
@@ -300,7 +319,7 @@ ex_menu(
     root_menu_ptr = get_root_menu(menu_path);
     if (root_menu_ptr == &curwin->w_winbar)
 	// Assume the window toolbar menu will change.
-	redraw_later(NOT_VALID);
+	redraw_later(UPD_NOT_VALID);
 
     if (enable != MAYBE)
     {
@@ -330,6 +349,9 @@ ex_menu(
     }
     else if (unmenu)
     {
+	if (is_menus_locked())
+	    goto theend;
+
 	/*
 	 * Delete menu(s).
 	 */
@@ -358,6 +380,9 @@ ex_menu(
     }
     else
     {
+	if (is_menus_locked())
+	    goto theend;
+
 	/*
 	 * Add menu(s).
 	 * Replace special key codes.
@@ -370,7 +395,7 @@ ex_menu(
 	else if (modes & MENU_TIP_MODE)
 	    map_buf = NULL;	// Menu tips are plain text.
 	else
-	    map_to = replace_termcodes(map_to, &map_buf,
+	    map_to = replace_termcodes(map_to, &map_buf, 0,
 			REPTERM_DO_LT | (special ? REPTERM_SPECIAL : 0), NULL);
 	menuarg.modes = modes;
 #ifdef FEAT_TOOLBAR
@@ -437,6 +462,7 @@ ex_menu(
 		--curwin->w_height;
 	    curwin->w_winbar_height = h;
 	}
+	curwin->w_prev_height = curwin->w_height;
     }
 
 theend:
@@ -1150,11 +1176,14 @@ show_menus(char_u *path_name, int modes)
     }
     vim_free(path_name);
 
-    // Now we have found the matching menu, and we list the mappings
-						    // Highlight title
-    msg_puts_title(_("\n--- Menus ---"));
+    // make sure the list of menus doesn't change while listing them
+    ++menus_locked;
 
+    // list the matching menu mappings
+    msg_puts_title(_("\n--- Menus ---"));
     show_menus_recursive(parent, modes, 0);
+
+    --menus_locked;
     return OK;
 }
 
@@ -1738,12 +1767,12 @@ popup_mode_name(char_u *name, int idx)
     int		i;
 
     p = vim_strnsave(name, len + mode_chars_len);
-    if (p != NULL)
-    {
-	mch_memmove(p + 5 + mode_chars_len, p + 5, (size_t)(len - 4));
-	for (i = 0; i < mode_chars_len; ++i)
-	    p[5 + i] = menu_mode_chars[idx][i];
-    }
+    if (p == NULL)
+	return NULL;
+
+    mch_memmove(p + 5 + mode_chars_len, p + 5, (size_t)(len - 4));
+    for (i = 0; i < mode_chars_len; ++i)
+	p[5 + i] = menu_mode_chars[idx][i];
     return p;
 }
 
@@ -1883,10 +1912,10 @@ menu_is_child_of_popup(vimmenu_T *menu)
     int
 menu_is_toolbar(char_u *name)
 {
-    return (STRNCMP(name, "ToolBar", 7) == 0) 
-	#if defined(FEAT_TOUCHBAR) 
+    return (STRNCMP(name, "ToolBar", 7) == 0)
+	#if defined(FEAT_TOUCHBAR)
 	|| (STRNCMP(name, "TouchBar", 8) == 0)
-	#endif	
+	#endif
 	;
 }
 
@@ -1987,24 +2016,24 @@ show_popupmenu(void)
 	    break;
 
     // Only show a popup when it is defined and has entries
-    if (menu != NULL && menu->children != NULL)
-    {
+    if (menu == NULL || menu->children == NULL)
+	return;
+
 # if defined(FEAT_GUI)
-	if (gui.in_use)
-	{
-	    // Update the menus now, in case the MenuPopup autocommand did
-	    // anything.
-	    gui_update_menus(0);
-	    gui_mch_show_popupmenu(menu);
-	}
+    if (gui.in_use)
+    {
+	// Update the menus now, in case the MenuPopup autocommand did
+	// anything.
+	gui_update_menus(0);
+	gui_mch_show_popupmenu(menu);
+    }
 # endif
 #  if defined(FEAT_GUI) && defined(FEAT_TERM_POPUP_MENU)
-	else
+    else
 #  endif
 #  if defined(FEAT_TERM_POPUP_MENU)
-	    pum_show_popupmenu(menu);
+	pum_show_popupmenu(menu);
 #  endif
-    }
 }
 #endif
 
@@ -2234,39 +2263,39 @@ gui_add_tearoff(char_u *tearpath, int *pri_tab, int pri_idx)
     vimmenu_T	menuarg;
 
     tbuf = alloc(5 + (unsigned int)STRLEN(tearpath));
-    if (tbuf != NULL)
-    {
-	tbuf[0] = K_SPECIAL;
-	tbuf[1] = K_SECOND(K_TEAROFF);
-	tbuf[2] = K_THIRD(K_TEAROFF);
-	STRCPY(tbuf + 3, tearpath);
-	STRCAT(tbuf + 3, "\r");
+    if (tbuf == NULL)
+	return;
 
-	STRCAT(tearpath, ".");
-	STRCAT(tearpath, TEAR_STRING);
+    tbuf[0] = K_SPECIAL;
+    tbuf[1] = K_SECOND(K_TEAROFF);
+    tbuf[2] = K_THIRD(K_TEAROFF);
+    STRCPY(tbuf + 3, tearpath);
+    STRCAT(tbuf + 3, "\r");
 
-	// Priority of tear-off is always 1
-	t = pri_tab[pri_idx + 1];
-	pri_tab[pri_idx + 1] = 1;
+    STRCAT(tearpath, ".");
+    STRCAT(tearpath, TEAR_STRING);
+
+    // Priority of tear-off is always 1
+    t = pri_tab[pri_idx + 1];
+    pri_tab[pri_idx + 1] = 1;
 
 #ifdef FEAT_TOOLBAR
-	menuarg.iconfile = NULL;
-	menuarg.iconidx = -1;
-	menuarg.icon_builtin = FALSE;
+    menuarg.iconfile = NULL;
+    menuarg.iconidx = -1;
+    menuarg.icon_builtin = FALSE;
 #endif
-	menuarg.noremap[0] = REMAP_NONE;
-	menuarg.silent[0] = TRUE;
+    menuarg.noremap[0] = REMAP_NONE;
+    menuarg.silent[0] = TRUE;
 
-	menuarg.modes = MENU_ALL_MODES;
-	add_menu_path(tearpath, &menuarg, pri_tab, tbuf, FALSE);
+    menuarg.modes = MENU_ALL_MODES;
+    add_menu_path(tearpath, &menuarg, pri_tab, tbuf, FALSE);
 
-	menuarg.modes = MENU_TIP_MODE;
-	add_menu_path(tearpath, &menuarg, pri_tab,
-		(char_u *)_("Tear off this menu"), FALSE);
+    menuarg.modes = MENU_TIP_MODE;
+    add_menu_path(tearpath, &menuarg, pri_tab,
+	    (char_u *)_("Tear off this menu"), FALSE);
 
-	pri_tab[pri_idx + 1] = t;
-	vim_free(tbuf);
-    }
+    pri_tab[pri_idx + 1] = t;
+    vim_free(tbuf);
 }
 
 /*
@@ -2297,8 +2326,8 @@ gui_destroy_tearoffs_recurse(vimmenu_T *menu)
 /*
  * Execute "menu".  Use by ":emenu" and the window toolbar.
  * "eap" is NULL for the window toolbar.
- * "mode_idx" specifies a MENU_INDEX_ value, use -1 to depend on the current
- * state.
+ * "mode_idx" specifies a MENU_INDEX_ value, use MENU_INDEX_INVALID to depend
+ * on the current state.
  */
     void
 execute_menu(exarg_T *eap, vimmenu_T *menu, int mode_idx)
@@ -2311,7 +2340,7 @@ execute_menu(exarg_T *eap, vimmenu_T *menu, int mode_idx)
     if (idx < 0)
     {
 	// Use the Insert mode entry when returning to Insert mode.
-	if (restart_edit && !current_sctx.sc_sid)
+	if (restart_edit && current_sctx.sc_sid == 0)
 	{
 	    idx = MENU_INDEX_INSERT;
 	}
@@ -2375,9 +2404,24 @@ execute_menu(exarg_T *eap, vimmenu_T *menu, int mode_idx)
     if (idx == MENU_INDEX_INVALID || eap == NULL)
 	idx = MENU_INDEX_NORMAL;
 
-    if (menu->strings[idx] != NULL && menu->strings[idx][0] != NUL
-						&& (menu->modes & (1 << idx)))
+    if (menu->strings[idx] != NULL && (menu->modes & (1 << idx)))
     {
+#ifdef FEAT_GUI_MACVIM
+	// When a menu is bound to <Nop>, we let :emenu fall through to execute
+	// the associated macaction (if one exists) instead. Otherwise, we
+	// simply execute the associated Vim command. Note that if you
+	// physically press the menu item (or the associated shortcut key), the
+	// macaction is always invoked even if the menu isn't bound to <Nop>.
+        if (menu->mac_action != NULL && menu->strings[idx] != NULL && menu->strings[idx][0] == NUL)
+	{
+	    // Count on the fact taht ex_macaction() only looks at eap->arg.
+	    old_arg = eap->arg;
+	    eap->arg = menu->mac_action;
+	    ex_macaction(eap);
+	    eap->arg = old_arg;
+	}
+#endif // FEAT_GUI_MACVIM
+
 	// When executing a script or function execute the commands right now.
 	// Also for the window toolbar.
 	// Otherwise put them in the typeahead buffer.
@@ -2424,20 +2468,6 @@ execute_menu(exarg_T *eap, vimmenu_T *menu, int mode_idx)
 	    default:
 		mode = (char_u *)"Normal";
 	}
-#ifdef FEAT_GUI_MACVIM
-        if (menu->mac_action != NULL && menu->strings[idx][0] == NUL)
-	{
-	    // This allows us to bind a menu to an action without mapping to
-	    // anything so that pressing the menu's key equivalent and typing
-	    // ":emenu ..." does the same thing.  (HACK: We count on the fact
-	    // that ex_macaction() only looks at eap->arg.)
-	    old_arg = eap->arg;
-	    eap->arg = menu->mac_action;
-	    ex_macaction(eap);
-	    eap->arg = old_arg;
-	}
-	else
-#endif // FEAT_GUI_MACVIM
 	semsg(_(e_menu_not_defined_for_str_mode), mode);
     }
 }
@@ -2510,7 +2540,7 @@ ex_emenu(exarg_T *eap)
 {
     vimmenu_T	*menu;
     char_u	*arg = eap->arg;
-    int		mode_idx = -1;
+    int		mode_idx = MENU_INDEX_INVALID;
 
     if (arg[0] && VIM_ISWHITE(arg[1]))
     {
@@ -2787,16 +2817,16 @@ menutrans_lookup(char_u *name, int len)
     name[len] = NUL;
     dname = menu_text(name, NULL, NULL);
     name[len] = i;
-    if (dname != NULL)
-    {
-	for (i = 0; i < menutrans_ga.ga_len; ++i)
-	    if (STRICMP(dname, tp[i].from_noamp) == 0)
-	    {
-		vim_free(dname);
-		return tp[i].to;
-	    }
-	vim_free(dname);
-    }
+    if (dname == NULL)
+	return NULL;
+
+    for (i = 0; i < menutrans_ga.ga_len; ++i)
+	if (STRICMP(dname, tp[i].from_noamp) == 0)
+	{
+	    vim_free(dname);
+	    return tp[i].to;
+	}
+    vim_free(dname);
 
     return NULL;
 }
@@ -3039,7 +3069,7 @@ ex_macmenu(exarg_T *eap)
 
 	    if (!is_valid_macaction(action))
 	    {
-		semsg(_("E???: Invalid action: %s"), arg);
+		semsg(_("E9001-M: Invalid action: %s"), arg);
 		error = TRUE;
 		break;
 	    }
@@ -3272,7 +3302,7 @@ menuitem_getinfo(char_u *menu_name, vimmenu_T *menu, int modes, dict_T *dict)
 			*menu->strings[bit] == NUL
 				? (char_u *)"<Nop>"
 				: (tofree = str2special_save(
-						  menu->strings[bit], FALSE)));
+					menu->strings[bit], FALSE, FALSE)));
 		vim_free(tofree);
 	    }
 	    if (status == OK)

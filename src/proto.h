@@ -74,6 +74,7 @@ extern int _stricoll(char *a, char *b);
 # include "debugger.pro"
 # include "dict.pro"
 # include "diff.pro"
+# include "linematch.pro"
 # include "digraph.pro"
 # include "drawline.pro"
 # include "drawscreen.pro"
@@ -94,6 +95,7 @@ extern int _stricoll(char *a, char *b);
 # include "float.pro"
 # include "fold.pro"
 # include "getchar.pro"
+# include "gc.pro"
 # include "gui_xim.pro"
 # include "hardcopy.pro"
 # include "hashtab.pro"
@@ -104,6 +106,7 @@ extern int _stricoll(char *a, char *b);
 # include "json.pro"
 # include "list.pro"
 # include "locale.pro"
+# include "logfile.pro"
 # include "blob.pro"
 # include "main.pro"
 # include "map.pro"
@@ -214,6 +217,7 @@ void mbyte_im_set_active(int active_arg);
 # ifdef FEAT_EVAL
 // include vim9.h here, the types defined there are used by function arguments.
 #  include "vim9.h"
+#  include "vim9class.pro"
 #  include "vim9cmds.pro"
 #  include "vim9compile.pro"
 #  include "vim9execute.pro"
@@ -262,10 +266,12 @@ void mbyte_im_set_active(int active_arg);
 # ifdef FEAT_JOB_CHANNEL
 #  include "job.pro"
 #  include "channel.pro"
+# endif
 
-// Not generated automatically, to add extra attribute.
+# ifdef FEAT_EVAL
+// Not generated automatically so that we can add an extra attribute.
 void ch_log(channel_T *ch, const char *fmt, ...) ATTRIBUTE_FORMAT_PRINTF(2, 3);
-
+void ch_error(channel_T *ch, const char *fmt, ...) ATTRIBUTE_FORMAT_PRINTF(2, 3);
 # endif
 
 # if defined(FEAT_GUI) || defined(FEAT_JOB_CHANNEL)
@@ -330,14 +336,14 @@ extern char_u *vimpty_getenv(const char_u *string);	// in misc2.c
 # ifdef MACOS_CONVERT
 #  include "os_mac_conv.pro"
 # endif
+# ifdef MACOS_X
+#  include "os_macosx.pro"
+# endif
 # if defined(MACOS_X_DARWIN) && defined(FEAT_CLIPBOARD) && !defined(FEAT_GUI)
 // functions in os_macosx.m
 void clip_mch_lose_selection(Clipboard_T *cbd);
 int clip_mch_own_selection(Clipboard_T *cbd);
 void clip_mch_request_selection(Clipboard_T *cbd);
 void clip_mch_set_selection(Clipboard_T *cbd);
-# endif
-# if defined(MACOS_X) && defined(FEAT_GUI)
-void macosx_fork();
 # endif
 #endif // !PROTO && !NOPROTO

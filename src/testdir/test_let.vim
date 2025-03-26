@@ -8,6 +8,10 @@ func Test_let()
   let Test104#numvar = function('tr')
   call assert_equal("function('tr')", string(Test104#numvar))
 
+  let foo#tr = function('tr')
+  call assert_equal("function('tr')", string(foo#tr))
+  unlet foo#tr
+
   let a = 1
   let b = 2
 
@@ -262,15 +266,35 @@ endfunc
 func Test_let_option_error()
   let _w = &tw
   let &tw = 80
-  call assert_fails('let &tw .= 1', 'E734:')
+  call assert_fails('let &tw .= 1', ['E734:', 'E734:'])
+  call assert_fails('let &tw .= []', ['E734:', 'E734:'])
+  call assert_fails('let &tw = []', ['E745:', 'E745:'])
+  call assert_fails('let &tw += []', ['E745:', 'E745:'])
   call assert_equal(80, &tw)
   let &tw = _w
 
+  let _w = &autoread
+  let &autoread = 1
+  call assert_fails('let &autoread .= 1', ['E734:', 'E734:'])
+  call assert_fails('let &autoread .= []', ['E734:', 'E734:'])
+  call assert_fails('let &autoread = []', ['E745:', 'E745:'])
+  call assert_fails('let &autoread += []', ['E745:', 'E745:'])
+  call assert_equal(1, &autoread)
+  let &autoread = _w
+
   let _w = &fillchars
   let &fillchars = "vert:|"
-  call assert_fails('let &fillchars += "diff:-"', 'E734:')
+  call assert_fails('let &fillchars += "diff:-"', ['E734:', 'E734:'])
+  call assert_fails('let &fillchars += []', ['E734:', 'E734:'])
+  call assert_fails('let &fillchars = []', ['E730:', 'E730:'])
+  call assert_fails('let &fillchars .= []', ['E730:', 'E730:'])
   call assert_equal("vert:|", &fillchars)
   let &fillchars = _w
+
+  call assert_fails('let &nosuchoption = 1', ['E355:', 'E355:'])
+  call assert_fails('let &nosuchoption = ""', ['E355:', 'E355:'])
+  call assert_fails('let &nosuchoption = []', ['E355:', 'E355:'])
+  call assert_fails('let &t_xx = []', ['E730:', 'E730:'])
 endfunc
 
 " Errors with the :let statement
@@ -312,6 +336,7 @@ func Test_let_errors()
   call assert_fails('let l += 2', 'E734:')
   call assert_fails('let g:["a;b"] = 10', 'E461:')
   call assert_fails('let g:.min = function("max")', 'E704:')
+  call assert_fails('let g:cos = "" | let g:.cos = {-> 42}', 'E704:')
   if has('channel')
     let ch = test_null_channel()
     call assert_fails('let ch += 1', 'E734:')
@@ -332,7 +357,100 @@ func Test_let_heredoc_fails()
     call assert_report('No exception thrown')
   catch /E488:/
   catch
-    call assert_report("Caught exception: " .. v:exception)
+    call assert_report('Caught exception: ' .. v:exception)
+  endtry
+
+  try
+    let &commentstring =<< trim TEXT
+      change
+      insert
+      append
+    TEXT
+    call assert_report('No exception thrown')
+  catch /E730:/
+  catch
+    call assert_report('Caught exception: ' .. v:exception)
+  endtry
+
+  try
+    let $SOME_ENV_VAR =<< trim TEXT
+      change
+      insert
+      append
+    TEXT
+    call assert_report('No exception thrown')
+  catch /E730:/
+  catch
+    call assert_report('Caught exception: ' .. v:exception)
+  endtry
+
+  try
+    let @r =<< trim TEXT
+      change
+      insert
+      append
+    TEXT
+    call assert_report('No exception thrown')
+  catch /E730:/
+  catch
+    call assert_report('Caught exception: ' .. v:exception)
+  endtry
+
+  try
+    let @- =<< trim TEXT
+      change
+      insert
+      append
+    TEXT
+    call assert_report('No exception thrown')
+  catch /E730:/
+  catch
+    call assert_report('Caught exception: ' .. v:exception)
+  endtry
+
+  try
+    let [] =<< trim TEXT
+    TEXT
+    call assert_report('No exception thrown')
+  catch /E475:/
+  catch
+    call assert_report('Caught exception: ' .. v:exception)
+  endtry
+
+  try
+    let [a b c] =<< trim TEXT
+    TEXT
+    call assert_report('No exception thrown')
+  catch /E475:/
+  catch
+    call assert_report('Caught exception: ' .. v:exception)
+  endtry
+
+  try
+    let [a; b; c] =<< trim TEXT
+    TEXT
+    call assert_report('No exception thrown')
+  catch /E452:/
+  catch
+    call assert_report('Caught exception: ' .. v:exception)
+  endtry
+
+  try
+    let v =<< trim trimm
+    trimm
+    call assert_report('No exception thrown')
+  catch /E221:/
+  catch
+    call assert_report('Caught exception: ' .. v:exception)
+  endtry
+
+  try
+    let v =<< trim trim evall
+    evall
+    call assert_report('No exception thrown')
+  catch /E221:/
+  catch
+    call assert_report('Caught exception: ' .. v:exception)
   endtry
 
   let text =<< trim END
@@ -340,36 +458,31 @@ func Test_let_heredoc_fails()
     let v =<< that there
   endfunc
   END
-  call writefile(text, 'XheredocFail')
+  call writefile(text, 'XheredocFail', 'D')
   call assert_fails('source XheredocFail', 'E1145:')
-  call delete('XheredocFail')
 
   let text =<< trim CodeEnd
   func MissingEnd()
     let v =<< END
   endfunc
   CodeEnd
-  call writefile(text, 'XheredocWrong')
+  call writefile(text, 'XheredocWrong', 'D')
   call assert_fails('source XheredocWrong', 'E1145:')
-  call delete('XheredocWrong')
 
   let text =<< trim TEXTend
     let v =<< " comment
   TEXTend
-  call writefile(text, 'XheredocNoMarker')
+  call writefile(text, 'XheredocNoMarker', 'D')
   call assert_fails('source XheredocNoMarker', 'E172:')
-  call delete('XheredocNoMarker')
 
   let text =<< trim TEXTend
     let v =<< text
   TEXTend
-  call writefile(text, 'XheredocBadMarker')
+  call writefile(text, 'XheredocBadMarker', 'D')
   call assert_fails('source XheredocBadMarker', 'E221:')
-  call delete('XheredocBadMarker')
 
-  call writefile(['let v =<< TEXT', 'abc'], 'XheredocMissingMarker')
+  call writefile(['let v =<< TEXT', 'abc'], 'XheredocMissingMarker', 'D')
   call assert_fails('source XheredocMissingMarker', 'E990:')
-  call delete('XheredocMissingMarker')
 endfunc
 
 func Test_let_heredoc_trim_no_indent_marker()
@@ -441,6 +554,13 @@ END
   XX
   call assert_equal(['Line1'], var1)
 
+  let var1 =<< trim XX " comment
+    Line1
+      Line2
+    Line3
+  XX
+  call assert_equal(['Line1', '  Line2', 'Line3'], var1)
+
   " ignore "endfunc"
   let var1 =<< END
 something
@@ -506,6 +626,48 @@ E
      z
 END
   call assert_equal(['     x', '     \y', '     z'], [a, b, c])
+
+  " unpack assignment without whitespace
+  let[a,b,c]=<<END
+change
+insert
+append
+END
+  call assert_equal(['change', 'insert', 'append'], [a, b, c])
+
+  " unpack assignment with semicolon
+  let [a; b] =<< END
+change
+insert
+append
+END
+  call assert_equal(['change', ['insert', 'append']], [a, b])
+
+  " unpack assignment with registers
+  let [@/, @", @-] =<< END
+change
+insert
+append
+END
+  call assert_equal(['change', 'insert', 'append'], [@/, @", @-])
+
+  " curly braces name and list slice assignment
+  let foo_3_bar = ['', '', '']
+  let foo_{1 + 2}_bar[ : ] =<< END
+change
+insert
+append
+END
+  call assert_equal(['change', 'insert', 'append'], foo_3_bar)
+
+  " dictionary key containing brackets and spaces
+  let d = {'abc] 123': 'baz'}
+  let d[d['abc] 123'] .. '{'] =<< END
+change
+insert
+append
+END
+  call assert_equal(['change', 'insert', 'append'], d['baz{'])
 endfunc
 
 " Test for evaluating Vim expressions in a heredoc using {expr}
@@ -545,6 +707,48 @@ END
   END
   call assert_equal(['let a = {abc}', 'let b = X', 'let c = {'], code)
 
+  " Evaluate a dictionary
+  let d1 = #{a: 10, b: 'ss', c: {}}
+  let code =<< eval trim END
+    let d2 = {d1}
+  END
+  call assert_equal(["let d2 = {'a': 10, 'b': 'ss', 'c': {}}"], code)
+
+  " Empty dictionary
+  let d1 = {}
+  let code =<< eval trim END
+    let d2 = {d1}
+  END
+  call assert_equal(["let d2 = {}"], code)
+
+  " null dictionary
+  let d1 = test_null_dict()
+  let code =<< eval trim END
+    let d2 = {d1}
+  END
+  call assert_equal(["let d2 = {}"], code)
+
+  " Evaluate a List
+  let l1 = ['a', 'b', 'c']
+  let code =<< eval trim END
+    let l2 = {l1}
+  END
+  call assert_equal(["let l2 = ['a', 'b', 'c']"], code)
+
+  " Empty List
+  let l1 = []
+  let code =<< eval trim END
+    let l2 = {l1}
+  END
+  call assert_equal(["let l2 = []"], code)
+
+  " Null List
+  let l1 = test_null_list()
+  let code =<< eval trim END
+    let l2 = {l1}
+  END
+  call assert_equal(["let l2 = []"], code)
+
   let code = 'xxx'
   let code =<< eval trim END
     let n = {5 +
@@ -577,6 +781,34 @@ END
       END
   LINES
   call v9.CheckScriptFailure(lines, 'E15:')
+
+  " Test for using heredoc in a single string using :execute or execute()
+  for [cmd, res] in items({
+      \ "let x =<< trim END\n  one\n  two\nEND": ['one', 'two'],
+      \ "let x =<< trim END\n  one\n    two\nEND": ['one', '  two'],
+      \ "  let x =<< trim END\n    one\n    two\n  END": ['one', 'two'],
+      \ "  let x =<< trim END\n    one\n      two\n  END": ['one', '  two'],
+      \ "let x =<< END\n  one\n  two\nEND": ['  one', '  two'],
+      \ "let x =<< END\none\ntwo\nEND": ['one', 'two'],
+      \ "let x =<< END \" comment\none\ntwo\nEND": ['one', 'two'],
+      \ })
+    execute cmd
+    call assert_equal(res, x)
+    unlet x
+    call assert_equal($"\n{string(res)}", execute($"{cmd}\necho x"))
+    unlet x
+  endfor
+  for [cmd, err] in items({
+      \ "let x =<<\none\ntwo": "E172:",
+      \ "let x =<< trim\n  one\n  two": "E172:",
+      \ "let x =<< end\none\ntwo\nend": "E221:",
+      \ "let x =<< END\none\ntwo": "E990: Missing end marker 'END'",
+      \ "let x =<< END !\none\ntwo\nEND": "E488: Trailing characters:  !",
+      \ "let x =<< eval END\none\ntwo{y}\nEND": "E121: Undefined variable: y",
+      \ })
+    call assert_fails('execute cmd', err)
+    call assert_fails('call execute(cmd)', err)
+  endfor
 
   " skipped heredoc
   if 0

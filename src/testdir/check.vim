@@ -119,6 +119,22 @@ func CheckNotMacVim()
   endif
 endfunc
 
+" Command to check for not running on a MacOS
+command CheckNotMac call CheckNotMac()
+func CheckNotMac()
+  if has('mac')
+    throw 'Skipped: does not work on MacOS'
+  endif
+endfunc
+
+" Command to check for not running on a MacOS M1 system.
+command CheckNotMacM1 call CheckNotMacM1()
+func CheckNotMacM1()
+  if has('mac') && system('uname -a') =~ '\<arm64\>'
+    throw 'Skipped: does not work on MacOS M1'
+  endif
+endfunc
+
 " Command to check that making screendumps is supported.
 " Caller must source screendump.vim
 command CheckScreendump call CheckScreendump()
@@ -149,6 +165,14 @@ command -nargs=1 CheckEnv call CheckEnv(<f-args>)
 func CheckEnv(name)
   if empty(eval('$' .. a:name))
     throw 'Skipped: Environment variable ' .. a:name .. ' is not set'
+  endif
+endfunc
+
+" Command to Check for pure X11 (no Wayland)
+command -nargs=0 CheckX11 call CheckX11()
+func CheckX11()
+  if !empty($WAYLAND_DISPLAY) || empty($DISPLAY)
+    throw 'Skipped: not pure X11 environment'
   endif
 endfunc
 
@@ -241,6 +265,15 @@ func CheckX11BasedGui()
   endif
 endfunc
 
+" Command to check that there are two clipboards
+command CheckTwoClipboards call CheckTwoClipboards()
+func CheckTwoClipboards()
+  " avoid changing the clipboard here, only X11 supports both
+  if !has('X11')
+    throw 'Skipped: requires two clipboards'
+  endif
+endfunc
+
 " Command to check for satisfying any of the conditions.
 " e.g. CheckAnyOf Feature:bsd Feature:sun Linux
 command -nargs=+ CheckAnyOf call CheckAnyOf(<f-args>)
@@ -266,4 +299,11 @@ func CheckAllOf(...)
   endfor
 endfunc
 
+" Check if running under Github Actions
+command CheckGithubActions call CheckGithubActions()
+func CheckGithubActions()
+  if expand('$GITHUB_ACTIONS') ==# 'true'
+    throw "Skipped: FIXME: this test doesn't work on Github Actions CI"
+  endif
+endfunc
 " vim: shiftwidth=2 sts=2 expandtab

@@ -726,8 +726,8 @@ endfunc
 " Test with SAL instead of SOFO items; test automatic reloading
 func Test_spell_sal_and_addition()
   set spellfile=
-  call writefile(g:test_data_dic1, "Xtest.dic")
-  call writefile(g:test_data_aff_sal, "Xtest.aff")
+  call writefile(g:test_data_dic1, "Xtest.dic", 'D')
+  call writefile(g:test_data_aff_sal, "Xtest.aff", 'D')
   mkspell! Xtest Xtest
   set spl=Xtest.utf-8.spl spell
   call assert_equal('kbltykk', soundfold('goobledygoook'))
@@ -735,7 +735,7 @@ func Test_spell_sal_and_addition()
   call assert_equal('*fls kswts tl', soundfold('oeverloos gezwets edale'))
 
   "also use an addition file
-  call writefile(["/regions=usgbnz", "elequint/2", "elekwint/3"], "Xtest.utf-8.add")
+  call writefile(["/regions=usgbnz", "elequint/2", "elekwint/3"], "Xtest.utf-8.add", 'D')
   mkspell! Xtest.utf-8.add.spl Xtest.utf-8.add
 
   bwipe!
@@ -816,6 +816,14 @@ func Test_check_empty_line()
   sil! norm P]svc
   norm P]s
 
+  bwipe!
+endfunc
+
+func Test_spell_suggest_too_long()
+  " this was creating a word longer than MAXWLEN
+  new
+  call setline(1, 'a' .. repeat("\u0333", 150))
+  norm! z=
   bwipe!
 endfunc
 

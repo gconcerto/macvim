@@ -193,19 +193,23 @@ func Test_syntax_completion()
   " Check that clearing "Aap" avoids it showing up before Boolean.
   hi Aap ctermfg=blue
   call feedkeys(":syn list \<C-A>\<C-B>\"\<CR>", 'tx')
-  call assert_match('^"syn list Aap Boolean Character ', @:)
+  call assert_match('^"syn list Aap Added Boolean Changed Character ', @:)
   hi clear Aap
 
   call feedkeys(":syn list \<C-A>\<C-B>\"\<CR>", 'tx')
-  call assert_match('^"syn list Boolean Character ', @:)
+  call assert_match('^"syn list Added Boolean Changed Character ', @:)
 
   call feedkeys(":syn match \<C-A>\<C-B>\"\<CR>", 'tx')
-  call assert_match('^"syn match Boolean Character ', @:)
+  call assert_match('^"syn match Added Boolean Changed Character ', @:)
+
+  syn cluster Aax contains=Aap
+  call feedkeys(":syn list @A\<C-A>\<C-B>\"\<CR>", 'tx')
+  call assert_match('^"syn list @Aax', @:)
 endfunc
 
 func Test_echohl_completion()
   call feedkeys(":echohl no\<C-A>\<C-B>\"\<CR>", 'tx')
-  call assert_equal('"echohl NonText Normal none', @:)
+  call assert_equal('"echohl NONE NonText Normal', @:)
 endfunc
 
 func Test_syntax_arg_skipped()
@@ -451,7 +455,7 @@ func Test_invalid_name()
 endfunc
 
 func Test_ownsyntax()
-  new Xfoo
+  new XfooOwnSyntax
   call setline(1, '#define FOO')
   syntax on
   set filetype=c
@@ -648,7 +652,7 @@ func Test_syntax_c()
 	\ "\t}",
 	\ "\tNote: asdf",
 	\ '}',
-	\ ], 'Xtest.c')
+	\ ], 'Xtest.c', 'D')
 
   " This makes the default for 'background' use "dark", check that the
   " response to t_RB corrects it to "light".
@@ -666,7 +670,6 @@ func Test_syntax_c()
   call StopVimInTerminal(buf)
 
   let $COLORFGBG = ''
-  call delete('Xtest.c')
 endfun
 
 " Test \z(...) along with \z1
@@ -700,10 +703,10 @@ func Test_syn_wrong_z_one()
 endfunc
 
 func Test_syntax_after_bufdo()
-  call writefile(['/* aaa comment */'], 'Xaaa.c')
-  call writefile(['/* bbb comment */'], 'Xbbb.c')
-  call writefile(['/* ccc comment */'], 'Xccc.c')
-  call writefile(['/* ddd comment */'], 'Xddd.c')
+  call writefile(['/* aaa comment */'], 'Xaaa.c', 'D')
+  call writefile(['/* bbb comment */'], 'Xbbb.c', 'D')
+  call writefile(['/* ccc comment */'], 'Xccc.c', 'D')
+  call writefile(['/* ddd comment */'], 'Xddd.c', 'D')
 
   let bnr = bufnr('%')
   new Xaaa.c
@@ -731,10 +734,6 @@ func Test_syntax_after_bufdo()
   bwipe! Xccc.c
   bwipe! Xddd.c
   syntax off
-  call delete('Xaaa.c')
-  call delete('Xbbb.c')
-  call delete('Xccc.c')
-  call delete('Xddd.c')
 endfunc
 
 func Test_syntax_foldlevel()
@@ -950,7 +949,7 @@ func Test_syn_contained_transparent()
 endfunc
 
 func Test_syn_include_contains_TOP()
-  let l:case = "TOP in included syntax means its group list name"
+  let l:case = "TOP in included syntax refers to top level of that included syntax"
   new
   syntax include @INCLUDED syntax/c.vim
   syntax region FencedCodeBlockC start=/```c/ end=/```/ contains=@INCLUDED
@@ -961,6 +960,18 @@ func Test_syn_include_contains_TOP()
   " cCppOutElse has contains=TOP
   let l:expected = ["cType"]
   eval AssertHighlightGroups(5, 1, l:expected, 1, l:case)
+  syntax clear
+  bw!
+endfunc
+
+func Test_syn_include_contains_TOP_excluding()
+  new
+  syntax include @INCLUDED syntax/c.vim
+  syntax region FencedCodeBlockC start=/```c/ end=/```/ contains=@INCLUDED
+
+  call setline(1,  ['```c', '#if 0', 'int', '#else', 'int', '#if', '#endif', '```' ])
+  let l:expected = ["cCppOutElse", "cConditional"]
+  eval AssertHighlightGroups(6, 1, l:expected, 1)
   syntax clear
   bw!
 endfunc

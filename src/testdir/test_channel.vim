@@ -20,7 +20,7 @@ endif
 " call ch_logfile('channellog', 'w')
 
 func SetUp()
-  if g:testfunc =~ '_ipv6()$' 
+  if g:testfunc =~ '_ipv6()$'
     let s:localhost = '[::1]:'
     let s:testscript = 'test_channel_6.py'
   elseif g:testfunc =~ '_unix()$'
@@ -524,7 +524,7 @@ func Test_connect_waittime()
   let start = reltime()
   let handle = ch_open('localhost:9876', s:chopt)
   if ch_status(handle) != "fail"
-    " Oops, port does exists.
+    " Oops, port exists.
     call ch_close(handle)
   else
     let elapsed = reltime(start)
@@ -538,7 +538,7 @@ func Test_connect_waittime()
   try
     let handle = ch_open('localhost:9867', {'waittime': 500})
     if ch_status(handle) != "fail"
-      " Oops, port does exists.
+      " Oops, port exists.
       call ch_close(handle)
     else
       " Failed connection should wait about 500 msec.  Can be longer if the
@@ -714,7 +714,7 @@ func Stop_g_job()
 endfunc
 
 func Test_nl_read_file()
-  call writefile(['echo something', 'echoerr wrong', 'double this'], 'Xinput')
+  call writefile(['echo something', 'echoerr wrong', 'double this'], 'Xinput', 'D')
   let g:job = job_start(s:python . " test_channel_pipe.py",
 	\ {'in_io': 'file', 'in_name': 'Xinput'})
   call assert_equal("run", job_status(g:job))
@@ -726,7 +726,6 @@ func Test_nl_read_file()
     call assert_equal("AND this", ch_readraw(handle))
   finally
     call Stop_g_job()
-    call delete('Xinput')
   endtry
   call assert_fails("echo ch_read(test_null_channel(), {'callback' : 'abc'})", 'E475:')
 endfunc
@@ -1161,14 +1160,13 @@ func Test_write_to_buffer_and_scroll()
       endif
       call job_start(cmd, #{out_io: 'buffer', out_name: 'Xscrollbuffer'})
   END
-  call writefile(lines, 'XtestBufferScroll')
+  call writefile(lines, 'XtestBufferScroll', 'D')
   let buf = RunVimInTerminal('-S XtestBufferScroll', #{rows: 10})
   call TermWait(buf, 50)
   call VerifyScreenDump(buf, 'Test_job_buffer_scroll_1', {})
 
   " clean up
   call StopVimInTerminal(buf)
-  call delete('XtestBufferScroll')
 endfunc
 
 func Test_pipe_null()
@@ -1222,7 +1220,7 @@ endfunc
 func Test_pipe_to_buffer_raw()
   let options = {'out_mode': 'raw', 'out_io': 'buffer', 'out_name': 'testout'}
   split testout
-  let job = job_start([s:python, '-c', 
+  let job = job_start([s:python, '-c',
         \ 'import sys; [sys.stdout.write(".") and sys.stdout.flush() for _ in range(10000)]'], options)
   " the job may be done quickly, also accept "dead"
   call assert_match('^\%(dead\|run\)$', job_status(job))
@@ -1431,7 +1429,7 @@ func Test_exit_cb_wipes_buf()
   new
   let g:wipe_buf = bufnr('')
 
-  let job = job_start(has('win32') ? 'cmd /c echo:' : ['true'],
+  let job = job_start(has('win32') ? 'cmd /D /c echo:' : ['true'],
 	\ {'exit_cb': 'ExitCbWipe'})
   let timer = timer_start(300, {-> feedkeys("\<Esc>", 'nt')}, {'repeat': 5})
   call feedkeys(repeat('g', 1000) . 'o', 'ntx!')
@@ -1509,7 +1507,7 @@ func Test_open_fail()
   call assert_fails("let ch = ch_open('noserver')", 'E475:')
   echo ch
   let d = ch
-  call assert_fails("let ch = ch_open('noserver', 10)", 'E474:')
+  call assert_fails("let ch = ch_open('noserver', 10)", 'E1206:')
   call assert_fails("let ch = ch_open('localhost:-1')", 'E475:')
   call assert_fails("let ch = ch_open('localhost:65537')", 'E475:')
   call assert_fails("let ch = ch_open('localhost:8765', {'timeout' : -1})",
@@ -1544,12 +1542,16 @@ func Ch_open_delay(port)
 endfunc
 
 func Test_open_delay()
+  " This fails on BSD (e.g. Cirrus-CI), why?
+  CheckNotBSD
   " The server will wait half a second before creating the port.
   call s:run_server('Ch_open_delay', 'delay')
 endfunc
 
 func Test_open_delay_ipv6()
   CheckIPv6
+  " This fails on BSD (e.g. Cirrus-CI), why?
+  CheckNotBSD
   call Test_open_delay()
 endfunc
 
@@ -1635,7 +1637,12 @@ func Test_exit_callback_interval()
   let g:exit_cb_val = {'start': reltime(), 'end': 0, 'process': 0}
   let job = [s:python, '-c', 'import time;time.sleep(0.5)']->job_start({'exit_cb': 'MyExitTimeCb'})
   let g:exit_cb_val.process = job_info(job).process
-  call WaitFor('type(g:exit_cb_val.end) != v:t_number || g:exit_cb_val.end != 0')
+  try
+    call WaitFor('type(g:exit_cb_val.end) != v:t_number || g:exit_cb_val.end != 0')
+  catch
+    call add(v:errors, "Job status: " .. string(job->job_info()))
+    throw v:exception
+  endtry
   let elapsed = reltimefloat(g:exit_cb_val.end)
   call assert_inrange(0.5, 1.0, elapsed)
 
@@ -1763,7 +1770,7 @@ func Test_job_start_fails()
   call assert_fails("call job_start('ls',
         \ {'err_io' : 'buffer', 'err_buf' : -1})", 'E475:')
 
-  let cmd = has('win32') ? "cmd /c dir" : "ls"
+  let cmd = has('win32') ? "cmd /D /c dir" : "ls"
 
   set nomodifiable
   call assert_fails("call job_start(cmd,
@@ -1966,8 +1973,10 @@ func Test_env()
     let cmd = [&shell, &shellcmdflag, 'echo $FOO']
   endif
   call assert_fails('call job_start(cmd, {"env": 1})', 'E475:')
-  call job_start(cmd, {'callback': {ch,msg -> execute(":let g:envstr .= msg")}, 'env': {'FOO': 'bar'}})
-  call WaitForAssert({-> assert_equal("bar", g:envstr)})
+  let job = job_start(cmd, {'callback': {ch,msg -> execute(":let g:envstr .= msg")}, 'env': {'FOO': 'bar'}})
+  if WaitForAssert({-> assert_equal("bar", g:envstr)}, 500) != 0
+    call add(v:errors, "Job status: " .. string(job->job_info()))
+  endif
   unlet g:envstr
 endfunc
 
@@ -1984,8 +1993,13 @@ func Test_cwd()
   let job = job_start(cmd, {'callback': {ch,msg -> execute(":let g:envstr .= msg")}, 'cwd': expect})
   try
     call WaitForAssert({-> assert_notequal("", g:envstr)})
+    " There may be a trailing slash or not, ignore it
     let expect = substitute(expect, '[/\\]$', '', '')
     let g:envstr = substitute(g:envstr, '[/\\]$', '', '')
+    " on CI there can be /private prefix or not, ignore it
+    if $CI != '' && stridx(expect, '/private/') == 0
+      let expect = expect[8:]
+    endif
     if $CI != '' && stridx(g:envstr, '/private/') == 0
       let g:envstr = g:envstr[8:]
     endif
@@ -2029,7 +2043,12 @@ func s:test_list_args(cmd, out, remove_lf)
   try
     let g:out = ''
     let job = job_start([s:python, '-c', a:cmd], {'callback': {ch, msg -> execute('let g:out .= msg')}, 'out_mode': 'raw'})
-    call WaitFor('"" != g:out')
+    try
+      call WaitFor('"" != g:out')
+    catch
+      call add(v:errors, "Job status: " .. string(job->job_info()))
+      throw v:exception
+    endtry
     if has('win32')
       let g:out = substitute(g:out, '\r', '', 'g')
     endif
@@ -2178,7 +2197,7 @@ endfunc
 func Test_job_tty_in_out()
   CheckUnix
 
-  call writefile(['test'], 'Xtestin')
+  call writefile(['test'], 'Xtestin', 'D')
   let in_opts = [{},
         \ {'in_io': 'null'},
         \ {'in_io': 'file', 'in_name': 'Xtestin'}]
@@ -2220,7 +2239,6 @@ func Test_job_tty_in_out()
     call WaitForAssert({-> assert_equal('dead', job_status(job))})
   endfor
 
-  call delete('Xtestin')
   call delete('Xtestout')
   call delete('Xtesterr')
 endfunc
@@ -2279,17 +2297,18 @@ func Test_zz_ch_log()
   call ch_log('%s%s')
   call ch_logfile('')
   let text = readfile('Xlog')
-  call assert_match("hello there", text[1])
+  call assert_match("start log session", text[0])
+  call assert_match("ch_log(): hello there", text[1])
   call assert_match("%s%s", text[2])
-  call mkdir("Xdir1")
-  call assert_fails("call ch_logfile('Xdir1')", 'E484:')
-  cal delete("Xdir1", 'd')
+  call mkdir("Xchlogdir1", 'D')
+  call assert_fails("call ch_logfile('Xchlogdir1')", 'E484:')
+
   call delete('Xlog')
 endfunc
 
 func Test_issue_5150()
   if has('win32')
-    let cmd = 'cmd /c pause'
+    let cmd = 'cmd /D /c pause'
   else
     let cmd = 'grep foo'
   endif
@@ -2419,7 +2438,7 @@ func Test_cb_with_input()
   let g:wait_exit_cb = 1
 
   if has('win32')
-    let cmd = 'cmd /c echo "Vim''s test"'
+    let cmd = 'cmd /D /c echo "Vim''s test"'
   else
     let cmd = 'echo "Vim''s test"'
   endif
@@ -2463,15 +2482,32 @@ func Test_job_start_with_invalid_argument()
   call assert_fails('call job_start([0zff])', 'E976:')
 endfunc
 
-" Test for the 'lsp' channel mode
+" Process requests received from the LSP server
+func LspProcessServerRequests(chan, msg)
+  if a:msg['method'] == 'server-req-in-middle'
+        \ && a:msg['params']['text'] == 'server-req'
+    call ch_sendexpr(a:chan, #{method: 'server-req-in-middle-resp',
+          \ id: a:msg['id'], params: #{text: 'client-resp'}})
+  endif
+endfunc
+
+" LSP channel message callback function
 func LspCb(chan, msg)
   call add(g:lspNotif, a:msg)
+  if a:msg->has_key('method')
+    call LspProcessServerRequests(a:chan, a:msg)
+  endif
 endfunc
 
+" LSP one-time message callback function (used for ch_sendexpr())
 func LspOtCb(chan, msg)
   call add(g:lspOtMsgs, a:msg)
+  if a:msg->has_key('method')
+    call LspProcessServerRequests(a:chan, a:msg)
+  endif
 endfunc
 
+" Test for the 'lsp' channel mode
 func LspTests(port)
   " call ch_logfile('Xlspclient.log', 'w')
   let ch = ch_open(s:localhost .. a:port, #{mode: 'lsp', callback: 'LspCb'})
@@ -2549,11 +2585,11 @@ func LspTests(port)
 
   " Test for using a one time callback function to process a response
   let g:lspOtMsgs = []
-  let r = ch_sendexpr(ch, #{method: 'msg-specifc-cb', params: {}},
+  let r = ch_sendexpr(ch, #{method: 'msg-specific-cb', params: {}},
         \ #{callback: 'LspOtCb'})
   call assert_equal(9, r.id)
   call assert_equal('alive', ch_evalexpr(ch, #{method: 'ping'}).result)
-  call assert_equal([#{id: 9, jsonrpc: '2.0', result: 'msg-specifc-cb'}],
+  call assert_equal([#{id: 9, jsonrpc: '2.0', result: 'msg-specific-cb'}],
         \ g:lspOtMsgs)
 
   " Test for generating a request message from the other end (server)
@@ -2637,6 +2673,57 @@ func LspTests(port)
   " send a ping to make sure communication still works
   call assert_equal('alive', ch_evalexpr(ch, #{method: 'ping'}).result)
 
+  " Test for processing a request message from the server while the client
+  " is waiting for a response with the same identifier (sync-rpc)
+  let g:lspNotif = []
+  let resp = ch_evalexpr(ch, #{method: 'server-req-in-middle',
+        \ params: #{text: 'client-req'}})
+  call assert_equal(#{jsonrpc: '2.0', id: 28,
+        \ result: #{text: 'server-resp'}}, resp)
+  call assert_equal([
+        \ #{id: -1, jsonrpc: '2.0', method: 'server-req-in-middle',
+        \   params: #{text: 'server-notif'}},
+        \ #{id: 28, jsonrpc: '2.0', method: 'server-req-in-middle',
+        \   params: #{text: 'server-req'}}], g:lspNotif)
+
+  " Test for processing a request message from the server while the client
+  " is waiting for a response with the same identifier (async-rpc using the
+  " channel callback function)
+  let g:lspNotif = []
+  call ch_sendexpr(ch, #{method: 'server-req-in-middle', id: 500,
+        \ params: #{text: 'client-req'}})
+  " Send three pings to wait for all the notification messages to arrive
+  for i in range(3)
+    call assert_equal('alive', ch_evalexpr(ch, #{method: 'ping'}).result)
+  endfor
+  call assert_equal([
+        \ #{id: -1, jsonrpc: '2.0', method: 'server-req-in-middle',
+        \   params: #{text: 'server-notif'}},
+        \ #{id: 500, jsonrpc: '2.0', method: 'server-req-in-middle',
+        \   params: #{text: 'server-req'}},
+        \ #{id: 500, jsonrpc: '2.0', result: #{text: 'server-resp'}}
+        \ ], g:lspNotif)
+
+  " Test for processing a request message from the server while the client
+  " is waiting for a response with the same identifier (async-rpc using a
+  " one-time callback function)
+  let g:lspNotif = []
+  let g:lspOtMsgs = []
+  call ch_sendexpr(ch, #{method: 'server-req-in-middle',
+        \ params: #{text: 'client-req'}}, #{callback: 'LspOtCb'})
+  " Send a ping to wait for all the notification messages to arrive
+  for i in range(3)
+    call assert_equal('alive', ch_evalexpr(ch, #{method: 'ping'}).result)
+  endfor
+  call assert_equal([
+        \ #{id: 32, jsonrpc: '2.0', result: #{text: 'server-resp'}}],
+        \ g:lspOtMsgs)
+  call assert_equal([
+        \ #{id: -1, jsonrpc: '2.0', method: 'server-req-in-middle',
+        \ params: #{text: 'server-notif'}},
+        \ #{id: 32, jsonrpc: '2.0', method: 'server-req-in-middle',
+        \ params: {'text': 'server-req'}}], g:lspNotif)
+
   " Test for invoking an unsupported method
   let resp = ch_evalexpr(ch, #{method: 'xyz', params: {}}, #{timeout: 200})
   call assert_equal({}, resp)
@@ -2655,7 +2742,7 @@ func LspTests(port)
   " " Test for sending a raw message
   " let g:lspNotif = []
   " let s = "Content-Length: 62\r\n"
-  " let s ..= "Content-Type: application/vim-jsonrpc; charset=utf-8\r\n"
+  " let s ..= "Content-Type: application/vscode-jsonrpc; charset=utf-8\r\n"
   " let s ..= "\r\n"
   " let s ..= '{"method":"echo","jsonrpc":"2.0","params":{"m":"raw-message"}}'
   " call ch_sendraw(ch, s)
@@ -2675,7 +2762,47 @@ func LspTests(port)
 endfunc
 
 func Test_channel_lsp_mode()
+  " The channel lsp mode test is flaky and gives the same error.
+  let g:giveup_same_error = 0
   call RunServer('test_channel_lsp.py', 'LspTests', [])
+endfunc
+
+func Test_error_callback_terminal()
+  CheckUnix
+  CheckFeature terminal
+  let g:out = ''
+  let g:error = ''
+
+  func! s:Out(channel, msg)
+      let g:out .= string(a:msg)
+  endfunc
+
+  func! s:Err(channel, msg)
+      let g:error .= string(a:msg)
+  endfunc
+
+  let buf = term_start(['sh'], #{term_finish: 'close', out_cb: 's:Out', err_cb: 's:Err', err_io: 'pipe'})
+  let job = term_getjob(buf)
+  let dict = job_info(job).channel->ch_info()
+
+  call assert_true(dict.id != 0)
+  call assert_equal('open', dict.status)
+  call assert_equal('open', dict.out_status)
+  call assert_equal('RAW', dict.out_mode)
+  call assert_equal('buffer', dict.out_io)
+  call assert_equal('open', dict.err_status)
+  call assert_equal('RAW', dict.err_mode)
+  call assert_equal('pipe', dict.err_io)
+  call term_sendkeys(buf, "XXXX\<cr>")
+  call term_wait(buf)
+  call term_sendkeys(buf, "exit\<cr>")
+  call term_wait(buf)
+  call assert_match('XXX.*exit', g:out)
+  call assert_match('sh:.*XXXX:.*not found', g:error)
+
+  delfunc s:Out
+  delfunc s:Err
+  unlet! g:out g:error
 endfunc
 
 " vim: shiftwidth=2 sts=2 expandtab

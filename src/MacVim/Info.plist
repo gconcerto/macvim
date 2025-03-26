@@ -1255,7 +1255,7 @@
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>
-	<string>172</string>
+	<string>181</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.productivity</string>
 	<key>NSAppTransportSecurity</key>
@@ -1282,6 +1282,7 @@
 			<key>NSSendTypes</key>
 			<array>
 				<string>NSStringPboardType</string>
+				<string>public.utf8-plain-text</string>
 			</array>
 			<key>NSRequiredContext</key>
 			<dict></dict>
@@ -1298,6 +1299,7 @@
 			<string>MacVim</string>
 			<key>NSSendTypes</key>
 			<array>
+				<string>public.file-url</string>
 				<string>NSFilenamesPboardType</string>
 			</array>
 			<key>NSUserData</key>
@@ -1307,10 +1309,12 @@
 			</dict>
 		</dict>
 	</array>
+	<key>MMWhatsNewURL</key>
+	<string>https://macvim.org/release-notes/whatsnew.html</string>
+	<key>SUEnableJavaScript</key>
+	<string>YES</string>
 	<key>SUFeedURL</key>
-	<string>https://raw.githubusercontent.com/macvim-dev/macvim/gh-pages/appcast/latest.xml</string>
-	<key>SUPublicDSAKeyFile</key>
-	<string>dsa_pub.pem</string>
+	<string>https://macvim.org/appcast/latest.xml</string>
 	<key>SUPublicEDKey</key>
 	<string>Pt4zsg/8S3/mxKW7Cmt0cZFw/+2LOuXOYS93evP+Mfc=</string>
 	<key>NSAppleEventsUsageDescription</key>

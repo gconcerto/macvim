@@ -22,6 +22,9 @@ extern NSString *MMTabMinWidthKey;
 extern NSString *MMTabMaxWidthKey;
 extern NSString *MMTabOptimumWidthKey;
 extern NSString *MMShowAddTabButtonKey;
+extern NSString *MMShowTabScrollButtonsKey;
+extern NSString *MMTabColorsModeKey;
+extern NSString *MMWindowUseTabBackgroundColorKey;
 extern NSString *MMTextInsetLeftKey;
 extern NSString *MMTextInsetRightKey;
 extern NSString *MMTextInsetTopKey;
@@ -37,7 +40,10 @@ extern NSString *MMFontPreserveLineSpacingKey;
 extern NSString *MMAppearanceModeSelectionKey;
 extern NSString *MMNoTitleBarWindowKey;
 extern NSString *MMTitlebarAppearsTransparentKey;
-extern NSString *MMDisableLaunchAnimation;
+extern NSString *MMTitlebarShowsDocumentIconKey;
+extern NSString *MMNoWindowShadowKey;
+extern NSString *MMDisableLaunchAnimationKey;
+extern NSString *MMDisableTablineAnimationKey;
 extern NSString *MMLoginShellKey;
 extern NSString *MMUntitledWindowKey;
 extern NSString *MMZoomBothKey;
@@ -55,8 +61,20 @@ extern NSString *MMUseInlineImKey;
 extern NSString *MMSuppressTerminationAlertKey;
 extern NSString *MMNativeFullScreenKey;
 extern NSString *MMUseMouseTimeKey;
+extern NSString *MMMouseWheelDisableAccelerationKey;    ///< Disable native macOS mouse scroll wheel acceleration
+extern NSString *MMMouseWheelMinLinesKey;   ///< Minimum scroll delta for mouse scroll wheel, only when acceleration is on
+extern NSString *MMMouseWheelNumLinesKey;   ///< Number of lines to scroll using mouse scroll wheel, only when acceleration is off
 extern NSString *MMFullScreenFadeTimeKey;
 extern NSString *MMNonNativeFullScreenShowMenuKey;
+extern NSString *MMNonNativeFullScreenSafeAreaBehaviorKey;
+extern NSString *MMSmoothResizeKey;
+extern NSString *MMCmdLineAlignBottomKey;
+extern NSString *MMRendererClipToRowKey;
+extern NSString *MMAllowForceClickLookUpKey;
+extern NSString *MMUpdaterPrereleaseChannelKey;
+extern NSString *MMLastUsedBundleVersionKey;    ///< The last used version of MacVim before this launch
+extern NSString *MMShowWhatsNewOnStartupKey;
+extern NSString *MMScrollOneDirectionOnlyKey;
 
 
 // Enum for MMUntitledWindowKey
@@ -91,6 +109,12 @@ enum MMAppearanceModeSelectionEnum {
     MMAppearanceModeSelectionBackgroundOption = 3,
 };
 
+typedef enum : NSInteger {
+    MMTabColorsModeDefaultColors = 0,   ///< Use default colors based on macOS light/dark modes
+    MMTabColorsModeAutomatic,           ///< Automatically derive tab colors based on foreground/background colors
+    MMTabColorsModeVimColorscheme,      ///< Use Vim colorscheme TabLine/TabLineSel/TabLineFill colors
+    MMTabColorsModeCount
+} MMTabColorsMode;
 
 enum {
     // These values are chosen so that the min text view size is not too small
@@ -137,13 +161,9 @@ enum {
 @end
 
 
-@interface NSTabView (MMExtras)
-- (void)removeAllTabViewItems;
-@end
-
-
 @interface NSNumber (MMExtras)
-// HACK to allow font size to be changed via menu (bound to Cmd+/Cmd-)
+// Used by modifyFont:/convertFont: to allow font size to be changed via menu
+// (bound to Cmd+/Cmd-) or using macaction fontSizeUp:/fontSizeDown:.
 - (NSInteger)tag;
 @end
 
@@ -152,7 +172,7 @@ enum {
 // Create a view with a "show hidden files" button to be used as accessory for
 // open/save panels.  This function assumes ownership of the view so do not
 // release it.
-NSView *showHiddenFilesView();
+NSView *showHiddenFilesView(void);
 
 
 // Convert filenames (which are in a variant of decomposed form, NFD, on HFS+)
@@ -165,8 +185,16 @@ NSView *showHiddenFilesView();
 NSString *normalizeFilename(NSString *filename);
 NSArray *normalizeFilenames(NSArray *filenames);
 
+typedef enum : int {
+    AppearanceLight = 0,
+    AppearanceDark,
+    AppearanceLightHighContrast,
+    AppearanceDarkHighContrast,
+} AppearanceType;
+AppearanceType getCurrentAppearance(NSAppearance *appearance);
 
-BOOL shouldUseYosemiteTabBarStyle();
-BOOL shouldUseMojaveTabBarStyle();
+// Pasteboard helpers
+NSPasteboardType getPasteboardFilenamesType(void);
+NSArray<NSString*>* extractPasteboardFilenames(NSPasteboard *pboard);
 
-int getCurrentAppearance(NSAppearance *appearance);
+int compareSemanticVersions(NSString *oldVersion, NSString *newVersion);

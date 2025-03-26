@@ -279,9 +279,9 @@
     [textStorage endEditing];
 
     if (cursorRow >= 0) {
-        unsigned off = [textStorage characterIndexForRow:cursorRow
+        NSUInteger off = [textStorage characterIndexForRow:cursorRow
                                                   column:cursorCol];
-        unsigned maxoff = [[textStorage string] length];
+        NSUInteger maxoff = [[textStorage string] length];
         if (off > maxoff) off = maxoff;
 
         [self setSelectedRange:NSMakeRange(off, 0)];
@@ -357,6 +357,16 @@
     // Doesn't do anything. CoreText renderer only.
 }
 
+- (void)updateCmdlineRow
+{
+    // Doesn't do anything. CoreText renderer only.
+}
+
+- (void)showDefinitionForCustomString:(NSString *)text row:(int)row col:(int)col;
+{
+    // Doesn't do anything. CoreText renderer only.
+}
+
 - (NSSize)cellSize
 {
     return [(MMTextStorage*)[self textStorage] cellSize];
@@ -391,7 +401,25 @@
 
 - (void)setMaxRows:(int)rows columns:(int)cols
 {
+    pendingMaxRows = rows;
+    pendingMaxColumns = cols;
     return [(MMTextStorage*)[self textStorage] setMaxRows:rows columns:cols];
+}
+
+- (int)pendingMaxRows
+{
+    return pendingMaxRows;
+}
+
+- (int)pendingMaxColumns
+{
+    return pendingMaxColumns;
+}
+
+- (void)setPendingMaxRows:(int)rows columns:(int)cols
+{
+    pendingMaxRows = rows;
+    pendingMaxColumns = cols;
 }
 
 - (NSRect)rectForRowsInRange:(NSRange)range
@@ -425,8 +453,8 @@
 - (NSSize)constrainRows:(int *)rows columns:(int *)cols toSize:(NSSize)size
 {
     NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
-    int right = [ud integerForKey:MMTextInsetRightKey];
-    int bot = [ud integerForKey:MMTextInsetBottomKey];
+    NSInteger right = [ud integerForKey:MMTextInsetRightKey];
+    NSInteger bot = [ud integerForKey:MMTextInsetBottomKey];
 
     size.width -= [self textContainerOrigin].x + right;
     size.height -= [self textContainerOrigin].y + bot;
@@ -446,8 +474,8 @@
     NSSize size = [(MMTextStorage*)[self textStorage] size];
 
     NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
-    int right = [ud integerForKey:MMTextInsetRightKey];
-    int bot = [ud integerForKey:MMTextInsetBottomKey];
+    NSInteger right = [ud integerForKey:MMTextInsetRightKey];
+    NSInteger bot = [ud integerForKey:MMTextInsetBottomKey];
 
     size.width += [self textContainerOrigin].x + right;
     size.height += [self textContainerOrigin].y + bot;
@@ -461,8 +489,8 @@
     NSSize size = { MMMinColumns*cellSize.width, MMMinRows*cellSize.height };
 
     NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
-    int right = [ud integerForKey:MMTextInsetRightKey];
-    int bot = [ud integerForKey:MMTextInsetBottomKey];
+    NSInteger right = [ud integerForKey:MMTextInsetRightKey];
+    NSInteger bot = [ud integerForKey:MMTextInsetBottomKey];
 
     size.width += [self textContainerOrigin].x + right;
     size.height += [self textContainerOrigin].y + bot;
@@ -540,7 +568,11 @@
     [super drawRect:rect];
 
     if (invertRects) {
+#if MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_10
+        CGContextRef cgctx = context.CGContext;
+#else
         CGContextRef cgctx = (CGContextRef)[context graphicsPort];
+#endif
         CGContextSaveGState(cgctx);
         CGContextSetBlendMode(cgctx, kCGBlendModeDifference);
         CGContextSetRGBFillColor(cgctx, 1.0, 1.0, 1.0, 1.0);
@@ -575,7 +607,7 @@
 
         inset.height -= baseline;
 
-        int len = [[helper markedText] length];
+        int len = (int)[[helper markedText] length];
         // The following implementation should be re-written with
         // more efficient way...
 
@@ -692,7 +724,7 @@
 
 - (void)insertText:(id)string
 {
-    [helper insertText:string];
+    [helper insertText:string replacementRange:NSMakeRange(0, 0)];
 }
 
 - (void)doCommandBySelector:(SEL)selector
@@ -810,8 +842,7 @@
 
 - (NSArray *)acceptableDragTypes
 {
-    return [NSArray arrayWithObjects:NSFilenamesPboardType,
-           NSStringPboardType, nil];
+    return @[getPasteboardFilenamesType(), NSPasteboardTypeString];
 }
 
 - (BOOL)performDragOperation:(id <NSDraggingInfo>)sender
@@ -898,7 +929,7 @@
             || [item action] == @selector(selectAll:))
         return [item tag];
 
-    return YES;
+    return [super validateMenuItem:item];
 }
 
 @end // MMTextView

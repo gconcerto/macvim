@@ -24,7 +24,7 @@
 #import "MMVimController.h"
 #import "MMVimView.h"
 #import "MMWindowController.h"
-#import <PSMTabBarControl/PSMTabBarControl.h>
+#import "MMTabline.h"
 
 
 
@@ -34,6 +34,16 @@ enum {
     MMScrollerTypeRight,
     MMScrollerTypeBottom
 };
+
+typedef enum: NSInteger {
+    MMTabColorTypeTabBg = 0,
+    MMTabColorTypeTabFg,
+    MMTabColorTypeSelBg,
+    MMTabColorTypeSelFg,
+    MMTabColorTypeFillBg,
+    MMTabColorTypeFillFg,
+    MMTabColorTypeCount
+} MMTabColorType;
 
 
 // TODO:  Move!
@@ -50,16 +60,14 @@ enum {
 @end
 
 
-@interface MMVimView (Private)
+@interface MMVimView (Private) <MMTablineDelegate>
 - (BOOL)bottomScrollbarVisible;
 - (BOOL)leftScrollbarVisible;
 - (BOOL)rightScrollbarVisible;
 - (void)placeScrollbars;
-- (NSUInteger)representedIndexOfTabViewItem:(NSTabViewItem *)tvi;
 - (MMScroller *)scrollbarForIdentifier:(int32_t)ident index:(unsigned *)idx;
 - (NSSize)vimViewSizeForTextViewSize:(NSSize)textViewSize;
 - (NSRect)textViewRectForVimViewSize:(NSSize)contentSize;
-- (NSTabView *)tabView;
 - (void)frameSizeMayHaveChanged:(BOOL)keepGUISize;
 @end
 
@@ -74,6 +82,9 @@ enum {
 
 
 @implementation MMVimView
+{
+    NSColor *tabColors[MMTabColorTypeCount];
+}
 
 - (MMVimView *)initWithFrame:(NSRect)frame
                vimController:(MMVimController *)controller
@@ -102,69 +113,29 @@ enum {
     }
 
     // Allow control of text view inset via MMTextInset* user defaults.
-    int left = [ud integerForKey:MMTextInsetLeftKey];
-    int top = [ud integerForKey:MMTextInsetTopKey];
-    [textView setTextContainerInset:NSMakeSize(left, top)];
+    [textView setTextContainerInset:NSMakeSize(
+        [ud integerForKey:MMTextInsetLeftKey],
+        [ud integerForKey:MMTextInsetTopKey])];
 
     [textView setAutoresizingMask:NSViewNotSizable];
     [self addSubview:textView];
     
-    // Create the tab view (which is never visible, but the tab bar control
-    // needs it to function).
-    tabView = [[NSTabView alloc] initWithFrame:NSZeroRect];
-
-    // Create the tab bar control (which is responsible for actually
-    // drawing the tabline and tabs).
-    NSRect tabFrame = { { 0, frame.size.height - kPSMTabBarControlHeight },
-                        { frame.size.width, kPSMTabBarControlHeight } };
-    tabBarControl = [[PSMTabBarControl alloc] initWithFrame:tabFrame];
-
-    [tabView setDelegate:tabBarControl];
-
-    [tabBarControl setTabView:tabView];
-    [tabBarControl setDelegate:self];
-    [tabBarControl setHidden:YES];
-
-    if (shouldUseYosemiteTabBarStyle() || shouldUseMojaveTabBarStyle()) {
-        CGFloat screenWidth = [[NSScreen mainScreen] frame].size.width;
-        int tabMaxWidth = [ud integerForKey:MMTabMaxWidthKey];
-        if (tabMaxWidth == 0)
-            tabMaxWidth = screenWidth;
-        int tabOptimumWidth = [ud integerForKey:MMTabOptimumWidthKey];
-        if (tabOptimumWidth == 0)
-            tabOptimumWidth = screenWidth;
-        
-        NSString* tabStyleName = shouldUseMojaveTabBarStyle() ? @"Mojave" : @"Yosemite";
-
-        [tabBarControl setStyleNamed:tabStyleName];
-        [tabBarControl setCellMinWidth:[ud integerForKey:MMTabMinWidthKey]];
-        [tabBarControl setCellMaxWidth:tabMaxWidth];
-        [tabBarControl setCellOptimumWidth:tabOptimumWidth];
-    } else {
-        [tabBarControl setCellMinWidth:[ud integerForKey:MMTabMinWidthKey]];
-        [tabBarControl setCellMaxWidth:[ud integerForKey:MMTabMaxWidthKey]];
-        [tabBarControl setCellOptimumWidth:
-                                     [ud integerForKey:MMTabOptimumWidthKey]];
-    }
-
-    [tabBarControl setShowAddTabButton:[ud boolForKey:MMShowAddTabButtonKey]];
-    [[tabBarControl addTabButton] setTarget:self];
-    [[tabBarControl addTabButton] setAction:@selector(addNewTab:)];
-    [tabBarControl setAllowsDragBetweenWindows:NO];
-    [tabBarControl registerForDraggedTypes:
-                            [NSArray arrayWithObject:NSFilenamesPboardType]];
-
-    [tabBarControl setAutoresizingMask:NSViewWidthSizable|NSViewMinYMargin];
+    // Create the tabline which is responsible for drawing the tabline and tabs.
+    NSRect tablineFrame = {{0, frame.size.height - MMTablineHeight}, {frame.size.width, MMTablineHeight}};
+    tabline = [[MMTabline alloc] initWithFrame:tablineFrame];
+    tabline.autoresizingMask = NSViewWidthSizable | NSViewMinYMargin;
+    tabline.delegate = self;
+    tabline.hidden = YES;
+    tabline.showsAddTabButton = [ud boolForKey:MMShowAddTabButtonKey];
+    tabline.showsTabScrollButtons = [ud boolForKey:MMShowTabScrollButtonsKey];
+    tabline.useAnimation = ![ud boolForKey:MMDisableTablineAnimationKey];
+    tabline.optimumTabWidth = [ud integerForKey:MMTabOptimumWidthKey];
+    tabline.minimumTabWidth = [ud integerForKey:MMTabMinWidthKey];
+    tabline.addTabButton.target = self;
+    tabline.addTabButton.action = @selector(addNewTab:);
+    [tabline registerForDraggedTypes:@[getPasteboardFilenamesType()]];
+    [self addSubview:tabline];
     
-    //[tabBarControl setPartnerView:textView];
-    
-    // tab bar resizing only works if awakeFromNib is called (that's where
-    // the NSViewFrameDidChangeNotification callback is installed). Sounds like
-    // a PSMTabBarControl bug, let's live with it for now.
-    [tabBarControl awakeFromNib];
-
-    [self addSubview:tabBarControl];
-
     return self;
 }
 
@@ -172,9 +143,11 @@ enum {
 {
     ASLogDebug(@"");
 
-    [tabBarControl release];  tabBarControl = nil;
-    [tabView release];  tabView = nil;
+    [tabline release];
     [scrollbars release];  scrollbars = nil;
+
+    for (NSUInteger i = 0; i < MMTabColorTypeCount; i++)
+        [tabColors[i] release];
 
     // HACK! The text storage is the principal owner of the text system, but we
     // keep only a reference to the text view, so release the text storage
@@ -192,6 +165,10 @@ enum {
     return textView.defaultBackgroundColor.alphaComponent == 1;
 }
 
+#if MAC_OS_X_VERSION_MIN_REQUIRED < MAC_OS_X_VERSION_10_7
+// The core logic should not be reachable in 10.7 or above and is deprecated code.
+// See documentation for showsResizeIndicator and placeScrollbars: comments.
+// As such, just ifdef out the whole thing as we no longer support 10.7.
 - (void)drawRect:(NSRect)rect
 {
     // On Leopard, we want to have a textured window background for nice
@@ -202,9 +179,6 @@ enum {
             || !([[self window] styleMask] & NSWindowStyleMaskTexturedBackground))
         return;
     
-    // This should not be reachable in 10.7 or above and is deprecated code.
-    // See documentation for showsResizeIndicator and placeScrollbars: comments.
-
 #if (MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_7)
     int sw = [NSScroller scrollerWidthForControlSize:NSControlSizeRegular scrollerStyle:NSScrollerStyleLegacy];
 #else
@@ -243,44 +217,31 @@ enum {
         [path stroke];
     }
 }
+#endif
 
 - (MMTextView *)textView
 {
     return textView;
 }
 
-- (PSMTabBarControl *)tabBarControl
+- (MMTabline *)tabline
 {
-    return tabBarControl;
+    return tabline;
 }
 
 - (void)cleanup
 {
     vimController = nil;
     
-    // NOTE! There is a bug in PSMTabBarControl in that it retains the delegate
-    // so reset the delegate here, otherwise the delegate may never get
-    // released.
-    [tabView setDelegate:nil];
-    [tabBarControl setDelegate:nil];
-    [tabBarControl setTabView:nil];
     [[self window] setDelegate:nil];
 
-    // NOTE! There is another bug in PSMTabBarControl where the control is not
-    // removed as an observer, so remove it here (failing to remove an observer
-    // may lead to very strange bugs).
-    [[NSNotificationCenter defaultCenter] removeObserver:tabBarControl];
-
-    [tabBarControl removeFromSuperviewWithoutNeedingDisplay];
+    [tabline removeFromSuperviewWithoutNeedingDisplay];
     [textView removeFromSuperviewWithoutNeedingDisplay];
 
-    unsigned i, count = [scrollbars count];
-    for (i = 0; i < count; ++i) {
+    for (NSUInteger i = 0, count = scrollbars.count; i < count; ++i) {
         MMScroller *sb = [scrollbars objectAtIndex:i];
         [sb removeFromSuperviewWithoutNeedingDisplay];
     }
-
-    [tabView removeAllTabViewItems];
 }
 
 - (NSSize)desiredSize
@@ -307,114 +268,117 @@ enum {
 
 - (IBAction)addNewTab:(id)sender
 {
+    // Callback from the "Create a new tab button". We override this so we can
+    // send a message to Vim first and let it handle it before replying back.
     [vimController sendMessage:AddNewTabMsgID data:nil];
 }
 
+- (IBAction)scrollToCurrentTab:(id)sender
+{
+    [tabline scrollTabToVisibleAtIndex:tabline.selectedTabIndex];
+}
+
+- (IBAction)scrollBackwardOneTab:(id)sender
+{
+    [tabline scrollBackwardOneTab];
+}
+
+- (IBAction)scrollForwardOneTab:(id)sender
+{
+    [tabline scrollForwardOneTab];
+}
+
+- (void)showTabline:(BOOL)on
+{
+    [tabline setHidden:!on];
+    if (!on) {
+        // When the tab is not shown we don't get tab updates from Vim. We just
+        // close all of them as otherwise we will be holding onto stale states.
+        [tabline closeAllTabs];
+    }
+}
+
+/// Callback from Vim to update the tabline with new tab data
 - (void)updateTabsWithData:(NSData *)data
 {
     const void *p = [data bytes];
-    const void *end = p + [data length];
-    int tabIdx = 0;
+    const void * const end = p + [data length];
 
-    // HACK!  Current tab is first in the message.  This way it is not
-    // necessary to guess which tab should be the selected one (this can be
-    // problematic for instance when new tabs are created).
+    // 1. Current tab is first in the message.
     int curtabIdx = *((int*)p);  p += sizeof(int);
 
-    NSArray *tabViewItems = [[self tabBarControl] representedTabViewItems];
-
+    // 2. Read all the tab IDs (which uniquely identify each tab), and count
+    //    the number of Vim tabs in the process of doing so.
+    int numTabs = 0;
+    BOOL pendingCloseTabClosed = (pendingCloseTabID != 0);
+    const intptr_t * const tabIDs = p;
     while (p < end) {
-        NSTabViewItem *tvi = nil;
+        intptr_t tabID = *((intptr_t*)p); p += sizeof(intptr_t);
+        if (tabID == 0) // null-terminated
+            break;
+        if (pendingCloseTabID != 0 && (NSInteger)tabID == pendingCloseTabID) {
+            // Vim hasn't gotten around to handling the tab close message yet,
+            // just wait until it has done so.
+            pendingCloseTabClosed = NO;
+        }
+        numTabs += 1;
+    }
 
-        //int wincount = *((int*)p);  p += sizeof(int);
-        int infoCount = *((int*)p); p += sizeof(int);
-        unsigned i;
-        for (i = 0; i < infoCount; ++i) {
-            int length = *((int*)p);  p += sizeof(int);
+    BOOL delayTabResize = NO;
+    if (pendingCloseTabClosed) {
+        // When the user has pressed a tab close button, only animate tab
+        // positions, not the widths. This allows the next tab's close button
+        // to line up with the last, allowing the user to close multiple tabs
+        // quickly.
+        delayTabResize = YES;
+        pendingCloseTabID = 0;
+    }
+
+    // Ask the tabline to update all the tabs based on the tab IDs
+    static_assert(sizeof(NSInteger) == sizeof(intptr_t),
+                  "Tab tag size mismatch between Vim and MacVim");
+    [tabline updateTabsByTags:(NSInteger*)tabIDs
+                          len:numTabs
+               delayTabResize:delayTabResize];
+
+    // 3. Read all the tab labels/tooltips and assign to each tab
+    NSInteger tabIdx = 0;
+    while (p < end && tabIdx < tabline.numberOfTabs) {
+        MMTab *tv = [tabline tabAtIndex:tabIdx];
+        for (unsigned i = 0; i < MMTabInfoCount; ++i) {
+            size_t length = *((size_t*)p);  p += sizeof(size_t);
             if (length <= 0)
                 continue;
-
             NSString *val = [[NSString alloc]
                     initWithBytes:(void*)p length:length
                          encoding:NSUTF8StringEncoding];
             p += length;
-
-            switch (i) {
-                case MMTabLabel:
-                    // Set the label of the tab, adding a new tab when needed.
-                    tvi = [[self tabView] numberOfTabViewItems] <= tabIdx
-                            ? [self addNewTabViewItem]
-                            : [tabViewItems objectAtIndex:tabIdx];
-                    [tvi setLabel:val];
-                    ++tabIdx;
-                    break;
-                case MMTabToolTip:
-                    if (tvi)
-                        [[self tabBarControl] setToolTip:val
-                                          forTabViewItem:tvi];
-                    break;
-                default:
-                    ASLogWarn(@"Unknown tab info for index: %d", i);
+            if (i == MMTabLabel) {
+                tv.title = val;
+            } else if (i == MMTabToolTip) {
+                tv.toolTip = val;
             }
-
             [val release];
         }
+        tabIdx += 1;
     }
 
-    // Remove unused tabs from the NSTabView.  Note that when a tab is closed
-    // the NSTabView will automatically select another tab, but we want Vim to
-    // take care of which tab to select so set the vimTaskSelectedTab flag to
-    // prevent the tab selection message to be passed on to the VimTask.
-    vimTaskSelectedTab = YES;
-    int i, count = [[self tabView] numberOfTabViewItems];
-    for (i = count-1; i >= tabIdx; --i) {
-        id tvi = [tabViewItems objectAtIndex:i];
-        [[self tabView] removeTabViewItem:tvi];
-    }
-    vimTaskSelectedTab = NO;
-
-    [self selectTabWithIndex:curtabIdx];
-}
-
-- (void)selectTabWithIndex:(int)idx
-{
-    NSArray *tabViewItems = [[self tabBarControl] representedTabViewItems];
-    if (idx < 0 || idx >= [tabViewItems count]) {
-        ASLogWarn(@"No tab with index %d exists.", idx);
+    // Finally, select the currently selected tab
+    if (curtabIdx < 0 || curtabIdx >= tabline.numberOfTabs) {
+        ASLogWarn(@"No tab with index %d exists.", curtabIdx);
         return;
     }
-
-    // Do not try to select a tab if already selected.
-    NSTabViewItem *tvi = [tabViewItems objectAtIndex:idx];
-    if (tvi != [[self tabView] selectedTabViewItem]) {
-        vimTaskSelectedTab = YES;
-        [[self tabView] selectTabViewItem:tvi];
-        vimTaskSelectedTab = NO;
-
-        // We might need to change the scrollbars that are visible.
-        self.pendingPlaceScrollbars = YES;
+    if (curtabIdx != tabline.selectedTabIndex) {
+        [tabline selectTabAtIndex:curtabIdx];
+        [tabline scrollTabToVisibleAtIndex:curtabIdx];
     }
 }
 
-- (NSTabViewItem *)addNewTabViewItem
+- (void)refreshTabProperties
 {
-    // NOTE!  A newly created tab is not by selected by default; Vim decides
-    // which tab should be selected at all times.  However, the AppKit will
-    // automatically select the first tab added to a tab view.
-
-    // The documentation claims initWithIdentifier can be given a nil identifier, but the API itself
-    // is decorated such that doing so produces a warning, so the tab count is used as identifier.
-    NSInteger identifier = [[self tabView] numberOfTabViewItems];
-    NSTabViewItem *tvi = [[NSTabViewItem alloc] initWithIdentifier:[NSNumber numberWithInt:identifier]];
-
-    // NOTE: If this is the first tab it will be automatically selected.
-    vimTaskSelectedTab = YES;
-    [[self tabView] addTabViewItem:tvi];
-    vimTaskSelectedTab = NO;
-
-    [tvi autorelease];
-
-    return tvi;
+    NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
+    tabline.showsTabScrollButtons = [ud boolForKey:MMShowTabScrollButtonsKey];
+    [self updateTablineColors:MMTabColorsModeCount];
 }
 
 - (void)createScrollbarWithIdentifier:(int32_t)ident type:(int)type
@@ -476,11 +440,11 @@ enum {
 {
     NSMutableData *data = [NSMutableData data];
     int32_t ident = [(MMScroller*)sender scrollerId];
-    int hitPart = [sender hitPart];
+    unsigned hitPart = (unsigned)[sender hitPart];
     float value = [sender floatValue];
 
     [data appendBytes:&ident length:sizeof(int32_t)];
-    [data appendBytes:&hitPart length:sizeof(int)];
+    [data appendBytes:&hitPart length:sizeof(unsigned)];
     [data appendBytes:&value length:sizeof(float)];
 
     [vimController sendMessage:ScrollbarEventMsgID data:data];
@@ -506,9 +470,46 @@ enum {
     }
 }
 
+- (void)updateTablineColors:(MMTabColorsMode)mode
+{
+    NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
+    MMTabColorsMode tabColorsMode = [ud integerForKey:MMTabColorsModeKey];
+    if (tabColorsMode >= MMTabColorsModeCount || tabColorsMode < 0) {
+        // Catch-all for invalid values, which could be useful if we add new
+        // modes and a user goes back and uses an old version of MacVim.
+        tabColorsMode = MMTabColorsModeAutomatic;
+    }
+    if (mode != MMTabColorsModeCount && mode != tabColorsMode) {
+        // Early out to avoid unnecessary updates if this is not relevant.
+        return;
+    }
+    if (tabColorsMode == MMTabColorsModeDefaultColors) {
+        [tabline setColorsTabBg:nil
+                          tabFg:nil
+                          selBg:nil
+                          selFg:nil
+                         fillBg:nil
+                         fillFg:nil];
+    } else if (tabColorsMode == MMTabColorsModeVimColorscheme) {
+        [tabline setColorsTabBg:tabColors[MMTabColorTypeTabBg]
+                          tabFg:tabColors[MMTabColorTypeTabFg]
+                          selBg:tabColors[MMTabColorTypeSelBg]
+                          selFg:tabColors[MMTabColorTypeSelFg]
+                         fillBg:tabColors[MMTabColorTypeFillBg]
+                         fillFg:tabColors[MMTabColorTypeFillFg]];
+    } else {
+        // tabColorsMode == MMTabColorsModeAutomatic
+        NSColor *back = [[self textView] defaultBackgroundColor];
+        NSColor *fore = [[self textView] defaultForegroundColor];
+        [tabline setAutoColorsSelBg:back fg:fore];
+    }
+
+}
+
 - (void)setDefaultColorsBackground:(NSColor *)back foreground:(NSColor *)fore
 {
     [textView setDefaultColorsBackground:back foreground:fore];
+    [self updateTablineColors:MMTabColorsModeAutomatic];
 
     CALayer *backedLayer = [self layer];
     if (backedLayer) {
@@ -527,93 +528,86 @@ enum {
     [self setNeedsDisplay:YES];
 }
 
-
-// -- PSMTabBarControl delegate ----------------------------------------------
-
-
-- (BOOL)tabView:(NSTabView *)theTabView shouldSelectTabViewItem:
-    (NSTabViewItem *)tabViewItem
+- (void)setTablineColorsTabBg:(NSColor *)tabBg tabFg:(NSColor *)tabFg
+                       fillBg:(NSColor *)fillBg fillFg:(NSColor *)fillFg
+                        selBg:(NSColor *)selBg selFg:(NSColor *)selFg
 {
-    // NOTE: It would be reasonable to think that 'shouldSelect...' implies
-    // that this message only gets sent when the user clicks the tab.
-    // Unfortunately it is not so, which is why we need the
-    // 'vimTaskSelectedTab' flag.
-    //
-    // HACK!  The selection message should not be propagated to Vim if Vim
-    // selected the tab (e.g. as opposed the user clicking the tab).  The
-    // delegate method has no way of knowing who initiated the selection so a
-    // flag is set when Vim initiated the selection.
-    if (!vimTaskSelectedTab) {
-        // Propagate the selection message to Vim.
-        NSUInteger idx = [self representedIndexOfTabViewItem:tabViewItem];
-        if (NSNotFound != idx) {
-            int i = (int)idx;   // HACK! Never more than MAXINT tabs?!
-            NSData *data = [NSData dataWithBytes:&i length:sizeof(int)];
-            [vimController sendMessage:SelectTabMsgID data:data];
-        }
-    }
-
-    // Unless Vim selected the tab, return NO, and let Vim decide if the tab
-    // should get selected or not.
-    return vimTaskSelectedTab;
+    for (NSUInteger i = 0; i < MMTabColorTypeCount; i++)
+        [tabColors[i] release];
+    tabColors[MMTabColorTypeTabBg] = [tabBg retain];
+    tabColors[MMTabColorTypeTabFg] = [tabFg retain];
+    tabColors[MMTabColorTypeSelBg] = [selBg retain];
+    tabColors[MMTabColorTypeSelFg] = [selFg retain];
+    tabColors[MMTabColorTypeFillBg] = [fillBg retain];
+    tabColors[MMTabColorTypeFillFg] = [fillFg retain];
+    [self updateTablineColors:MMTabColorsModeVimColorscheme];
 }
 
-- (BOOL)tabView:(NSTabView *)theTabView shouldCloseTabViewItem:
-        (NSTabViewItem *)tabViewItem
-{
-    // HACK!  This method is only called when the user clicks the close button
-    // on the tab.  Instead of letting the tab bar close the tab, we return NO
-    // and pass a message on to Vim to let it handle the closing.
-    NSUInteger idx = [self representedIndexOfTabViewItem:tabViewItem];
-    int i = (int)idx;   // HACK! Never more than MAXINT tabs?!
-    NSData *data = [NSData dataWithBytes:&i length:sizeof(int)];
-    [vimController sendMessage:CloseTabMsgID data:data];
 
+// -- MMTablineDelegate ----------------------------------------------
+
+
+- (BOOL)tabline:(MMTabline *)tabline shouldSelectTabAtIndex:(NSUInteger)index
+{
+    // Propagate the selection message to Vim.
+    if (NSNotFound != index) {
+        int i = (int)index;
+        NSData *data = [NSData dataWithBytes:&i length:sizeof(int)];
+        [vimController sendMessage:SelectTabMsgID data:data];
+    }
+    // Let Vim decide whether to select the tab or not.
     return NO;
 }
 
-- (void)tabView:(NSTabView *)theTabView didDragTabViewItem:
-        (NSTabViewItem *)tabViewItem toIndex:(int)idx
+- (BOOL)tabline:(MMTabline *)tabline shouldCloseTabAtIndex:(NSUInteger)index
+{
+    if (index >= 0 && index < tabline.numberOfTabs - 1) {
+        // If the user is closing any tab other than the last one, we remember
+        // the state so later on we don't resize the tabs in the layout
+        // animation to preserve the stability of tab positions to allow for
+        // quickly closing multiple tabs. This is similar to how macOS tabs
+        // work.
+        pendingCloseTabID = [tabline tabAtIndex:index].tag;
+    }
+    // Propagate the close message to Vim
+    int i = (int)index;
+    NSData *data = [NSData dataWithBytes:&i length:sizeof(int)];
+    [vimController sendMessage:CloseTabMsgID data:data];
+
+    // Let Vim decide whether to close the tab or not.
+    return NO;
+}
+
+- (void)tabline:(MMTabline *)tabline didDragTab:(MMTab *)tab toIndex:(NSUInteger)index
 {
     NSMutableData *data = [NSMutableData data];
-    [data appendBytes:&idx length:sizeof(int)];
-
+    [data appendBytes:&index length:sizeof(int)];
     [vimController sendMessage:DraggedTabMsgID data:data];
 }
 
-- (NSDragOperation)tabBarControl:(PSMTabBarControl *)theTabBarControl
-        draggingEntered:(id <NSDraggingInfo>)sender
-        forTabAtIndex:(NSUInteger)tabIndex
+- (NSDragOperation)tabline:(MMTabline *)tabline draggingEntered:(id <NSDraggingInfo>)dragInfo forTabAtIndex:(NSUInteger)index
 {
-    NSPasteboard *pb = [sender draggingPasteboard];
-    return [[pb types] containsObject:NSFilenamesPboardType]
+    return [dragInfo.draggingPasteboard.types containsObject:getPasteboardFilenamesType()]
             ? NSDragOperationCopy
             : NSDragOperationNone;
 }
 
-- (BOOL)tabBarControl:(PSMTabBarControl *)theTabBarControl
-        performDragOperation:(id <NSDraggingInfo>)sender
-        forTabAtIndex:(NSUInteger)tabIndex
+- (BOOL)tabline:(MMTabline *)tabline performDragOperation:(id <NSDraggingInfo>)dragInfo forTabAtIndex:(NSUInteger)index
 {
-    NSPasteboard *pb = [sender draggingPasteboard];
-    if ([[pb types] containsObject:NSFilenamesPboardType]) {
-        NSArray *filenames = [pb propertyListForType:NSFilenamesPboardType];
-        if ([filenames count] == 0)
-            return NO;
-        if (tabIndex != NSNotFound) {
-            // If dropping on a specific tab, only open one file
-            [vimController file:[filenames objectAtIndex:0]
-                draggedToTabAtIndex:tabIndex];
-        } else {
-            // Files were dropped on empty part of tab bar; open them all
-            [vimController filesDraggedToTabBar:filenames];
-        }
-        return YES;
-    } else {
+    NSPasteboard *pb = dragInfo.draggingPasteboard;
+    NSArray<NSString*>* filenames = extractPasteboardFilenames(pb);
+    if (filenames == nil || filenames.count == 0)
         return NO;
-    }
-}
 
+    if (index != NSNotFound) {
+        // If dropping on a specific tab, only open one file
+        [vimController file:[filenames objectAtIndex:0] draggedToTabAtIndex:index];
+    } else {
+        // Files were dropped on empty part of tab bar; open them all
+        [vimController filesDraggedToTabline:filenames];
+    }
+    return YES;
+}
 
 
 // -- NSView customization ---------------------------------------------------
@@ -667,6 +661,19 @@ enum {
 - (void)viewDidChangeEffectiveAppearance
 {
     [vimController appearanceChanged:getCurrentAppearance(self.effectiveAppearance)];
+
+    NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
+    if ([ud integerForKey:MMTabColorsModeKey] == MMTabColorsModeDefaultColors &&
+        [ud boolForKey:MMWindowUseTabBackgroundColorKey])
+    {
+        // Tab line default colors depends on system light/dark modes. We will
+        // need to notify the window as well if it is set up to use the tab bar
+        // colors. We need to schedule this for later because the tabline's
+        // effectAppearance gets changed *after* this method is called, so we
+        // need to delay the refresh or we would get stale data.
+        MMWindowController *winController = [vimController windowController];
+        [winController performSelectorOnMainThread:@selector(refreshTabProperties) withObject:nil waitUntilDone:NO];
+    }
 }
 @end // MMVimView
 
@@ -677,8 +684,7 @@ enum {
 
 - (BOOL)bottomScrollbarVisible
 {
-    unsigned i, count = [scrollbars count];
-    for (i = 0; i < count; ++i) {
+    for (NSUInteger i = 0, count = scrollbars.count; i < count; ++i) {
         MMScroller *scroller = [scrollbars objectAtIndex:i];
         if ([scroller type] == MMScrollerTypeBottom && ![scroller isHidden])
             return YES;
@@ -689,8 +695,7 @@ enum {
 
 - (BOOL)leftScrollbarVisible
 {
-    unsigned i, count = [scrollbars count];
-    for (i = 0; i < count; ++i) {
+    for (NSUInteger i = 0, count = scrollbars.count; i < count; ++i) {
         MMScroller *scroller = [scrollbars objectAtIndex:i];
         if ([scroller type] == MMScrollerTypeLeft && ![scroller isHidden])
             return YES;
@@ -701,8 +706,7 @@ enum {
 
 - (BOOL)rightScrollbarVisible
 {
-    unsigned i, count = [scrollbars count];
-    for (i = 0; i < count; ++i) {
+    for (NSUInteger i = 0, count = scrollbars.count; i < count; ++i) {
         MMScroller *scroller = [scrollbars objectAtIndex:i];
         if ([scroller type] == MMScrollerTypeRight && ![scroller isHidden])
             return YES;
@@ -720,11 +724,10 @@ enum {
 
     // HACK!  Find the lowest left&right vertical scrollbars This hack
     // continues further down.
-    unsigned lowestLeftSbIdx = (unsigned)-1;
-    unsigned lowestRightSbIdx = (unsigned)-1;
-    unsigned rowMaxLeft = 0, rowMaxRight = 0;
-    unsigned i, count = [scrollbars count];
-    for (i = 0; i < count; ++i) {
+    NSUInteger lowestLeftSbIdx = (NSUInteger)-1;
+    NSUInteger lowestRightSbIdx = (NSUInteger)-1;
+    NSUInteger rowMaxLeft = 0, rowMaxRight = 0;
+    for (NSUInteger i = 0, count = scrollbars.count; i < count; ++i) {
         MMScroller *scroller = [scrollbars objectAtIndex:i];
         if (![scroller isHidden]) {
             NSRange range = [scroller range];
@@ -745,7 +748,7 @@ enum {
     }
 
     // Place the scrollbars.
-    for (i = 0; i < count; ++i) {
+    for (NSUInteger i = 0, count = scrollbars.count; i < count; ++i) {
         MMScroller *scroller = [scrollbars objectAtIndex:i];
         if ([scroller isHidden])
             continue;
@@ -847,19 +850,12 @@ enum {
     }
 }
 
-- (NSUInteger)representedIndexOfTabViewItem:(NSTabViewItem *)tvi
-{
-    NSArray *tabViewItems = [[self tabBarControl] representedTabViewItems];
-    return [tabViewItems indexOfObject:tvi];
-}
-
 - (MMScroller *)scrollbarForIdentifier:(int32_t)ident index:(unsigned *)idx
 {
-    unsigned i, count = [scrollbars count];
-    for (i = 0; i < count; ++i) {
+    for (NSUInteger i = 0, count = scrollbars.count; i < count; ++i) {
         MMScroller *scroller = [scrollbars objectAtIndex:i];
         if ([scroller scrollerId] == ident) {
-            if (idx) *idx = i;
+            if (idx) *idx = (unsigned)i;
             return scroller;
         }
     }
@@ -876,8 +872,8 @@ enum {
     CGFloat scrollerWidth = [NSScroller scrollerWidth];
 #endif
 
-    if (![[self tabBarControl] isHidden])
-        size.height += [[self tabBarControl] frame].size.height;
+    if (!tabline.isHidden)
+        size.height += NSHeight(tabline.frame);
 
     if ([self bottomScrollbarVisible])
         size.height += scrollerWidth;
@@ -898,8 +894,8 @@ enum {
     CGFloat scrollerWidth = [NSScroller scrollerWidth];
 #endif
 
-    if (![[self tabBarControl] isHidden])
-        rect.size.height -= [[self tabBarControl] frame].size.height;
+    if (!tabline.isHidden)
+        rect.size.height -= NSHeight(tabline.frame);
 
     if ([self bottomScrollbarVisible]) {
         rect.size.height -= scrollerWidth;
@@ -913,11 +909,6 @@ enum {
         rect.size.width -= scrollerWidth;
 
     return rect;
-}
-
-- (NSTabView *)tabView
-{
-    return tabView;
 }
 
 - (void)frameSizeMayHaveChanged:(BOOL)keepGUISize
@@ -934,16 +925,7 @@ enum {
     [textView setFrame:textViewRect];
 
     // Immediately place the scrollbars instead of deferring till later here.
-    // Deferral ended up causing some bugs, in particular when in <10.14
-    // CoreText renderer where [NSAnimationContext beginGrouping] is used to
-    // bundle state changes together and the deferred placeScrollbars would get
-    // the wrong data to use. An alternative would be to check for that and only
-    // call finishPlaceScrollbars once we call [NSAnimationContext endGrouping]
-    // but that makes the code mode complicated. Just do it here and the
-    // performance is fine as this gets called occasionally only
-    // (pendingPlaceScrollbars is mostly for the case if we are adding a lot of
-    // scrollbars at once we want to only call placeScrollbars once instead of
-    // doing it N times).
+    // Otherwise in situations like live resize we will see the scroll bars lag.
     self.pendingPlaceScrollbars = NO;
     [self placeScrollbars];
 
@@ -962,19 +944,23 @@ enum {
     [textView constrainRows:&constrained[0] columns:&constrained[1]
                      toSize:textViewSize];
 
-    int rows, cols;
-    [textView getMaxRows:&rows columns:&cols];
-
-    if (constrained[0] != rows || constrained[1] != cols) {
+    if (constrained[0] != textView.pendingMaxRows || constrained[1] != textView.pendingMaxColumns) {
         NSData *data = [NSData dataWithBytes:constrained length:2*sizeof(int)];
         int msgid = [self inLiveResize] ? LiveResizeMsgID
                                         : (keepGUISize ? SetTextDimensionsNoResizeWindowMsgID : SetTextDimensionsMsgID);
 
         ASLogDebug(@"Notify Vim that text dimensions changed from %dx%d to "
-                   "%dx%d (%s)", cols, rows, constrained[1], constrained[0],
+                   "%dx%d (%s)", textView.pendingMaxColumns, textView.pendingMaxRows, constrained[1], constrained[0],
                    MMVimMsgIDStrings[msgid]);
 
-        if (msgid != LiveResizeMsgID || !self.pendingLiveResize) {
+        if (msgid == LiveResizeMsgID && self.pendingLiveResize) {
+            // We are currently live resizing and there's already an ongoing
+            // resize message that we haven't finished handling yet. Wait until
+            // we are done with that since we don't want to overload Vim with
+            // messages.
+            self.pendingLiveResizeQueued = YES;
+        }
+        else {
             // Live resize messages can be sent really rapidly, especailly if
             // it's from double clicking the window border (to indicate filling
             // all the way to that side to the window manager). We want to rate
@@ -985,13 +971,20 @@ enum {
             // up resizing.
             self.pendingLiveResize = (msgid == LiveResizeMsgID);
 
+            // Cache the new pending size so we can use it to prevent resizing Vim again
+            // if we haven't changed the row/col count later. We don't want to
+            // immediately resize the textView (hence it's "pending") as we only
+            // do that when Vim has acknoledged the message and draws. This leads
+            // to a stable drawing.
+            [textView setPendingMaxRows:constrained[0] columns:constrained[1]];
+
             [vimController sendMessageNow:msgid data:data timeout:1];
         }
 
         // We only want to set the window title if this resize came from
         // a live-resize, not (for example) setting 'columns' or 'lines'.
         if ([self inLiveResize]) {
-            [[self window] setTitle:[NSString stringWithFormat:@"%dx%d",
+            [[self window] setTitle:[NSString stringWithFormat:@"%d × %d",
                     constrained[1], constrained[0]]];
         }
     }
